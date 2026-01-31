@@ -264,6 +264,50 @@ export class GameRoomManager {
   }
 
   /**
+   * Get all available rooms (waiting for players)
+   */
+  getAvailableRooms(): GameRoom[] {
+    const rooms: GameRoom[] = [];
+    for (const room of this.rooms.values()) {
+      if (room.status === "waiting" && !room.player2Id) {
+        rooms.push(room);
+      }
+    }
+    return rooms;
+  }
+
+  /**
+   * Delete a room (only creator can delete)
+   */
+  deleteRoom(roomId: string, socketId: string): boolean {
+    const room = this.rooms.get(roomId);
+    if (!room) return false;
+
+    // Only player 1 (creator) can delete the room
+    if (room.player1SocketId !== socketId) {
+      return false;
+    }
+
+    // Can only delete if game hasn't started
+    if (room.status === "playing") {
+      return false;
+    }
+
+    this.rooms.delete(roomId);
+    this.socketToRoom.delete(socketId);
+    return true;
+  }
+
+  /**
+   * Check if both players are ready to start
+   */
+  isRoomReady(roomId: string): boolean {
+    const room = this.rooms.get(roomId);
+    if (!room) return false;
+    return room.player1Id !== null && room.player2Id !== null;
+  }
+
+  /**
    * Generate a unique room ID
    */
   private generateRoomId(): string {

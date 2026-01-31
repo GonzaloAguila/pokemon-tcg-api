@@ -31,6 +31,77 @@ export function setupSocketHandlers(io: Server): void {
     console.log(`🔌 Client connected: ${socket.id}`);
 
     // ==========================================================================
+    // Lobby - Room Listing
+    // ==========================================================================
+
+    socket.on("getRooms", () => {
+      const rooms = roomManager.getAvailableRooms();
+      socket.emit("roomList", {
+        rooms: rooms.map((r) => ({
+          id: r.id,
+          createdAt: r.createdAt,
+          playerCount: r.players.length,
+        })),
+      });
+    });
+
+    socket.on("createRoom", async (payload: { userId: string }) => {
+      try {
+        const { userId } = payload;
+        const room = roomManager.createRoom();
+        await roomManager.joinRoom(room.id, userId, socket.id);
+
+        socket.join(room.id);
+
+        socket.emit("roomCreated", {
+          roomId: room.id,
+          playerId: userId,
+          isPlayer1: true,
+        });
+
+        // Broadcast updated room list to all clients in lobby
+        io.emit("roomList", {
+          rooms: roomManager.getAvailableRooms().map((r) => ({
+            id: r.id,
+            createdAt: r.createdAt,
+            playerCount: r.players.length,
+          })),
+        });
+
+        console.log(`🏠 Room ${room.id} created by ${userId}`);
+      } catch (error) {
+        socket.emit("error", { message: (error as Error).message });
+      }
+    });
+
+    socket.on("deleteRoom", async (payload: { roomId: string }) => {
+      try {
+        const { roomId } = payload;
+        const deleted = roomManager.deleteRoom(roomId, socket.id);
+
+        if (deleted) {
+          socket.leave(roomId);
+          socket.emit("roomDeleted", { roomId });
+
+          // Broadcast updated room list
+          io.emit("roomList", {
+            rooms: roomManager.getAvailableRooms().map((r) => ({
+              id: r.id,
+              createdAt: r.createdAt,
+              playerCount: r.players.length,
+            })),
+          });
+
+          console.log(`🗑️ Room ${roomId} deleted`);
+        } else {
+          socket.emit("error", { message: "Cannot delete room" });
+        }
+      } catch (error) {
+        socket.emit("error", { message: (error as Error).message });
+      }
+    });
+
+    // ==========================================================================
     // Room Management
     // ==========================================================================
 
@@ -41,11 +112,13 @@ export function setupSocketHandlers(io: Server): void {
 
         socket.join(roomId);
 
+        const isPlayer1 = room.player1Id === userId;
+
         socket.emit("roomJoined", {
           roomId,
           playerId: userId,
           players: room.players,
-          isPlayer1: room.player1Id === userId,
+          isPlayer1,
         });
 
         // Notify other player
@@ -54,6 +127,32 @@ export function setupSocketHandlers(io: Server): void {
         });
 
         console.log(`👤 User ${userId} joined room ${roomId}`);
+
+        // Auto-start game when second player joins
+        if (roomManager.isRoomReady(roomId)) {
+          const gameState = await roomManager.startGame(roomId);
+
+          // Update room list (room no longer available)
+          io.emit("roomList", {
+            rooms: roomManager.getAvailableRooms().map((r) => ({
+              id: r.id,
+              createdAt: r.createdAt,
+              playerCount: r.players.length,
+            })),
+          });
+
+          // Send masked state to each player
+          io.to(room.player1SocketId!).emit("gameStart", {
+            gameState: maskGameStateForPlayer(gameState, "player1"),
+            isPlayer1: true,
+          });
+          io.to(room.player2SocketId!).emit("gameStart", {
+            gameState: maskGameStateForPlayer(gameState, "player2"),
+            isPlayer1: false,
+          });
+
+          console.log(`🎮 Game auto-started in room ${roomId}`);
+        }
       } catch (error) {
         socket.emit("error", { message: (error as Error).message });
       }
