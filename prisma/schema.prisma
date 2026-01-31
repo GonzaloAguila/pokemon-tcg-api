@@ -1,0 +1,140 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =============================================================================
+// User & Auth
+// =============================================================================
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  username     String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relations
+  decks            Deck[]
+  matchesAsPlayer1 Match[]    @relation("Player1")
+  matchesAsPlayer2 Match[]    @relation("Player2")
+  matchesWon       Match[]    @relation("Winner")
+  roomsAsPlayer1   GameRoom[] @relation("RoomPlayer1")
+  roomsAsPlayer2   GameRoom[] @relation("RoomPlayer2")
+
+  @@map("users")
+}
+
+// =============================================================================
+// Decks & Collection
+// =============================================================================
+
+model Deck {
+  id        String   @id @default(uuid())
+  name      String
+  cards     Json     // Array of card definition IDs (e.g., ["base-25", "base-25", "base-58"])
+  isValid   Boolean  @default(false) // 60 cards, max 4 of each
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("decks")
+}
+
+// =============================================================================
+// Matches & Game State
+// =============================================================================
+
+model Match {
+  id         String    @id @default(uuid())
+  status     String    @default("waiting") // waiting, playing, finished, abandoned
+
+  // Players
+  player1Id  String
+  player1    User      @relation("Player1", fields: [player1Id], references: [id])
+  player2Id  String?
+  player2    User?     @relation("Player2", fields: [player2Id], references: [id])
+
+  // Result
+  winnerId   String?
+  winner     User?     @relation("Winner", fields: [winnerId], references: [id])
+  winReason  String?   // "prizes", "deck_out", "no_pokemon", "forfeit"
+
+  // Game data (for reconnection & replay)
+  gameState  Json?     // Full GameState JSON
+  replayData Json?     // Array of GameEvents for replay
+
+  // Timestamps
+  createdAt  DateTime  @default(now())
+  startedAt  DateTime?
+  finishedAt DateTime?
+
+  // Room relation
+  room       GameRoom?
+
+  @@map("matches")
+}
+
+// =============================================================================
+// Matchmaking & Rooms
+// =============================================================================
+
+model GameRoom {
+  id        String   @id @default(uuid())
+  type      String   @default("casual") // casual, ranked, event, private
+  status    String   @default("waiting") // waiting, ready, playing, finished
+  code      String?  @unique // For private rooms (e.g., "ABC123")
+
+  // Players
+  player1Id       String?
+  player1         User?    @relation("RoomPlayer1", fields: [player1Id], references: [id])
+  player1Ready    Boolean  @default(false)
+  player1SocketId String?
+
+  player2Id       String?
+  player2         User?    @relation("RoomPlayer2", fields: [player2Id], references: [id])
+  player2Ready    Boolean  @default(false)
+  player2SocketId String?
+
+  // Match link
+  matchId   String?  @unique
+  match     Match?   @relation(fields: [matchId], references: [id])
+
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("game_rooms")
+}
+
+// =============================================================================
+// Future: Pack Opening & Collection
+// =============================================================================
+
+// model UserCard {
+//   id        String   @id @default(uuid())
+//   userId    String
+//   cardDefId String   // Reference to card definition (e.g., "base-25")
+//   quantity  Int      @default(1)
+//   user      User     @relation(fields: [userId], references: [id])
+//
+//   @@unique([userId, cardDefId])
+//   @@map("user_cards")
+// }
+
+// model PackOpening {
+//   id           String   @id @default(uuid())
+//   userId       String
+//   packType     String   // "base_set", "jungle", etc.
+//   cardsObtained Json    // Array of card IDs obtained
+//   createdAt    DateTime @default(now())
+//   user         User     @relation(fields: [userId], references: [id])
+//
+//   @@map("pack_openings")
+// }
