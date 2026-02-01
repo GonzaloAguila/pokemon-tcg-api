@@ -154,10 +154,12 @@ export function setupSocketHandlers(io: Server): void {
 
           // Send masked state to each player
           io.to(room.player1SocketId!).emit("gameStart", {
+            roomId,
             gameState: maskGameStateForPlayer(gameState, "player1"),
             isPlayer1: true,
           });
           io.to(room.player2SocketId!).emit("gameStart", {
+            roomId,
             gameState: maskGameStateForPlayer(gameState, "player2"),
             isPlayer1: false,
           });
