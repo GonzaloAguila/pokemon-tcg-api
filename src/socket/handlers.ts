@@ -6,6 +6,7 @@ import { maskGameStateForPlayer } from "./state-masking.js";
 interface JoinRoomPayload {
   roomId: string;
   userId: string;
+  deckId?: string;
 }
 
 interface PlayerAction {
@@ -45,11 +46,16 @@ export function setupSocketHandlers(io: Server): void {
       });
     });
 
-    socket.on("createRoom", async (payload: { userId: string }) => {
+    socket.on("createRoom", async (payload: { userId: string; deckId?: string }) => {
       try {
-        const { userId } = payload;
+        const { userId, deckId } = payload;
         const room = roomManager.createRoom();
         await roomManager.joinRoom(room.id, userId, socket.id);
+
+        // Set deck if provided
+        if (deckId) {
+          roomManager.setPlayerDeck(room.id, socket.id, deckId);
+        }
 
         socket.join(room.id);
 
@@ -107,8 +113,13 @@ export function setupSocketHandlers(io: Server): void {
 
     socket.on("joinRoom", async (payload: JoinRoomPayload) => {
       try {
-        const { roomId, userId } = payload;
+        const { roomId, userId, deckId } = payload;
         const room = await roomManager.joinRoom(roomId, userId, socket.id);
+
+        // Set deck if provided
+        if (deckId) {
+          roomManager.setPlayerDeck(roomId, socket.id, deckId);
+        }
 
         socket.join(roomId);
 

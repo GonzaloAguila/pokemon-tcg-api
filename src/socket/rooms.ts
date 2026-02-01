@@ -5,11 +5,18 @@
  * TODO: Persist to database for reconnection support.
  */
 
-// Import from game-core when available
-// import { initializeGame, startGame, executeAttack, ... } from '@poke-tcg/game-core';
-
-// Placeholder types until game-core is connected
-type GameState = Record<string, unknown>;
+import {
+  type GameState,
+  type Deck,
+  initializeGame,
+  startGame,
+  executeAttack,
+  endTurn,
+  executeRetreat,
+  getDeckById,
+  decks,
+  buildDeckFromEntries,
+} from "@poke-tcg/game-core";
 
 interface PlayerAction {
   type: string;
@@ -24,10 +31,12 @@ interface GameRoom {
   player1Id: string | null;
   player1SocketId: string | null;
   player1Ready: boolean;
+  player1DeckId: string | null;
 
   player2Id: string | null;
   player2SocketId: string | null;
   player2Ready: boolean;
+  player2DeckId: string | null;
 
   // Game state
   gameState: GameState | null;
@@ -61,9 +70,11 @@ export class GameRoomManager {
       player1Id: null,
       player1SocketId: null,
       player1Ready: false,
+      player1DeckId: null,
       player2Id: null,
       player2SocketId: null,
       player2Ready: false,
+      player2DeckId: null,
       gameState: null,
       players: [],
       createdAt: new Date(),
@@ -158,6 +169,20 @@ export class GameRoomManager {
   }
 
   /**
+   * Set player's deck selection
+   */
+  setPlayerDeck(roomId: string, socketId: string, deckId: string): void {
+    const room = this.rooms.get(roomId);
+    if (!room) throw new Error("Room not found");
+
+    if (room.player1SocketId === socketId) {
+      room.player1DeckId = deckId;
+    } else if (room.player2SocketId === socketId) {
+      room.player2DeckId = deckId;
+    }
+  }
+
+  /**
    * Start the game
    */
   async startGame(roomId: string): Promise<GameState> {
@@ -170,18 +195,20 @@ export class GameRoomManager {
 
     room.status = "playing";
 
-    // TODO: Use actual game initialization from game-core
-    // const gameState = initializeGame(player1Deck, player2Deck);
-    // room.gameState = startGame(gameState);
+    // Get decks - use default if not selected
+    const player1Deck = getDeckById(room.player1DeckId || "brushfire") || decks[0];
+    const player2Deck = getDeckById(room.player2DeckId || "overgrowth") || decks[1];
 
-    // Placeholder game state
-    room.gameState = {
-      phase: "PLAYING",
-      turnNumber: 1,
-      isPlayerTurn: true,
-      // ... rest of game state
-    };
+    // Initialize game with player's deck (player1 perspective)
+    let gameState = initializeGame(player1Deck);
 
+    // For multiplayer, we need to set up both sides
+    // The opponent's deck becomes player2's deck
+    // We'll need to reinitialize with proper perspective handling
+    // For now, use a simplified initialization
+    gameState = startGame(gameState);
+
+    room.gameState = gameState;
     return room.gameState;
   }
 
@@ -205,31 +232,66 @@ export class GameRoomManager {
       return { success: false, error: "Not a player in this room" };
     }
 
-    // TODO: Validate turn
-    // const isMyTurn = isPlayer1 ? room.gameState.isPlayerTurn : !room.gameState.isPlayerTurn;
-    // if (!isMyTurn) return { success: false, error: "Not your turn" };
+    // Validate turn - player1 plays when isPlayerTurn is true
+    const isMyTurn = isPlayer1 ? room.gameState.isPlayerTurn : !room.gameState.isPlayerTurn;
+    if (!isMyTurn && action.type !== "ready") {
+      return { success: false, error: "Not your turn" };
+    }
 
-    // TODO: Use game-core to validate and execute action
-    // switch (action.type) {
-    //   case 'attack':
-    //     if (!canUseAttack(room.gameState, pokemon, action.payload.attackIndex)) {
-    //       return { success: false, error: "Cannot use this attack" };
-    //     }
-    //     room.gameState = executeAttack(room.gameState, action.payload.attackIndex);
-    //     break;
-    //   case 'endTurn':
-    //     room.gameState = endTurn(room.gameState);
-    //     break;
-    //   // ... other actions
-    // }
+    console.log(`[Room ${roomId}] Action from ${isPlayer1 ? "P1" : "P2"}: ${action.type}`, action.payload);
 
-    // Placeholder: Just acknowledge the action
-    console.log(`Action received: ${action.type}`, action.payload);
+    try {
+      let newState = room.gameState;
 
-    return {
-      success: true,
-      gameState: room.gameState,
-    };
+      switch (action.type) {
+        case "attack":
+          const attackIndex = action.payload.attackIndex as number;
+          newState = executeAttack(room.gameState, attackIndex);
+          break;
+
+        case "endTurn":
+          newState = endTurn(room.gameState);
+          break;
+
+        case "retreat":
+          const energyIds = action.payload.energyIdsToDiscard as string[];
+          const benchIndex = action.payload.benchIndex as number;
+          newState = executeRetreat(room.gameState, energyIds, benchIndex);
+          break;
+
+        // TODO: Add more actions (playBasic, attachEnergy, evolve, playTrainer, usePower)
+
+        default:
+          return { success: false, error: `Unknown action type: ${action.type}` };
+      }
+
+      room.gameState = newState;
+
+      // Check for game over
+      const gameOver = newState.gamePhase === "GAME_OVER";
+      let winner: "player1" | "player2" | undefined;
+      let winReason: string | undefined;
+
+      if (gameOver) {
+        room.status = "finished";
+        // From player1's perspective: victory = player1 wins
+        winner = newState.gameResult === "victory" ? "player1" : "player2";
+        winReason = newState.gameResult === "victory"
+          ? "Player 1 wins!"
+          : "Player 2 wins!";
+      }
+
+      return {
+        success: true,
+        gameState: room.gameState,
+        gameOver,
+        winner,
+        winReason,
+      };
+    } catch (error) {
+      console.error(`[Room ${roomId}] Action error:`, error);
+      return { success: false, error: (error as Error).message };
+    }
   }
 
   /**
