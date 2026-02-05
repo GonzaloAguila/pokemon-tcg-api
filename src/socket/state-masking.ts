@@ -8,6 +8,8 @@
 // Use Record for now - will properly type when game-core types are integrated
 type GameState = Record<string, unknown>;
 
+export type MaskedGameState = GameState;
+
 /**
  * Swap game state perspective for player 2.
  * Player 1 receives the state as-is.
