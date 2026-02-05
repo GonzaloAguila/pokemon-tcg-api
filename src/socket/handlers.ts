@@ -81,9 +81,13 @@ export function setupSocketHandlers(io: Server): void {
     });
 
     socket.on("deleteRoom", async (payload: { roomId: string }) => {
+      console.log(`[deleteRoom] Received:`, payload, `from socket ${socket.id}`);
       try {
         const { roomId } = payload;
+        const room = roomManager.getRoom(roomId);
+        console.log(`[deleteRoom] Room state:`, room ? { player1SocketId: room.player1SocketId, status: room.status } : 'not found');
         const deleted = roomManager.deleteRoom(roomId, socket.id);
+        console.log(`[deleteRoom] Delete result: ${deleted}`);
 
         if (deleted) {
           socket.leave(roomId);
@@ -112,9 +116,16 @@ export function setupSocketHandlers(io: Server): void {
     // ==========================================================================
 
     socket.on("joinRoom", async (payload: JoinRoomPayload) => {
+      console.log(`[joinRoom] Received:`, payload);
       try {
         const { roomId, userId, deckId } = payload;
+        console.log(`[joinRoom] Attempting to join room ${roomId} as ${userId}`);
         const room = await roomManager.joinRoom(roomId, userId, socket.id);
+        console.log(`[joinRoom] Room state after join:`, {
+          player1Id: room.player1Id,
+          player2Id: room.player2Id,
+          status: room.status,
+        });
 
         // Set deck if provided
         if (deckId) {
@@ -139,9 +150,25 @@ export function setupSocketHandlers(io: Server): void {
 
         console.log(`👤 User ${userId} joined room ${roomId}`);
 
-        // Auto-start game when second player joins
-        if (roomManager.isRoomReady(roomId)) {
+        // Check if game is already playing (reconnection case)
+        if (room.status === "playing" && room.gameState) {
+          console.log(`[joinRoom] Reconnecting to existing game, sending current state to socket ${socket.id}`);
+          console.log(`[joinRoom] Room socket IDs: P1=${room.player1SocketId}, P2=${room.player2SocketId}`);
+          // Send current game state to the reconnecting player
+          socket.emit("gameStart", {
+            roomId,
+            gameState: maskGameStateForPlayer(room.gameState, isPlayer1 ? "player1" : "player2"),
+            isPlayer1,
+          });
+          return;
+        }
+
+        // Auto-start game when second player joins (only if not already playing)
+        console.log(`[joinRoom] Checking if room is ready: ${roomManager.isRoomReady(roomId)}`);
+        if (roomManager.isRoomReady(roomId) && room.status === "waiting") {
+          console.log(`[joinRoom] Room is ready, starting game...`);
           const gameState = await roomManager.startGame(roomId);
+          console.log(`[joinRoom] Game started, phase: ${gameState.gamePhase}`);
 
           // Update room list (room no longer available)
           io.emit("roomList", {
@@ -222,6 +249,11 @@ export function setupSocketHandlers(io: Server): void {
     socket.on("action", async (payload: { roomId: string; action: PlayerAction }) => {
       try {
         const { roomId, action } = payload;
+
+        // Get room and state before action
+        const roomBefore = roomManager.getRoom(roomId);
+        const eventCountBefore = roomBefore?.gameState?.events?.length ?? 0;
+
         const result = await roomManager.executeAction(roomId, socket.id, action);
 
         if (!result.success) {
@@ -238,12 +270,29 @@ export function setupSocketHandlers(io: Server): void {
         // Send updated state to both players
         const room = roomManager.getRoom(roomId);
         if (room && result.gameState) {
-          io.to(room.player1SocketId!).emit("gameState", {
-            gameState: maskGameStateForPlayer(result.gameState, "player1"),
-          });
-          io.to(room.player2SocketId!).emit("gameState", {
-            gameState: maskGameStateForPlayer(result.gameState, "player2"),
-          });
+          console.log(`[action] Sending state update. P1 socket: ${room.player1SocketId}, P2 socket: ${room.player2SocketId}`);
+          console.log(`[action] State: P1 active=${!!result.gameState.playerActivePokemon}, P2 active=${!!result.gameState.opponentActivePokemon}`);
+
+          // Broadcast coin flip results to both players if present
+          if (result.coinFlipInfo) {
+            console.log(`[action] Broadcasting coin flip results: ${result.coinFlipInfo.attackName} - ${result.coinFlipInfo.results.join(", ")}`);
+            io.to(roomId).emit("showCoinFlip", {
+              attackName: result.coinFlipInfo.attackName,
+              results: result.coinFlipInfo.results,
+              count: result.coinFlipInfo.results.length,
+            });
+          }
+
+          if (room.player1SocketId) {
+            io.to(room.player1SocketId).emit("gameState", {
+              gameState: maskGameStateForPlayer(result.gameState, "player1"),
+            });
+          }
+          if (room.player2SocketId) {
+            io.to(room.player2SocketId).emit("gameState", {
+              gameState: maskGameStateForPlayer(result.gameState, "player2"),
+            });
+          }
         }
 
         // Check for game over

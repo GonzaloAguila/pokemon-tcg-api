@@ -4,276 +4,256 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Backend API for Pokemon TCG multiplayer game. Handles real-time game sessions, user authentication, matchmaking, and persistence.
+**Pokemon TCG API** - Backend service for Pokemon Trading Card Game with real-time multiplayer.
 
-**Stack:**
-- Express.js + Socket.io for HTTP/WebSocket
-- PostgreSQL + Prisma for database
-- JWT for authentication
-- `@poke-tcg/game-core` for shared game logic
+| Aspect | Details |
+|--------|---------|
+| Stack | Express.js + Socket.io + PostgreSQL + Prisma |
+| Game Logic | `@poke-tcg/game-core` (local package at `../pokemon-tcg-game-core`) |
+| Auth | OAuth (Google/Discord) - planned |
+| Deploy | Railway |
+| Scale | <100 CCU initially |
 
 ## Commands
 
 ```bash
-npm run dev           # Start dev server with hot reload (tsx watch)
+npm run dev           # Development with hot reload
 npm run build         # Compile TypeScript
-npm run start         # Start production server
-npm run db:push       # Push Prisma schema to database
-npm run db:migrate    # Create and run migrations
-npm run db:studio     # Open Prisma Studio (DB GUI)
-npm run db:generate   # Generate Prisma client
-npm run lint          # Run ESLint
-npm run test          # Run tests
+npm run start         # Production server
+npm run db:push       # Push Prisma schema
+npm run db:migrate    # Create migration
+npm run db:studio     # Prisma GUI
+npm run lint          # ESLint
+npm run test          # Vitest (all tests)
+npm run test <file>   # Run single test file
+npx tsc --noEmit      # Type check only
 ```
 
-## Architecture
-
-### Directory Structure
+## Project Structure
 
 ```
 src/
-├── index.ts              # Express + Socket.io entry point
-├── config/
-│   └── env.ts            # Environment variables
-├── socket/
-│   ├── index.ts          # Socket.io setup
-│   ├── handlers.ts       # Event handlers (joinRoom, action, etc.)
-│   ├── rooms.ts          # Room/session management
-│   └── state-masking.ts  # Hide private info from clients
-├── modules/
-│   ├── auth/
-│   │   ├── auth.controller.ts
-│   │   ├── auth.service.ts
-│   │   ├── auth.middleware.ts
-│   │   └── auth.types.ts
-│   ├── game/
-│   │   ├── game.service.ts      # Uses @poke-tcg/game-core
-│   │   ├── game.executor.ts     # Executes actions on GameState
-│   │   └── game.types.ts
-│   ├── matchmaking/
-│   │   ├── matchmaking.controller.ts
-│   │   ├── matchmaking.service.ts
-│   │   └── matchmaking.types.ts
-│   └── users/
-│       ├── users.controller.ts
-│       ├── users.service.ts
-│       └── users.types.ts
-├── middleware/
-│   ├── error-handler.ts
-│   └── cors.ts
-└── utils/
-    └── logger.ts
+├── index.ts                 # Express + Socket.io entry
+├── modules/                 # REST API feature modules
+│   ├── catalog/             # Cards, sets, theme decks
+│   └── boosters/            # Pack opening + daily limits
+├── socket/                  # Real-time game logic
+│   ├── index.ts             # Socket exports
+│   ├── handlers.ts          # Socket event handlers
+│   ├── rooms.ts             # GameRoomManager (in-memory)
+│   └── state-masking.ts     # Perspective swap + state masking
+└── middleware/
+    └── error-handler.ts     # AppError class
 
-prisma/
-└── schema.prisma         # Database schema
+.claude/
+├── skills/                  # Claude Code skills
+│   ├── add-module.md        # How to add new modules
+│   ├── game-server.md       # Socket.io patterns
+│   └── deployment.md        # Railway deployment
+└── settings.local.json      # Allowed commands
 ```
 
-### Socket.io Events
+## REST API Reference
 
-**Client → Server:**
+Base: `http://localhost:3001/api`
+
+### Catalog Module
+
+```
+GET  /sets                    → { sets: SetInfo[] }
+GET  /sets/:setId             → SetInfo
+GET  /sets/:setId/cards       → { setId, total, cards: Card[] }
+     ?kind=pokemon|trainer|energy
+     ?type=fire|water|grass|lightning|psychic|fighting|colorless
+     ?rarity=common|uncommon|rare|rare-holo
+     ?stage=basic|stage-1|stage-2
+     ?search=<name>
+GET  /cards/:cardId           → Card
+GET  /cards/:cardId/image     → { cardId, imageUrl }
+GET  /decks                   → { decks: DeckListItem[] }
+GET  /decks/:deckId           → Deck
+GET  /decks/:deckId/resolved  → ResolvedDeck
+```
+
+### Boosters Module
+
+```
+GET  /packs                      → { packs: BoosterPackListItem[] }
+GET  /packs/:packId              → BoosterPackType
+POST /packs                      → Create pack (admin)
+PUT  /packs/:packId              → Update pack (admin)
+DELETE /packs/:packId            → Delete pack (admin)
+POST /packs/:packId/open         → Open pack {userId} → PackOpeningResult
+POST /packs/:packId/preview      → Preview (no limit)
+GET  /packs/daily-limit/:userId  → DailyLimitStatus
+```
+
+**Pack IDs:** `base-set-booster`, `base-set-theme-pack`
+**Daily limit:** 5 packs per user (resets at midnight)
+
+## Socket.io Events
+
+Connection: `http://localhost:3001`
+
+### Client → Server
+
+| Event | Payload | Response Event |
+|-------|---------|----------------|
+| `getRooms` | `{}` | `roomList` |
+| `createRoom` | `{userId, deckId?}` | `roomCreated` |
+| `deleteRoom` | `{roomId}` | `roomDeleted` |
+| `joinRoom` | `{roomId, userId, deckId?}` | `roomJoined`, `gameStart` |
+| `leaveRoom` | `{roomId}` | `playerLeft` |
+| `ready` | `{roomId}` | `gameStart` |
+| `action` | `{roomId, action: PlayerAction}` | `gameState`, `actionResult` |
+
+### Server → Client
+
+| Event | Payload | When |
+|-------|---------|------|
+| `roomList` | `{rooms: Room[]}` | After `getRooms` |
+| `roomCreated` | `{roomId}` | Room created |
+| `roomJoined` | `{roomId, isPlayer1}` | Joined room |
+| `gameStart` | `{roomId, gameState, isPlayer1}` | Both players ready |
+| `gameState` | `{gameState}` | After any action |
+| `showCoinFlip` | `{attackName, results, count}` | Attack with coin flip |
+| `gameOver` | `{winner, reason}` | Game ended |
+| `error` | `{message}` | Any error |
+
+### PlayerAction Types
+
 ```typescript
-'joinRoom'        // { roomId: string } - Join a game room
-'leaveRoom'       // { roomId: string } - Leave current room
-'ready'           // {} - Signal ready to start
-'action'          // PlayerAction - Execute game action
-'chatMessage'     // { content: string } - Send chat message
+| attack          | { attackIndex: number }
+| endTurn         | {}
+| retreat         | { energyIdsToDiscard: string[], benchIndex: number }
+| playBasicToActive | { cardId: string }
+| playBasicToBench  | { cardId: string, benchIndex: number }
+| attachEnergy    | { cardId, pokemonId, isBench, benchIndex? }
+| evolve          | { cardId: string, targetIndex: number }
+| promote         | { benchIndex: number }
+| mulligan        | {}
+| playerReady     | {}
+| usePower        | { powerType, pokemonId, ...params }
+| playTrainer     | { cardId, trainerName, selections: string[][] }
 ```
 
-**Server → Client:**
+## Core Patterns
+
+### Module Structure
+
+Each module follows:
+```
+modules/feature/
+├── feature.controller.ts   # Router with endpoints
+├── feature.service.ts      # Business logic (pure)
+├── feature.types.ts        # TypeScript interfaces
+└── index.ts                # Exports { featureRouter }
+```
+
+Register in `src/index.ts`:
 ```typescript
-'roomJoined'      // { roomId, players } - Confirmed room join
-'gameStart'       // { gameState } - Game starting
-'gameState'       // MaskedGameState - Updated state (hidden info masked)
-'actionResult'    // { success, error? } - Action result
-'opponentAction'  // { type, ... } - For opponent action animations
-'chatMessage'     // { sender, content, timestamp }
-'playerDisconnected' // { playerId }
-'gameOver'        // { winner, reason }
+import { featureRouter } from './modules/feature/index.js';
+app.use('/api', featureRouter);
 ```
-
-### Game State Masking
-
-The server maintains the canonical GameState but sends masked versions to clients:
-
-```typescript
-// Server has full state
-const canonicalState: GameState = { ... };
-
-// Player A receives:
-const maskedForA: MaskedGameState = {
-  myHand: canonicalState.playerHand,      // Full hand
-  myDeckCount: canonicalState.playerDeck.length,
-  opponentHandCount: canonicalState.opponentHand.length,  // Only count!
-  opponentDeckCount: canonicalState.opponentDeck.length,
-  // ... public info (actives, benches, damage, etc.)
-};
-```
-
-### Action Validation Flow
-
-```
-Client sends action
-       ↓
-Server validates (canX functions from game-core)
-       ↓
-If valid: Execute action, update state
-       ↓
-Mask state for each player
-       ↓
-Broadcast to room
-```
-
-## Database Schema (Prisma)
-
-```prisma
-model User {
-  id           String   @id @default(uuid())
-  email        String   @unique
-  passwordHash String
-  username     String   @unique
-  createdAt    DateTime @default(now())
-  decks        Deck[]
-  matches      Match[]  @relation("PlayerMatches")
-}
-
-model Deck {
-  id        String   @id @default(uuid())
-  name      String
-  cards     Json     // Array of card IDs
-  userId    String
-  user      User     @relation(fields: [userId], references: [id])
-  createdAt DateTime @default(now())
-}
-
-model Match {
-  id          String   @id @default(uuid())
-  player1Id   String
-  player2Id   String?
-  winnerId    String?
-  status      String   // 'waiting', 'playing', 'finished'
-  gameState   Json?    // Current GameState (for reconnection)
-  replayData  Json?    // Event log for replay
-  createdAt   DateTime @default(now())
-  finishedAt  DateTime?
-  players     User[]   @relation("PlayerMatches")
-}
-
-model GameRoom {
-  id          String   @id @default(uuid())
-  type        String   // 'casual', 'ranked', 'event'
-  status      String   // 'waiting', 'playing'
-  player1Id   String?
-  player2Id   String?
-  matchId     String?
-  createdAt   DateTime @default(now())
-}
-```
-
-## Code Conventions
-
-### Module Pattern
-
-Each module follows this structure:
-- `*.controller.ts` - HTTP route handlers
-- `*.service.ts` - Business logic (pure when possible)
-- `*.types.ts` - TypeScript types for the module
 
 ### Error Handling
 
-Use custom error classes:
+```typescript
+import { AppError, Errors } from './middleware/error-handler';
+
+throw new AppError('Custom message', 404);
+throw Errors.NotFound('Resource');
+throw Errors.BadRequest('Validation failed');
+throw Errors.Unauthorized();
+throw Errors.Forbidden();
+```
+
+### Perspective Swap (Multiplayer)
+
+Server stores GameState from Player 1's view. For Player 2:
+```typescript
+const executeForPlayer2 = (fn) => {
+  const swapped = swapPerspective(state);
+  const result = fn(swapped);
+  return swapPerspective(result);
+};
+```
+
+### Game Phases
 
 ```typescript
-import { AppError } from '../middleware/error-handler';
-
-throw new AppError('Room not found', 404);
-throw new AppError('Not your turn', 400);
-throw new AppError('Invalid action', 400);
+type GamePhase = "MULLIGAN" | "SETUP" | "PLAYING" | "GAME_OVER";
 ```
 
-### Environment Variables
-
-Required in `.env`:
-```
-DATABASE_URL=postgresql://...
-JWT_SECRET=your-secret-key
-PORT=3001
-CORS_ORIGIN=http://localhost:3000
-```
+| Phase | Turn Validation | Allowed Actions |
+|-------|-----------------|-----------------|
+| MULLIGAN | Bypassed | `mulligan`, `playerReady`, `playBasicToActive` |
+| SETUP | Bypassed | `playBasicToActive`, `playBasicToBench`, `playerReady` |
+| PLAYING | Enforced | All actions |
+| GAME_OVER | N/A | None |
 
 ### Using Game Core
 
-Import game logic from the shared package:
-
 ```typescript
 import {
-  executeAttack,
-  canUseAttack,
-  GameState,
-  isPokemonCard
+  // Game initialization
+  initializeMultiplayerGame, startGame, buildDeckFromEntries,
+
+  // Turn actions
+  executeAttack, endTurn, executeRetreat, doMulligan,
+
+  // Validation
+  canUseAttack, canRetreat, canEvolveInto,
+
+  // Trainers & Powers
+  playBill, playSwitch, attachEnergyWithRainDance, // etc.
+
+  // Catalog
+  baseSetCards, decks, getDeckById, resolveDeck,
+
+  // Type guards
+  isPokemonCard, isEnergyCard, isTrainerCard,
 } from '@poke-tcg/game-core';
-
-// Execute action
-if (canUseAttack(state, pokemon, attackIndex)) {
-  const newState = executeAttack(state, attackIndex);
-  await this.broadcastState(roomId, newState);
-}
 ```
 
-## Security Considerations
+## Environment Variables
 
-1. **Never trust client GameState** - Server is source of truth
-2. **Validate all actions** - Use `canX()` functions before executing
-3. **Mask private info** - Opponent's hand/deck should never be sent
-4. **Rate limit** - Prevent action spam
-5. **JWT validation** - Verify tokens on every Socket connection
+```env
+# Required
+DATABASE_URL=postgresql://user:pass@host:5432/db
+PORT=3001
+CORS_ORIGIN=http://localhost:3000
 
-## Coin Flip Synchronization
-
-Coin flips must be generated server-side:
-
-```typescript
-// In game.executor.ts
-function executeAttackWithCoinFlip(state: GameState, attack: Attack): {
-  newState: GameState;
-  coinResults: CoinFlipResult[];
-} {
-  const coinResults = generateCoinFlips(attack.coinFlipCount);
-  // Apply results to state...
-  return { newState, coinResults };
-}
-
-// Broadcast results to both clients for animation
-socket.to(roomId).emit('coinFlipResults', coinResults);
+# Future (OAuth)
+JWT_SECRET=random-secret-min-32-chars
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+DISCORD_CLIENT_ID=
+DISCORD_CLIENT_SECRET=
 ```
 
-## Reconnection Handling
+## Skills
 
-1. Store GameState in database on each action
-2. On reconnect, restore from database
-3. Re-mask state for reconnecting player
-4. Resume from last known state
+Use `/skill <name>` for detailed guides:
 
-## Testing
+| Skill | Purpose |
+|-------|---------|
+| `add-module` | Create new feature module |
+| `game-server` | Socket.io and real-time patterns |
+| `deployment` | Deploy to Railway |
 
-```typescript
-describe('GameExecutor', () => {
-  it('should reject actions when not player turn', async () => {
-    const room = createTestRoom();
-    const result = await executor.handleAction(room, 'player2', attackAction);
-    expect(result.success).toBe(false);
-    expect(result.error).toBe('Not your turn');
-  });
-});
-```
+## Key Notes
 
-## Deployment (Railway)
+1. **Server = Source of Truth** - Clients send actions, server validates and executes
+2. **Coin Flips Server-Side** - Prevents cheating, broadcast via `showCoinFlip`
+3. **In-Memory State** - Rooms/limits reset on restart (acceptable for MVP)
+4. **No Auth Yet** - Uses anonymous `userId` from client sessionStorage
+5. **Card ID Format** - `base-set-001-alakazam` (set-number-name, zero-padded)
 
-1. Connect GitHub repo to Railway
-2. Set environment variables
-3. Add PostgreSQL addon
-4. Deploy automatically on push to main
+## TODO
 
-Required Railway settings:
-- Build command: `npm run build`
-- Start command: `npm run start`
-- Health check path: `/health`
+- [x] ~~Implement state masking (hide opponent hand/deck)~~ - Done via `maskGameStateForPlayer`
+- [ ] Add OAuth authentication
+- [ ] Persist game state for reconnection
+- [ ] Add rate limiting
+- [ ] Add request logging

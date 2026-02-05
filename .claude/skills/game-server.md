@@ -1,243 +1,220 @@
 # Game Server Skill
 
-Use this skill when working on the real-time game server, Socket.io handlers, room management, or game state synchronization.
+Use this skill when working on Socket.io handlers, room management, or real-time game logic.
 
-## Architecture Overview
+## Architecture
 
 ```
-Client A  ←──Socket.io──→  Server  ←──Socket.io──→  Client B
-                            │
-                     ┌──────┴──────┐
-                     │ GameState   │  (Canonical)
-                     │ RoomManager │
-                     │ StateMasker │
-                     └─────────────┘
+Client A  ←─ Socket.io ─→  Server  ←─ Socket.io ─→  Client B
+                              │
+                    ┌─────────┴─────────┐
+                    │   GameState       │ (Player 1 perspective)
+                    │   RoomManager     │ (In-memory)
+                    │   Perspective Swap │ (For Player 2)
+                    └───────────────────┘
 ```
 
-## Key Components
+## Key Files
 
-### 1. Socket Handlers (`src/socket/handlers.ts`)
+| File | Purpose |
+|------|---------|
+| `socket/handlers.ts` | Event handlers (entry point) |
+| `socket/rooms.ts` | GameRoomManager class |
+| `socket/state-masking.ts` | `swapPerspective()` function |
 
-Entry point for all real-time events. Pattern:
+## Event Handler Pattern
 
 ```typescript
 socket.on('eventName', async (payload) => {
   try {
-    // 1. Validate payload
-    // 2. Execute business logic
-    // 3. Update game state
-    // 4. Broadcast to clients
-    socket.emit('result', { success: true });
+    // 1. Validate
+    const room = roomManager.getRoom(payload.roomId);
+    if (!room) {
+      socket.emit('error', { message: 'Room not found' });
+      return;
+    }
+
+    // 2. Execute
+    const result = await roomManager.doSomething(payload);
+
+    // 3. Broadcast
+    io.to(payload.roomId).emit('result', result);
+
   } catch (error) {
-    socket.emit('error', { message: error.message });
+    socket.emit('error', { message: (error as Error).message });
   }
 });
 ```
 
-### 2. Room Manager (`src/socket/rooms.ts`)
+## Room Lifecycle
 
-Manages game rooms in memory. Key methods:
+```
+createRoom → joinRoom (P1) → joinRoom (P2) → gameStart
+                                    │
+                                    ↓
+                              action loop
+                              ↓        ↑
+                           gameState ──┘
+                                    │
+                                    ↓ (KO all or 6 prizes)
+                                gameOver
+```
 
-| Method | Purpose |
-|--------|---------|
-| `createRoom()` | Create new room with unique ID |
-| `joinRoom()` | Add player to room |
-| `leaveRoom()` | Remove player from room |
-| `setPlayerReady()` | Mark player ready |
-| `startGame()` | Initialize game state |
-| `executeAction()` | Validate and execute player action |
-| `handleDisconnect()` | Handle player disconnect |
+## Player 2 Perspective
 
-### 3. State Masking (`src/socket/state-masking.ts`)
-
-**Critical for security** - Never send opponent's hand/deck to client.
+Server stores state from **Player 1's perspective**. For Player 2:
 
 ```typescript
-// Full state on server
-const canonicalState = {
-  playerHand: [...],
-  opponentHand: [...] // SECRET
-};
-
-// Masked for Player 1
-const maskedForP1 = {
-  myHand: canonicalState.playerHand,      // Visible
-  opponentHandCount: 5,                    // Only count!
-};
-
-// Masked for Player 2
-const maskedForP2 = {
-  myHand: canonicalState.opponentHand,    // Their hand
-  opponentHandCount: 7,                    // Only count!
+// In rooms.ts executeAction
+const executeForPlayer = (fn: (state: GameState) => GameState): GameState => {
+  if (isPlayer1) {
+    return fn(room.gameState!);
+  } else {
+    // Swap → Execute → Swap back
+    const swapped = swapPerspective(room.gameState!);
+    const result = fn(swapped);
+    return swapPerspective(result);
+  }
 };
 ```
 
-## Adding New Socket Events
+The `swapPerspective` function swaps:
+- `playerHand` ↔ `opponentHand`
+- `playerDeck` ↔ `opponentDeck`
+- `playerBench` ↔ `opponentBench`
+- `playerActivePokemon` ↔ `opponentActivePokemon`
+- `isPlayerTurn` → inverted
 
-1. Define the event in `handlers.ts`:
+## Action Execution Flow
+
+```
+1. Client sends: { roomId, action: { type, payload } }
+                              ↓
+2. Validate:
+   - Is player in room?
+   - Is it their turn? (bypass for MULLIGAN/SETUP)
+   - Is action valid?
+                              ↓
+3. Execute:
+   - For P1: fn(state)
+   - For P2: swap → fn → swap
+                              ↓
+4. Check game over:
+   - 6 prizes taken?
+   - All opponent Pokemon KO'd?
+                              ↓
+5. Broadcast:
+   - io.to(roomId).emit('gameState', state)
+   - For coin flips: emit('showCoinFlip', results) first
+```
+
+## Adding New Actions
+
+### 1. Add case in `executeAction` (rooms.ts)
 
 ```typescript
-socket.on('newEvent', async (payload: NewEventPayload) => {
-  const { roomId, data } = payload;
+case "newAction": {
+  const { param1, param2 } = action.payload;
 
   // Validate
-  const room = roomManager.getRoom(roomId);
-  if (!room) {
-    socket.emit('error', { message: 'Room not found' });
-    return;
+  if (!someCondition) {
+    return { success: false, error: "Invalid action" };
   }
 
-  // Execute
-  const result = await someService.doSomething(data);
-
-  // Broadcast
-  io.to(roomId).emit('newEventResult', result);
-});
-```
-
-2. Add corresponding client handler in frontend.
-
-## Integrating Game Core
-
-When `@poke-tcg/game-core` is published:
-
-```typescript
-import {
-  initializeGame,
-  executeAttack,
-  canUseAttack,
-  endTurn,
-  type GameState,
-} from '@poke-tcg/game-core';
-
-// In rooms.ts
-async startGame(roomId: string): Promise<GameState> {
-  const room = this.rooms.get(roomId);
-
-  // Get player decks from database
-  const deck1 = await this.getDeck(room.player1Id);
-  const deck2 = await this.getDeck(room.player2Id);
-
-  // Initialize game
-  let gameState = initializeGame(deck1, deck2);
-  gameState = startGame(gameState);
-
-  room.gameState = gameState;
-  return gameState;
-}
-
-// In executeAction
-case 'attack':
-  if (!canUseAttack(state, pokemon, action.payload.attackIndex)) {
-    return { success: false, error: 'Cannot use this attack' };
-  }
-  room.gameState = executeAttack(state, action.payload.attackIndex);
+  // Execute (use executeForPlayer for game-core functions)
+  newState = executeForPlayer((state) =>
+    someGameCoreFunction(state, param1, param2)
+  );
   break;
+}
 ```
 
-## Action Validation Flow
+### 2. Add handler in `handlers.ts` (if needed)
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│ 1. Receive action from client                               │
-├─────────────────────────────────────────────────────────────┤
-│ 2. Validate:                                                │
-│    - Is player in this room?                                │
-│    - Is it this player's turn?                              │
-│    - Is the action valid? (canX functions)                  │
-├─────────────────────────────────────────────────────────────┤
-│ 3. Execute action (game-core pure functions)                │
-├─────────────────────────────────────────────────────────────┤
-│ 4. Check for game over conditions                           │
-├─────────────────────────────────────────────────────────────┤
-│ 5. Mask state for each player                               │
-├─────────────────────────────────────────────────────────────┤
-│ 6. Broadcast to room                                        │
-└─────────────────────────────────────────────────────────────┘
-```
+Only needed if action requires special handling beyond standard flow.
+
+### 3. Document in CLAUDE.md
+
+Add to PlayerAction types section.
 
 ## Coin Flip Handling
 
-Coin flips MUST be generated server-side to prevent cheating:
+Coin flips are generated server-side to prevent cheating:
 
 ```typescript
-function executeAttackWithCoinFlip(
-  state: GameState,
-  attackIndex: number
-): { newState: GameState; coinResults: CoinFlipResult[] } {
-  const attack = getAttack(state, attackIndex);
+case "attack": {
+  const activePokemon = getActive();
+  const attack = activePokemon.pokemon.attacks[attackIndex];
 
-  if (attack.coinFlipCount) {
-    // Generate results on server
-    const coinResults = Array.from(
-      { length: attack.coinFlipCount },
-      () => Math.random() < 0.5 ? 'heads' : 'tails'
+  // Check for coin flip effect
+  const coinEffect = attack.effects?.find(e => e.coinFlip);
+  if (coinEffect?.coinFlip) {
+    const results = Array.from(
+      { length: coinEffect.coinFlip.count },
+      () => Math.random() < 0.5 ? "heads" : "tails"
     );
 
-    // Apply to game state
-    const newState = applyAttackWithCoinResults(state, attackIndex, coinResults);
-
-    return { newState, coinResults };
-  }
-
-  return { newState: executeAttack(state, attackIndex), coinResults: [] };
-}
-
-// Broadcast coin results for animation
-io.to(roomId).emit('coinFlipAnimation', { results: coinResults });
-// Then broadcast updated state
-io.to(roomId).emit('gameState', maskedState);
-```
-
-## Database Persistence
-
-For reconnection support, persist game state:
-
-```typescript
-// After each action
-await prisma.match.update({
-  where: { id: room.matchId },
-  data: {
-    gameState: room.gameState,
-    replayData: room.gameState.events, // For replay feature
-  },
-});
-
-// On reconnect
-const match = await prisma.match.findUnique({ where: { id: matchId } });
-room.gameState = match.gameState;
-```
-
-## Error Handling Patterns
-
-```typescript
-// Custom game errors
-class GameError extends Error {
-  constructor(message: string, public code: string) {
-    super(message);
-  }
-}
-
-// Common errors
-const NotYourTurn = new GameError('Not your turn', 'NOT_YOUR_TURN');
-const InvalidAction = new GameError('Invalid action', 'INVALID_ACTION');
-const RoomFull = new GameError('Room is full', 'ROOM_FULL');
-
-// In handlers
-try {
-  // ... action logic
-} catch (error) {
-  if (error instanceof GameError) {
-    socket.emit('actionResult', {
-      success: false,
-      error: error.message,
-      code: error.code
+    // Broadcast for animation BEFORE state update
+    io.to(roomId).emit('showCoinFlip', {
+      attackName: attack.name,
+      results,
+      count: results.length,
     });
-  } else {
-    socket.emit('error', { message: 'Internal server error' });
-    console.error(error);
   }
+
+  newState = executeForPlayer((state) => executeAttack(state, attackIndex));
+  break;
 }
+```
+
+## Game Phases
+
+```typescript
+type GamePhase = "MULLIGAN" | "SETUP" | "PLAYING" | "GAME_OVER";
+```
+
+| Phase | Turn Validation | Allowed Actions |
+|-------|-----------------|-----------------|
+| MULLIGAN | Bypassed | mulligan, playerReady, playBasicToActive |
+| SETUP | Bypassed | playBasicToActive, playBasicToBench, playerReady |
+| PLAYING | Enforced | All actions |
+| GAME_OVER | N/A | None |
+
+## Using Game Core Functions
+
+```typescript
+import {
+  // Initialization
+  initializeMultiplayerGame,
+  startGame,
+  startPlayingPhase,
+
+  // Turn actions
+  executeAttack,
+  endTurn,
+  executeRetreat,
+  doMulligan,
+  setPlayerReady,
+  promoteActivePokemon,
+
+  // Trainers
+  playBill,
+  playSwitch,
+  playGustOfWind,
+  // ... 20+ trainer functions
+
+  // Powers
+  attachEnergyWithRainDance,
+  moveEnergyWithEnergyTrans,
+  moveDamageWithDamageSwap,
+  activateEnergyBurn,
+  executeBuzzap,
+
+  // Validation
+  canUseRainDance,
+  canAttachWithPower,
+  canEvolveInto,
+} from "@poke-tcg/game-core";
 ```
 
 ## Testing
@@ -250,23 +227,13 @@ describe('GameRoomManager', () => {
     manager = new GameRoomManager();
   });
 
-  it('should create a room', () => {
-    const room = manager.createRoom();
-    expect(room.id).toBeDefined();
-    expect(room.status).toBe('waiting');
-  });
-
-  it('should reject action when not player turn', async () => {
-    // Setup room with two players
-    const room = manager.createRoom('test-room');
-    await manager.joinRoom('test-room', 'player1', 'socket1');
-    await manager.joinRoom('test-room', 'player2', 'socket2');
-    await manager.startGame('test-room');
+  it('rejects action when not player turn', async () => {
+    const room = await setupTwoPlayerGame(manager);
 
     // Player 2 tries to act on Player 1's turn
     const result = await manager.executeAction(
-      'test-room',
-      'socket2',
+      room.id,
+      room.player2SocketId,
       { type: 'attack', payload: { attackIndex: 0 } }
     );
 
@@ -276,10 +243,16 @@ describe('GameRoomManager', () => {
 });
 ```
 
-## Deployment Checklist
+## Common Issues
 
-- [ ] Set `DATABASE_URL` in Railway
-- [ ] Set `JWT_SECRET` (strong random string)
-- [ ] Set `CORS_ORIGIN` to frontend URL
-- [ ] Run `prisma db push` for initial schema
-- [ ] Test WebSocket connection from frontend
+### "Not your turn" during setup
+Setup actions bypass turn validation. Check `gamePhase`.
+
+### State not updating for Player 2
+Ensure `swapPerspective` is called before AND after game-core function.
+
+### Coin flip not animating
+Emit `showCoinFlip` BEFORE updating state. Client needs time to animate.
+
+### Room not found after disconnect
+Rooms are in-memory. Server restart clears all rooms.

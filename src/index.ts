@@ -6,6 +6,8 @@ import dotenv from "dotenv";
 
 import { setupSocketHandlers } from "./socket/handlers.js";
 import { errorHandler } from "./middleware/error-handler.js";
+import { catalogRouter } from "./modules/catalog/index.js";
+import { boostersRouter } from "./modules/boosters/index.js";
 
 // Load environment variables
 dotenv.config();
@@ -34,7 +36,9 @@ app.get("/health", (_req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
-// API Routes (to be added)
+// API Routes
+app.use("/api", catalogRouter);
+app.use("/api", boostersRouter);
 // app.use("/api/auth", authRouter);
 // app.use("/api/users", usersRouter);
 // app.use("/api/matchmaking", matchmakingRouter);
