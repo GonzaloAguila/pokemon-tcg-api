@@ -1,6 +1,11 @@
 import type { Server, Socket } from "socket.io";
 import { GameRoomManager } from "./rooms.js";
 import { maskGameStateForPlayer } from "./state-masking.js";
+import {
+  registerDraftEvents,
+  draftRoomManager,
+  createMatchGames,
+} from "./draft-handlers.js";
 
 // Types for Socket.io events
 interface JoinRoomPayload {
@@ -301,6 +306,61 @@ export function setupSocketHandlers(io: Server): void {
             winner: result.winner,
             reason: result.winReason,
           });
+
+          // Report result to draft system if this was a draft match
+          const draftInfo =
+            draftRoomManager.getDraftInfoForGameRoom(roomId);
+          if (draftInfo && result.winner) {
+            const winnerId =
+              result.winner === "player1"
+                ? draftInfo.player1Id
+                : draftInfo.player2Id;
+            const loserId =
+              result.winner === "player1"
+                ? draftInfo.player2Id
+                : draftInfo.player1Id;
+
+            const { newRoundStarted } =
+              draftRoomManager.reportMatchResult(
+                draftInfo.draftRoomId,
+                draftInfo.roundNumber,
+                draftInfo.matchNumber,
+                winnerId,
+                loserId,
+                roomId,
+              );
+
+            const draftRoom = draftRoomManager.getRoom(
+              draftInfo.draftRoomId,
+            );
+
+            // Notify players about the draft match ending
+            if (draftRoom) {
+              for (const p of draftRoom.players) {
+                if (p.socketId) {
+                  io.to(p.socketId).emit("draft:matchEnded", {
+                    draftRoomId: draftInfo.draftRoomId,
+                    winnerId,
+                    loserId,
+                    forfeit: false,
+                    tournamentFinished: draftRoom.phase === "finished",
+                  });
+                }
+              }
+            }
+
+            // Create games for next round if needed
+            if (newRoundStarted && draftRoom?.tournament) {
+              createMatchGames(
+                io,
+                draftInfo.draftRoomId,
+                draftRoom.tournament.currentRoundNumber,
+                roomManager,
+              ).catch((err) => {
+                console.error("Error creating next round games:", err);
+              });
+            }
+          }
         }
 
         socket.emit("actionResult", { success: true });
@@ -342,5 +402,63 @@ export function setupSocketHandlers(io: Server): void {
         });
       }
     });
+
+    // Register draft events on this socket (pass roomManager for match creation)
+    registerDraftEvents(io, socket, roomManager);
+  });
+
+  // Set up forfeit callback for disconnect timeout
+  roomManager.setOnForfeit((roomId, winner, gameState) => {
+    io.to(roomId).emit("gameOver", {
+      winner,
+      reason: "Oponente desconectado (tiempo de espera agotado)",
+    });
+
+    // Report to draft system if this was a draft match
+    const draftInfo = draftRoomManager.getDraftInfoForGameRoom(roomId);
+    if (draftInfo) {
+      const winnerId =
+        winner === "player1" ? draftInfo.player1Id : draftInfo.player2Id;
+      const loserId =
+        winner === "player1" ? draftInfo.player2Id : draftInfo.player1Id;
+
+      const { newRoundStarted } = draftRoomManager.reportMatchResult(
+        draftInfo.draftRoomId,
+        draftInfo.roundNumber,
+        draftInfo.matchNumber,
+        winnerId,
+        loserId,
+        roomId,
+      );
+
+      const draftRoom = draftRoomManager.getRoom(draftInfo.draftRoomId);
+
+      // Notify draft players about the match ending
+      if (draftRoom) {
+        for (const p of draftRoom.players) {
+          if (p.socketId) {
+            io.to(p.socketId).emit("draft:matchEnded", {
+              draftRoomId: draftInfo.draftRoomId,
+              winnerId,
+              loserId,
+              forfeit: true,
+              tournamentFinished: draftRoom.phase === "finished",
+            });
+          }
+        }
+      }
+
+      // Create games for next round if needed
+      if (newRoundStarted && draftRoom?.tournament) {
+        createMatchGames(
+          io,
+          draftInfo.draftRoomId,
+          draftRoom.tournament.currentRoundNumber,
+          roomManager,
+        ).catch((err) => {
+          console.error("Error creating next round games:", err);
+        });
+      }
+    }
   });
 }

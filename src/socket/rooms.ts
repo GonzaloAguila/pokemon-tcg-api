@@ -7,11 +7,14 @@
 
 import {
   type GameState,
+  type GameCard,
   type PokemonInPlay,
   type EnergyType,
   type AttackEffect,
+  GamePhase,
   initializeMultiplayerGame,
   startGame,
+  shuffle,
   executeAttack,
   endTurn,
   executeRetreat,
@@ -275,9 +278,26 @@ function neutralizeEvents(
   return newEvents;
 }
 
+const FORFEIT_TIMEOUT_MS = 120_000; // 2 minutes
+
+type ForfeitCallback = (
+  roomId: string,
+  winner: "player1" | "player2",
+  gameState: GameState,
+) => void;
+
 export class GameRoomManager {
   private rooms: Map<string, GameRoom> = new Map();
   private socketToRoom: Map<string, string> = new Map();
+  private forfeitTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
+  private onForfeitCallback: ForfeitCallback | null = null;
+
+  /**
+   * Set the callback for when a player forfeits due to disconnect timeout.
+   */
+  setOnForfeit(callback: ForfeitCallback): void {
+    this.onForfeitCallback = callback;
+  }
 
   /**
    * Create a new room
@@ -320,11 +340,13 @@ export class GameRoomManager {
       if (room.player1Id === userId) {
         room.player1SocketId = socketId;
         this.socketToRoom.set(socketId, roomId);
+        this.cancelForfeitTimer(roomId, "player1");
         return room;
       }
       if (room.player2Id === userId) {
         room.player2SocketId = socketId;
         this.socketToRoom.set(socketId, roomId);
+        this.cancelForfeitTimer(roomId, "player2");
         return room;
       }
       throw new Error("Room is full");
@@ -427,6 +449,66 @@ export class GameRoomManager {
     gameState = startGame(gameState);
 
     // Neutralize initial events (always canonical: Tú=P1, Rival=P2)
+    gameState = {
+      ...gameState,
+      events: neutralizeEvents(gameState.events, 0, "Jugador 1", "Jugador 2"),
+    };
+
+    room.gameState = gameState;
+    return room.gameState;
+  }
+
+  /**
+   * Start a game using raw card arrays (for draft matches).
+   * Creates a GameState directly from pre-built decks instead of DeckEntry definitions.
+   */
+  async startGameWithRawDecks(
+    roomId: string,
+    player1Cards: GameCard[],
+    player2Cards: GameCard[],
+  ): Promise<GameState> {
+    const room = this.rooms.get(roomId);
+    if (!room) throw new Error("Room not found");
+    if (!room.player1Id || !room.player2Id) {
+      throw new Error("Need two players to start");
+    }
+
+    room.status = "playing";
+
+    let gameState: GameState = {
+      playerDeck: shuffle(player1Cards),
+      playerHand: [],
+      playerPrizes: [],
+      playerDiscard: [],
+      playerActivePokemon: null,
+      playerBench: [],
+      opponentDeck: shuffle(player2Cards),
+      opponentHand: [],
+      opponentPrizes: [],
+      opponentDiscard: [],
+      opponentActivePokemon: null,
+      opponentBench: [],
+      selectedDeckId: "draft",
+      turnNumber: 0,
+      startingPlayer: null,
+      isPlayerTurn: false,
+      gameStarted: false,
+      gamePhase: GamePhase.Mulligan,
+      playerReady: false,
+      opponentReady: false,
+      energyAttachedThisTurn: false,
+      retreatedThisTurn: false,
+      playerCanTakePrize: false,
+      opponentCanTakePrize: false,
+      playerNeedsToPromote: false,
+      opponentNeedsToPromote: false,
+      activeModifiers: [],
+      gameResult: null,
+      events: [createGameEvent("Partida de draft inicializada", "system")],
+    };
+
+    gameState = startGame(gameState);
+
     gameState = {
       ...gameState,
       events: neutralizeEvents(gameState.events, 0, "Jugador 1", "Jugador 2"),
@@ -1169,17 +1251,97 @@ export class GameRoomManager {
     if (!room) return null;
 
     // Mark player as disconnected but don't remove yet (allow reconnect)
+    let disconnectedSide: "player1" | "player2" | null = null;
     if (room.player1SocketId === socketId) {
       room.player1SocketId = null;
+      disconnectedSide = "player1";
     } else if (room.player2SocketId === socketId) {
       room.player2SocketId = null;
+      disconnectedSide = "player2";
     }
 
     this.socketToRoom.delete(socketId);
 
-    // TODO: Start disconnect timer for forfeit
+    // Start forfeit timer if game is in progress
+    if (disconnectedSide && room.status === "playing" && room.gameState) {
+      this.startForfeitTimer(roomId, disconnectedSide);
+    }
 
     return roomId;
+  }
+
+  /**
+   * Start a forfeit timer for a disconnected player.
+   */
+  private startForfeitTimer(
+    roomId: string,
+    disconnectedSide: "player1" | "player2",
+  ): void {
+    const timerKey = `${roomId}:${disconnectedSide}`;
+
+    // Don't start if already running
+    if (this.forfeitTimers.has(timerKey)) return;
+
+    console.log(
+      `⏱️ Forfeit timer started for ${disconnectedSide} in room ${roomId} (${FORFEIT_TIMEOUT_MS / 1000}s)`,
+    );
+
+    const timer = setTimeout(() => {
+      this.handleForfeitTimeout(roomId, disconnectedSide);
+    }, FORFEIT_TIMEOUT_MS);
+
+    this.forfeitTimers.set(timerKey, timer);
+  }
+
+  /**
+   * Cancel a forfeit timer (player reconnected).
+   */
+  private cancelForfeitTimer(
+    roomId: string,
+    side: "player1" | "player2",
+  ): void {
+    const timerKey = `${roomId}:${side}`;
+    const timer = this.forfeitTimers.get(timerKey);
+    if (timer) {
+      clearTimeout(timer);
+      this.forfeitTimers.delete(timerKey);
+      console.log(
+        `⏱️ Forfeit timer cancelled for ${side} in room ${roomId} (reconnected)`,
+      );
+    }
+  }
+
+  /**
+   * Handle forfeit timeout — player didn't reconnect in time.
+   */
+  private handleForfeitTimeout(
+    roomId: string,
+    disconnectedSide: "player1" | "player2",
+  ): void {
+    const timerKey = `${roomId}:${disconnectedSide}`;
+    this.forfeitTimers.delete(timerKey);
+
+    const room = this.rooms.get(roomId);
+    if (!room || !room.gameState || room.status !== "playing") return;
+
+    // Check if still disconnected
+    const isStillDisconnected =
+      disconnectedSide === "player1"
+        ? room.player1SocketId === null
+        : room.player2SocketId === null;
+
+    if (!isStillDisconnected) return;
+
+    console.log(
+      `⏱️ Forfeit timeout for ${disconnectedSide} in room ${roomId}`,
+    );
+
+    room.status = "finished";
+    const winner = disconnectedSide === "player1" ? "player2" : "player1";
+
+    if (this.onForfeitCallback) {
+      this.onForfeitCallback(roomId, winner, room.gameState);
+    }
   }
 
   /**

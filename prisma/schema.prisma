@@ -8,25 +8,111 @@ datasource db {
 }
 
 // =============================================================================
+// Enums
+// =============================================================================
+
+enum UserRole {
+  user
+  admin
+  superadmin
+}
+
+enum AuthProvider {
+  local
+  google
+  discord
+}
+
+// =============================================================================
 // User & Auth
 // =============================================================================
 
 model User {
-  id           String   @id @default(uuid())
-  email        String   @unique
-  username     String   @unique
-  passwordHash String
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id           String  @id @default(uuid())
+  email        String  @unique
+  username     String  @unique
+  passwordHash String?
+
+  // Auth
+  role       UserRole     @default(user)
+  provider   AuthProvider @default(local)
+  providerId String?
+
+  // Session management
+  refreshToken String? @db.Text
+  tokenVersion Int     @default(0)
+
+  // Password reset
+  resetToken       String?   @unique
+  resetTokenExpiry DateTime?
+
+  // Security
+  failedLoginAttempts Int       @default(0)
+  lockedUntil         DateTime?
+  lastLoginAt         DateTime?
+
+  // Profile
+  avatarUrl      String?
+  avatarPresetId String?
+
+  // Economy
+  coins Int @default(0)
+
+  // Level / XP
+  level      Int @default(1)
+  experience Int @default(0)
+
+  // Game stats — Normal (casual/multiplayer)
+  normalWins   Int @default(0)
+  normalLosses Int @default(0)
+
+  // Game stats — Competitive (ranked)
+  rankedWins   Int @default(0)
+  rankedLosses Int @default(0)
+
+  // Game stats — Draft
+  draftWins   Int @default(0)
+  draftLosses Int @default(0)
+
+  // Streaks
+  currentStreak Int @default(0)
+  bestStreak    Int @default(0)
+
+  // Daily rewards — server-side timestamps (UTC)
+  lastDailyCoinsAt DateTime?
+  lastWheelSpinAt  DateTime?
+  lastSlotSpinAt   DateTime?
+
+  // Permissions / Restrictions (JSON array of permission strings)
+  permissions Json @default("[]")
+
+  // Medals progress (JSON — 8 gym badges with status/progress)
+  medalsData Json @default("[]")
+
+  // Achievements progress (JSON — achievement ids with unlock state)
+  achievementsData Json @default("[]")
+
+  // Active cosmetics
+  activeCoinId     String? @default("eevee")
+  activeCardBackId String? @default("default")
+
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   // Relations
   decks            Deck[]
-  matchesAsPlayer1 Match[]    @relation("Player1")
-  matchesAsPlayer2 Match[]    @relation("Player2")
-  matchesWon       Match[]    @relation("Winner")
-  roomsAsPlayer1   GameRoom[] @relation("RoomPlayer1")
-  roomsAsPlayer2   GameRoom[] @relation("RoomPlayer2")
+  matchesAsPlayer1 Match[]        @relation("Player1")
+  matchesAsPlayer2 Match[]        @relation("Player2")
+  matchesWon       Match[]        @relation("Winner")
+  roomsAsPlayer1   GameRoom[]     @relation("RoomPlayer1")
+  roomsAsPlayer2   GameRoom[]     @relation("RoomPlayer2")
+  cards            UserCard[]
+  transactions     Transaction[]
+  ownedCoins       UserCoin[]
+  ownedCardBacks   UserCardBack[]
 
+  @@index([providerId, provider])
   @@map("users")
 }
 
@@ -37,7 +123,7 @@ model User {
 model Deck {
   id        String   @id @default(uuid())
   name      String
-  cards     Json     // Array of card definition IDs (e.g., ["base-25", "base-25", "base-58"])
+  cards     Json // Array of card definition IDs (e.g., ["base-25", "base-25", "base-58"])
   isValid   Boolean  @default(false) // 60 cards, max 4 of each
   userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -52,23 +138,23 @@ model Deck {
 // =============================================================================
 
 model Match {
-  id         String    @id @default(uuid())
-  status     String    @default("waiting") // waiting, playing, finished, abandoned
+  id     String @id @default(uuid())
+  status String @default("waiting") // waiting, playing, finished, abandoned
 
   // Players
-  player1Id  String
-  player1    User      @relation("Player1", fields: [player1Id], references: [id])
-  player2Id  String?
-  player2    User?     @relation("Player2", fields: [player2Id], references: [id])
+  player1Id String
+  player1   User    @relation("Player1", fields: [player1Id], references: [id])
+  player2Id String?
+  player2   User?   @relation("Player2", fields: [player2Id], references: [id])
 
   // Result
-  winnerId   String?
-  winner     User?     @relation("Winner", fields: [winnerId], references: [id])
-  winReason  String?   // "prizes", "deck_out", "no_pokemon", "forfeit"
+  winnerId  String?
+  winner    User?   @relation("Winner", fields: [winnerId], references: [id])
+  winReason String? // "prizes", "deck_out", "no_pokemon", "forfeit"
 
   // Game data (for reconnection & replay)
-  gameState  Json?     // Full GameState JSON
-  replayData Json?     // Array of GameEvents for replay
+  gameState  Json? // Full GameState JSON
+  replayData Json? // Array of GameEvents for replay
 
   // Timestamps
   createdAt  DateTime  @default(now())
@@ -76,7 +162,7 @@ model Match {
   finishedAt DateTime?
 
   // Room relation
-  room       GameRoom?
+  room GameRoom?
 
   @@map("matches")
 }
@@ -86,25 +172,25 @@ model Match {
 // =============================================================================
 
 model GameRoom {
-  id        String   @id @default(uuid())
-  type      String   @default("casual") // casual, ranked, event, private
-  status    String   @default("waiting") // waiting, ready, playing, finished
-  code      String?  @unique // For private rooms (e.g., "ABC123")
+  id     String  @id @default(uuid())
+  type   String  @default("casual") // casual, ranked, event, private
+  status String  @default("waiting") // waiting, ready, playing, finished
+  code   String? @unique // For private rooms (e.g., "ABC123")
 
   // Players
   player1Id       String?
-  player1         User?    @relation("RoomPlayer1", fields: [player1Id], references: [id])
-  player1Ready    Boolean  @default(false)
+  player1         User?   @relation("RoomPlayer1", fields: [player1Id], references: [id])
+  player1Ready    Boolean @default(false)
   player1SocketId String?
 
   player2Id       String?
-  player2         User?    @relation("RoomPlayer2", fields: [player2Id], references: [id])
-  player2Ready    Boolean  @default(false)
+  player2         User?   @relation("RoomPlayer2", fields: [player2Id], references: [id])
+  player2Ready    Boolean @default(false)
   player2SocketId String?
 
   // Match link
-  matchId   String?  @unique
-  match     Match?   @relation(fields: [matchId], references: [id])
+  matchId String? @unique
+  match   Match?  @relation(fields: [matchId], references: [id])
 
   // Timestamps
   createdAt DateTime @default(now())
@@ -114,27 +200,60 @@ model GameRoom {
 }
 
 // =============================================================================
-// Future: Pack Opening & Collection
+// Card Collection
 // =============================================================================
 
-// model UserCard {
-//   id        String   @id @default(uuid())
-//   userId    String
-//   cardDefId String   // Reference to card definition (e.g., "base-25")
-//   quantity  Int      @default(1)
-//   user      User     @relation(fields: [userId], references: [id])
-//
-//   @@unique([userId, cardDefId])
-//   @@map("user_cards")
-// }
+model UserCard {
+  id        String @id @default(uuid())
+  userId    String
+  cardDefId String // Reference to card definition (e.g., "base-25")
+  quantity  Int    @default(1)
+  user      User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-// model PackOpening {
-//   id           String   @id @default(uuid())
-//   userId       String
-//   packType     String   // "base_set", "jungle", etc.
-//   cardsObtained Json    // Array of card IDs obtained
-//   createdAt    DateTime @default(now())
-//   user         User     @relation(fields: [userId], references: [id])
-//
-//   @@map("pack_openings")
-// }
+  @@unique([userId, cardDefId])
+  @@map("user_cards")
+}
+
+// =============================================================================
+// Economy — Transaction Log
+// =============================================================================
+
+model Transaction {
+  id           String   @id @default(uuid())
+  userId       String
+  type         String // "victory", "daily_login", "achievement", "pack_purchase", "trade", "wheel_spin", "slot_spin"
+  description  String
+  amount       Int // positive = income, negative = expense
+  balanceAfter Int // snapshot of balance after transaction
+  createdAt    DateTime @default(now())
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("transactions")
+}
+
+// =============================================================================
+// Collectibles — Coins & Card Backs
+// =============================================================================
+
+model UserCoin {
+  id         String   @id @default(uuid())
+  userId     String
+  coinId     String // e.g. "charizard", "pikachu"
+  obtainedAt DateTime @default(now())
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, coinId])
+  @@map("user_coins")
+}
+
+model UserCardBack {
+  id         String   @id @default(uuid())
+  userId     String
+  cardBackId String // e.g. "galaxy", "team-rocket"
+  obtainedAt DateTime @default(now())
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, cardBackId])
+  @@map("user_card_backs")
+}

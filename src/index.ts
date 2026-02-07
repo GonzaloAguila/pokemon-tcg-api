@@ -4,10 +4,13 @@ import { Server } from "socket.io";
 import cors from "cors";
 import dotenv from "dotenv";
 
+import cookieParser from "cookie-parser";
 import { setupSocketHandlers } from "./socket/handlers.js";
 import { errorHandler } from "./middleware/error-handler.js";
 import { catalogRouter } from "./modules/catalog/index.js";
 import { boostersRouter } from "./modules/boosters/index.js";
+import { authRouter } from "./modules/auth/index.js";
+import { usersRouter } from "./modules/users/index.js";
 
 // Load environment variables
 dotenv.config();
@@ -30,6 +33,7 @@ app.use(cors({
   credentials: true,
 }));
 app.use(express.json());
+app.use(cookieParser());
 
 // Health check endpoint
 app.get("/health", (_req, res) => {
@@ -39,8 +43,8 @@ app.get("/health", (_req, res) => {
 // API Routes
 app.use("/api", catalogRouter);
 app.use("/api", boostersRouter);
-// app.use("/api/auth", authRouter);
-// app.use("/api/users", usersRouter);
+app.use("/api/auth", authRouter);
+app.use("/api/users", usersRouter);
 // app.use("/api/matchmaking", matchmakingRouter);
 
 // Error handler
