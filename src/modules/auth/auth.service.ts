@@ -14,6 +14,8 @@ import {
 import { sendPasswordResetEmail } from "../../lib/email.js";
 import { Errors } from "../../middleware/error-handler.js";
 import type { RegisterRequest } from "./auth.types.js";
+import { getStarterDeck } from "../decks/starter-decks.js";
+import { createDeck } from "../decks/decks.service.js";
 
 const SUPERADMIN_EMAIL = process.env.SUPERADMIN_EMAIL || "";
 const MAX_FAILED_ATTEMPTS = parseInt(
@@ -103,8 +105,13 @@ export async function registerUser(data: RegisterRequest) {
       passwordHash,
       role,
       provider: "local",
+      starterColor: data.starterColor,
     },
   });
+
+  // Create starter deck for the chosen color
+  const starter = getStarterDeck(data.starterColor);
+  await createDeck(created.id, { name: starter.name, cards: starter.cards });
 
   const payload = toTokenPayload(created);
   const accessToken = generateAccessToken(payload);

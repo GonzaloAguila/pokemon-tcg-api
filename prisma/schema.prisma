@@ -97,6 +97,9 @@ model User {
   activeCoinId     String? @default("eevee")
   activeCardBackId String? @default("default")
 
+  // Starter deck color chosen at signup
+  starterColor String?
+
   // Deck slots
   maxDeckSlots Int @default(3)
 

@@ -2,6 +2,7 @@ export interface RegisterRequest {
   email: string;
   username: string;
   password: string;
+  starterColor: "fire" | "water" | "grass" | "electric" | "psychic" | "fighting";
 }
 
 export interface LoginRequest {

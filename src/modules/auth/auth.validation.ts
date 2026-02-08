@@ -13,6 +13,10 @@ export const registerSchema = z.object({
   password: z
     .string()
     .min(8, "La contrasena debe tener al menos 8 caracteres"),
+  starterColor: z.enum(
+    ["fire", "water", "grass", "electric", "psychic", "fighting"],
+    { message: "Debes elegir un color de inicio" },
+  ),
 });
 
 export const loginSchema = z.object({
