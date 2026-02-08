@@ -46,6 +46,11 @@ model User {
   resetToken       String?   @unique
   resetTokenExpiry DateTime?
 
+  // Email verification
+  emailVerified          Boolean   @default(false)
+  verificationToken      String?   @unique
+  verificationTokenExpiry DateTime?
+
   // Security
   failedLoginAttempts Int       @default(0)
   lockedUntil         DateTime?

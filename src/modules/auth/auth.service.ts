@@ -11,11 +11,9 @@ import {
   verifyRefreshToken,
   type TokenPayload,
 } from "../../lib/jwt.js";
-import { sendPasswordResetEmail } from "../../lib/email.js";
+import { sendPasswordResetEmail, sendVerificationEmail } from "../../lib/email.js";
 import { Errors } from "../../middleware/error-handler.js";
 import type { RegisterRequest } from "./auth.types.js";
-import { getStarterDeck } from "../decks/starter-decks.js";
-import { createDeck } from "../decks/decks.service.js";
 
 const SUPERADMIN_EMAIL = process.env.SUPERADMIN_EMAIL || "";
 const MAX_FAILED_ATTEMPTS = parseInt(
@@ -67,6 +65,9 @@ const profileSelect = {
   achievementsData: true,
   activeCoinId: true,
   activeCardBackId: true,
+  maxDeckSlots: true,
+  starterColor: true,
+  emailVerified: true,
   createdAt: true,
   lastLoginAt: true,
 } as const;
@@ -105,13 +106,14 @@ export async function registerUser(data: RegisterRequest) {
       passwordHash,
       role,
       provider: "local",
-      starterColor: data.starterColor,
+      starterColor: data.starterColor ?? null,
+      coins: 1000,
+      coupons: 1,
     },
   });
 
-  // Create starter deck for the chosen color
-  const starter = getStarterDeck(data.starterColor);
-  await createDeck(created.id, { name: starter.name, cards: starter.cards });
+  // Send verification email
+  await generateVerificationToken(created.id);
 
   const payload = toTokenPayload(created);
   const accessToken = generateAccessToken(payload);
@@ -173,6 +175,13 @@ export async function loginUser(email: string, password: string) {
     }
 
     throw Errors.Unauthorized("Credenciales incorrectas");
+  }
+
+  // Check email verification
+  if (!user.emailVerified) {
+    throw Errors.Forbidden(
+      "Debes verificar tu correo electronico antes de iniciar sesion",
+    );
   }
 
   // Success — reset failed attempts
@@ -311,4 +320,69 @@ export async function resetPassword(token: string, newPassword: string) {
       lockedUntil: null,
     },
   });
+}
+
+// ---------------------------------------------------------------------------
+// Email verification
+// ---------------------------------------------------------------------------
+
+export async function generateVerificationToken(userId: string) {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { email: true, username: true },
+  });
+  if (!user) throw Errors.NotFound("Usuario");
+
+  const verificationToken = crypto.randomBytes(32).toString("hex");
+  const verificationTokenExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+
+  await prisma.user.update({
+    where: { id: userId },
+    data: { verificationToken, verificationTokenExpiry },
+  });
+
+  await sendVerificationEmail(user.email, user.username, verificationToken);
+}
+
+export async function verifyEmail(token: string) {
+  const user = await prisma.user.findUnique({
+    where: { verificationToken: token },
+  });
+
+  if (!user) {
+    throw Errors.BadRequest("Token de verificacion invalido");
+  }
+
+  if (
+    !user.verificationTokenExpiry ||
+    user.verificationTokenExpiry < new Date()
+  ) {
+    throw Errors.BadRequest("Token de verificacion expirado");
+  }
+
+  await prisma.user.update({
+    where: { id: user.id },
+    data: {
+      emailVerified: true,
+      verificationToken: null,
+      verificationTokenExpiry: null,
+    },
+  });
+}
+
+export async function resendVerificationEmail(email: string) {
+  const user = await prisma.user.findUnique({
+    where: { email: email.toLowerCase() },
+  });
+
+  // Don't leak user existence
+  if (!user) return;
+
+  // Already verified
+  if (user.emailVerified) return;
+
+  // OAuth users don't need verification
+  if (user.provider !== "local") return;
+
+  await generateVerificationToken(user.id);
 }

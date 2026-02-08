@@ -78,6 +78,9 @@ async function handleOAuthCallback(
         provider,
         providerId: oauthUser.id,
         role,
+        emailVerified: true,
+        coins: 1000,
+        coupons: 1,
       },
     });
     isNewUser = true;

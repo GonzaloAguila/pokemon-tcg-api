@@ -1,5 +1,7 @@
 import { prisma } from "../../lib/prisma.js";
 import { Errors } from "../../middleware/error-handler.js";
+import { getStarterDeck } from "../decks/starter-decks.js";
+import { createDeck, setActiveDeck } from "../decks/decks.service.js";
 
 // ---------------------------------------------------------------------------
 // Full profile select (reused across queries)
@@ -34,6 +36,8 @@ const fullProfileSelect = {
   activeCoinId: true,
   activeCardBackId: true,
   maxDeckSlots: true,
+  starterColor: true,
+  emailVerified: true,
   createdAt: true,
   lastLoginAt: true,
 } as const;
@@ -340,4 +344,49 @@ export async function getUserCardBacks(userId: string) {
     select: { cardBackId: true, obtainedAt: true },
     orderBy: { obtainedAt: "desc" },
   });
+}
+
+// ---------------------------------------------------------------------------
+// Starter deck — choose color, create deck + add to collection
+// ---------------------------------------------------------------------------
+
+type StarterColor = "fire" | "water" | "grass" | "electric" | "psychic" | "fighting";
+
+export async function setStarterDeck(userId: string, starterColor: StarterColor) {
+  // Verify user exists and hasn't already picked
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { starterColor: true },
+  });
+  if (!user) throw Errors.NotFound("Usuario");
+  if (user.starterColor) {
+    throw Errors.BadRequest("Ya elegiste tu color de inicio");
+  }
+
+  // Get starter deck definition
+  const starter = getStarterDeck(starterColor);
+
+  // Update user's starterColor
+  await prisma.user.update({
+    where: { id: userId },
+    data: { starterColor },
+  });
+
+  // Create the deck
+  const deck = await createDeck(userId, { name: starter.name, cards: starter.cards });
+
+  // Set it as active
+  await setActiveDeck(userId, deck.id);
+
+  // Add all cards to the user's collection
+  for (const entry of starter.cards) {
+    await prisma.userCard.upsert({
+      where: { userId_cardDefId: { userId, cardDefId: entry.cardDefId } },
+      update: { quantity: { increment: entry.quantity } },
+      create: { userId, cardDefId: entry.cardDefId, quantity: entry.quantity },
+    });
+  }
+
+  // Return updated profile
+  return getUserProfile(userId);
 }

@@ -176,6 +176,44 @@ router.post(
 );
 
 // ---------------------------------------------------------------------------
+// POST /me/starter — Choose starter color + create deck + add to collection
+// ---------------------------------------------------------------------------
+
+const starterSchema = z.object({
+  starterColor: z.enum([
+    "fire",
+    "water",
+    "grass",
+    "electric",
+    "psychic",
+    "fighting",
+  ]),
+});
+
+router.post(
+  "/me/starter",
+  requireAuth,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const parsed = starterSchema.safeParse(req.body);
+      if (!parsed.success) {
+        throw Errors.ValidationError(
+          parsed.error.errors.map((e) => e.message).join(". "),
+        );
+      }
+
+      const profile = await usersService.setStarterDeck(
+        req.user!.userId,
+        parsed.data.starterColor,
+      );
+      res.json(profile);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
 // GET /me/collection — Card collection
 // ---------------------------------------------------------------------------
 

@@ -203,6 +203,47 @@ router.post(
   },
 );
 
+// GET /verify-email
+router.get(
+  "/verify-email",
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const token = req.query.token as string;
+      if (!token) {
+        throw Errors.ValidationError("Token de verificacion requerido");
+      }
+
+      await authService.verifyEmail(token);
+      res.json({ message: "Correo electronico verificado correctamente" });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// POST /resend-verification
+router.post(
+  "/resend-verification",
+  passwordResetRateLimiter,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { email } = req.body;
+      if (!email) {
+        throw Errors.ValidationError("Correo electronico requerido");
+      }
+
+      await authService.resendVerificationEmail(email);
+      // Always return success to not leak user existence
+      res.json({
+        message:
+          "Si existe una cuenta con ese correo, recibiras un enlace de verificacion.",
+      });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
 // ============================================================================
 // OAuth Routes
 // ============================================================================

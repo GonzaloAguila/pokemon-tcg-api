@@ -61,3 +61,49 @@ export async function sendPasswordResetEmail(
     `,
   });
 }
+
+export async function sendVerificationEmail(
+  to: string,
+  username: string,
+  verificationToken: string,
+): Promise<void> {
+  const client = getResend();
+  if (!client) {
+    console.warn(
+      "[email] RESEND_API_KEY not configured — skipping verification email",
+    );
+    console.log(
+      `[email] Verification link: ${FRONTEND_URL}/verify-email?token=${verificationToken}`,
+    );
+    return;
+  }
+
+  const verifyUrl = `${FRONTEND_URL}/verify-email?token=${verificationToken}`;
+
+  await client.emails.send({
+    from: FROM_EMAIL,
+    to,
+    subject: "Verifica tu correo electronico - Nostalgic TCG",
+    html: `
+      <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto; padding: 32px; background: #faf5e4; border-radius: 12px;">
+        <h1 style="color: #451a03; text-align: center; margin-bottom: 8px;">Nostalgic TCG</h1>
+        <p style="color: #92400e; text-align: center; margin-bottom: 24px;">Verificacion de correo electronico</p>
+
+        <p style="color: #451a03;">Hola <strong>${username}</strong>,</p>
+        <p style="color: #78350f;">Gracias por registrarte. Para activar tu cuenta, verifica tu correo electronico haciendo clic en el siguiente boton:</p>
+
+        <div style="text-align: center; margin: 32px 0;">
+          <a href="${verifyUrl}"
+             style="background: linear-gradient(180deg, #22c55e, #16a34a); color: white; padding: 12px 32px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block;">
+            Verificar Correo
+          </a>
+        </div>
+
+        <p style="color: #92400e; font-size: 14px;">Si no creaste esta cuenta, puedes ignorar este correo. El enlace expira en 24 horas.</p>
+
+        <hr style="border: none; border-top: 1px solid #d6d3d1; margin: 24px 0;" />
+        <p style="color: #a8a29e; font-size: 12px; text-align: center;">Nostalgic TCG - Pokemon Trading Card Game</p>
+      </div>
+    `,
+  });
+}
