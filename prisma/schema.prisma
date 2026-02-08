@@ -56,7 +56,8 @@ model User {
   avatarPresetId String?
 
   // Economy
-  coins Int @default(0)
+  coins   Int @default(0)
+  coupons Int @default(0)
 
   // Level / XP
   level      Int @default(1)
@@ -96,6 +97,9 @@ model User {
   activeCoinId     String? @default("eevee")
   activeCardBackId String? @default("default")
 
+  // Deck slots
+  maxDeckSlots Int @default(3)
+
   // Timestamps
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -111,6 +115,7 @@ model User {
   transactions     Transaction[]
   ownedCoins       UserCoin[]
   ownedCardBacks   UserCardBack[]
+  battlePasses     UserBattlePass[]
 
   @@index([providerId, provider])
   @@map("users")
@@ -123,8 +128,9 @@ model User {
 model Deck {
   id        String   @id @default(uuid())
   name      String
-  cards     Json // Array of card definition IDs (e.g., ["base-25", "base-25", "base-58"])
+  cards     Json // Array of { cardDefId: string, quantity: number }
   isValid   Boolean  @default(false) // 60 cards, max 4 of each
+  isActive  Boolean  @default(false)
   userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
@@ -256,4 +262,61 @@ model UserCardBack {
 
   @@unique([userId, cardBackId])
   @@map("user_card_backs")
+}
+
+// =============================================================================
+// Battle Pass
+// =============================================================================
+
+enum BattlePassStatus {
+  active
+  expired
+  upcoming
+}
+
+model BattlePass {
+  id           String           @id @default(uuid())
+  slug         String           @unique
+  name         String
+  description  String           @default("")
+  imageUrl     String           @default("")
+  durationDays Int              @default(30)
+  premiumPrice Int              @default(2000)
+  status       BattlePassStatus @default(active)
+  rewards      Json             @default("[]")
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+  userPasses   UserBattlePass[]
+
+  @@map("battle_passes")
+}
+
+model UserBattlePass {
+  id             String                 @id @default(uuid())
+  userId         String
+  battlePassId   String
+  activatedAt    DateTime               @default(now())
+  isPremium      Boolean                @default(false)
+  upgradedAt     DateTime?
+  user           User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  battlePass     BattlePass             @relation(fields: [battlePassId], references: [id], onDelete: Cascade)
+  claimedRewards UserBattlePassReward[]
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+
+  @@unique([userId, battlePassId])
+  @@index([userId])
+  @@map("user_battle_passes")
+}
+
+model UserBattlePassReward {
+  id               String         @id @default(uuid())
+  userBattlePassId String
+  day              Int
+  track            String
+  claimedAt        DateTime       @default(now())
+  userBattlePass   UserBattlePass @relation(fields: [userBattlePassId], references: [id], onDelete: Cascade)
+
+  @@unique([userBattlePassId, day, track])
+  @@map("user_battle_pass_rewards")
 }

@@ -1,12 +1,15 @@
 /**
  * Booster Pack Controller
  *
- * REST endpoints for pack types, opening packs, and daily limits.
+ * REST endpoints for pack types and opening packs.
  */
 
-import { Router, type Request, type Response } from "express";
+import { Router, type Request, type Response, type NextFunction } from "express";
 import { AppError } from "../../middleware/error-handler.js";
+import { requireAuth } from "../../middleware/auth.js";
+import { prisma } from "../../lib/prisma.js";
 import * as boosterService from "./boosters.service.js";
+import * as usersService from "../users/users.service.js";
 import type { BoosterPackType } from "./boosters.types.js";
 
 const router = Router();
@@ -94,80 +97,59 @@ router.delete("/packs/:packId", (req: Request, res: Response) => {
 });
 
 // =============================================================================
-// Pack Opening
+// Pack Opening (Authenticated, charges coins)
 // =============================================================================
 
 /**
  * POST /api/packs/:packId/open
- * Open a pack and get random cards
- * Body: { userId: string }
+ * Open a pack — requires auth, charges coins, persists cards to collection.
  */
-router.post("/packs/:packId/open", (req: Request, res: Response) => {
-  const { packId } = req.params;
-  const { userId } = req.body;
+router.post(
+  "/packs/:packId/open",
+  requireAuth,
+  async (req: Request, res: Response, next: NextFunction) => {
+    const { packId } = req.params;
+    const userId = req.user!.userId;
 
-  if (!userId) {
-    throw new AppError("userId is required", 400);
-  }
-
-  const pack = boosterService.getPackById(packId);
-  if (!pack) {
-    throw new AppError(`Pack '${packId}' not found`, 404);
-  }
-
-  try {
-    const result = boosterService.openPackWithLimit(packId, userId);
-    const limitStatus = boosterService.getDailyLimitStatus(userId);
-
-    res.json({
-      ...result,
-      dailyLimit: {
-        packsOpened: limitStatus.packsOpened,
-        packsRemaining: limitStatus.packsRemaining,
-        dailyLimit: limitStatus.dailyLimit,
-      },
-    });
-  } catch (error) {
-    const message = (error as Error).message;
-    if (message.includes("Daily pack limit")) {
-      throw new AppError(message, 429);
+    const pack = boosterService.getPackById(packId);
+    if (!pack) {
+      return next(new AppError(`Pack '${packId}' not found`, 404));
     }
-    throw new AppError(message, 400);
-  }
-});
 
-/**
- * POST /api/packs/:packId/preview
- * Preview pack opening without using daily limit (for testing/demo)
- */
-router.post("/packs/:packId/preview", (req: Request, res: Response) => {
-  const { packId } = req.params;
+    const price = pack.price ?? 0;
 
-  const pack = boosterService.getPackById(packId);
-  if (!pack) {
-    throw new AppError(`Pack '${packId}' not found`, 404);
-  }
+    try {
+      // Charge coins (throws if insufficient balance)
+      if (price > 0) {
+        await usersService.spendCoins(
+          userId,
+          price,
+          "pack_purchase",
+          `Apertura de sobre: ${pack.name}`,
+        );
+      }
 
-  try {
-    const result = boosterService.openPack(packId);
-    res.json({ ...result, isPreview: true });
-  } catch (error) {
-    throw new AppError((error as Error).message, 400);
-  }
-});
+      // Generate cards
+      const result = boosterService.openPack(packId);
 
-// =============================================================================
-// Daily Limits
-// =============================================================================
+      // Persist to user's collection
+      for (const pulled of result.cards) {
+        await prisma.userCard.upsert({
+          where: { userId_cardDefId: { userId, cardDefId: pulled.card.id } },
+          update: { quantity: { increment: 1 } },
+          create: { userId, cardDefId: pulled.card.id, quantity: 1 },
+        });
+      }
 
-/**
- * GET /api/packs/daily-limit/:userId
- * Check daily limit status for a user
- */
-router.get("/packs/daily-limit/:userId", (req: Request, res: Response) => {
-  const { userId } = req.params;
-  const status = boosterService.getDailyLimitStatus(userId);
-  res.json(status);
-});
+      res.json(result);
+    } catch (error) {
+      next(
+        error instanceof AppError
+          ? error
+          : new AppError((error as Error).message, 400),
+      );
+    }
+  },
+);
 
 export const boostersRouter = router;

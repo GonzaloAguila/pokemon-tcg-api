@@ -14,6 +14,7 @@ const fullProfileSelect = {
   avatarUrl: true,
   avatarPresetId: true,
   coins: true,
+  coupons: true,
   level: true,
   experience: true,
   normalWins: true,
@@ -32,6 +33,7 @@ const fullProfileSelect = {
   achievementsData: true,
   activeCoinId: true,
   activeCardBackId: true,
+  maxDeckSlots: true,
   createdAt: true,
   lastLoginAt: true,
 } as const;

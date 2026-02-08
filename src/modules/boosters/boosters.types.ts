@@ -12,6 +12,8 @@ export interface PackSlotDistribution {
   count: number;
   /** For rare slot: chance to upgrade to holo (0-1) */
   holoChance?: number;
+  /** Per-card chance to upgrade rarity (e.g. uncommon → rare) */
+  upgradeChance?: number;
 }
 
 /**
@@ -84,5 +86,6 @@ export interface BoosterPackListItem {
   setId: string;
   image: string;
   cardCount: number;
+  price: number;
   available: boolean;
 }

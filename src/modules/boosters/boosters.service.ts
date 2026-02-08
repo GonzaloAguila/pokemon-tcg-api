@@ -42,32 +42,34 @@ function initializeDefaultPacks(): void {
   // Base Set Booster Pack - 11 cards
   const baseSetPack: BoosterPackType = {
     id: "base-set-booster",
-    name: "Base Set Booster Pack",
+    name: "Booster Pack",
     description: "Contains 11 random cards from the original Base Set. Includes 1 guaranteed Rare!",
     setId: "base-set",
-    image: "/packs/base-set-booster.png",
+    image: "/packs/booster_chari.png",
     cardCount: 11,
     slots: [
       { rarity: "rare", count: 1, holoChance: 0.33 },
-      { rarity: "uncommon", count: 3 },
+      { rarity: "uncommon", count: 3, upgradeChance: 0.05 },
       { rarity: "common", count: 5 },
       // 2 energy cards handled separately
     ],
+    price: 200,
     available: true,
   };
 
   // Base Set Theme Pack - 5 cards (smaller/cheaper option)
   const baseSetThemePack: BoosterPackType = {
     id: "base-set-theme-pack",
-    name: "Base Set Theme Pack",
+    name: "Theme Pack",
     description: "A smaller pack with 5 cards. Good for quick collection building!",
     setId: "base-set",
-    image: "/packs/base-set-theme.png",
+    image: "/packs/booster_venu.png",
     cardCount: 5,
     slots: [
       { rarity: "uncommon", count: 1, holoChance: 0.1 },
       { rarity: "common", count: 4 },
     ],
+    price: 100,
     available: true,
   };
 
@@ -93,6 +95,7 @@ export function getAllPacks(): BoosterPackListItem[] {
     setId: pack.setId,
     image: pack.image,
     cardCount: pack.cardCount,
+    price: pack.price ?? 0,
     available: pack.available,
   }));
 }
@@ -189,32 +192,31 @@ export function openPack(packId: string): PackOpeningResult {
 
   // Process each slot in the distribution
   for (const slot of pack.slots) {
-    let targetRarity = slot.rarity;
-    let isHolo = false;
+    for (let i = 0; i < slot.count; i++) {
+      let targetRarity = slot.rarity;
+      let isHolo = false;
 
-    // Check for holo upgrade on rare slot
-    if (slot.rarity === "rare" && slot.holoChance) {
-      if (Math.random() < slot.holoChance) {
-        targetRarity = "rare-holo";
-        isHolo = true;
+      // Check for holo upgrade on rare slot
+      if (slot.rarity === "rare" && slot.holoChance) {
+        if (Math.random() < slot.holoChance) {
+          targetRarity = "rare-holo";
+          isHolo = true;
+        }
       }
-    }
 
-    // Get available cards for this rarity
-    const availableCards = getCardsByRarity(pack.setId, targetRarity);
+      // Per-card rarity upgrade (e.g. uncommon → rare)
+      if (slot.upgradeChance && Math.random() < slot.upgradeChance) {
+        if (slot.rarity === "uncommon") targetRarity = "rare";
+        else if (slot.rarity === "common") targetRarity = "uncommon";
+      }
 
-    if (availableCards.length === 0) {
-      console.warn(`No cards found for rarity '${targetRarity}' in set '${pack.setId}'`);
-      continue;
-    }
+      const availableCards = getCardsByRarity(pack.setId, targetRarity);
+      if (availableCards.length === 0) continue;
 
-    // Pick random cards for this slot
-    const picked = pickRandom(availableCards, slot.count);
-
-    for (const card of picked) {
+      const [card] = pickRandom(availableCards, 1);
       pulledCards.push({
         card,
-        slotType: isHolo ? "rare-holo" : slot.rarity,
+        slotType: isHolo ? "rare-holo" : targetRarity,
         isHolo: isHolo || card.rarity === "rare-holo",
       });
     }
