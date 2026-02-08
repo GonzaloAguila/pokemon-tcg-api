@@ -7,7 +7,7 @@
 import {
   baseSetCards,
   type Card,
-} from "@poke-tcg/game-core";
+} from "@gonzaloaguila/game-core";
 
 import type {
   BoosterPackType,

@@ -2,7 +2,7 @@
  * Booster Pack Types
  */
 
-import type { Card } from "@poke-tcg/game-core";
+import type { Card } from "@gonzaloaguila/game-core";
 
 /**
  * Defines how many cards of each rarity appear in a pack

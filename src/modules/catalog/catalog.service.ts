@@ -2,7 +2,7 @@
  * Catalog Service
  *
  * Provides access to card sets, individual cards, and theme decks.
- * Data comes from @poke-tcg/game-core package.
+ * Data comes from @gonzaloaguila/game-core package.
  */
 
 import {
@@ -17,7 +17,7 @@ import {
   type Card,
   type Deck,
   type PokemonCard,
-} from "@poke-tcg/game-core";
+} from "@gonzaloaguila/game-core";
 
 import type { SetInfo, DeckListItem } from "./catalog.types.js";
 

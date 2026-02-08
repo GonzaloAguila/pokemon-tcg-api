@@ -61,7 +61,7 @@ import {
   executeBuzzap,
   canUseRainDance,
   canAttachWithPower,
-} from "@poke-tcg/game-core";
+} from "@gonzaloaguila/game-core";
 
 interface PlayerAction {
   type: string;

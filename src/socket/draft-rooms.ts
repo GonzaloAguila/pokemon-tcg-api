@@ -12,8 +12,8 @@ import {
   baseSetCards,
   isBasicEnergy,
   isEnergyCard,
-} from "@poke-tcg/game-core";
-import type { Card, GameCard } from "@poke-tcg/game-core";
+} from "@gonzaloaguila/game-core";
+import type { Card, GameCard } from "@gonzaloaguila/game-core";
 
 // ============================================================================
 // Types
