@@ -11,6 +11,8 @@ import { catalogRouter } from "./modules/catalog/index.js";
 import { boostersRouter } from "./modules/boosters/index.js";
 import { authRouter } from "./modules/auth/index.js";
 import { usersRouter } from "./modules/users/index.js";
+import { decksRouter } from "./modules/decks/index.js";
+import { battlePassRouter } from "./modules/battle-pass/index.js";
 
 // Load environment variables
 dotenv.config();
@@ -45,6 +47,8 @@ app.use("/api", catalogRouter);
 app.use("/api", boostersRouter);
 app.use("/api/auth", authRouter);
 app.use("/api/users", usersRouter);
+app.use("/api/users", decksRouter);
+app.use("/api", battlePassRouter);
 // app.use("/api/matchmaking", matchmakingRouter);
 
 // Error handler

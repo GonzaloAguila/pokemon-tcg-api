@@ -6,6 +6,7 @@ import {
   draftRoomManager,
   createMatchGames,
 } from "./draft-handlers.js";
+import { recordMatchResult } from "../modules/users/users.service.js";
 
 // Types for Socket.io events
 interface JoinRoomPayload {
@@ -307,9 +308,19 @@ export function setupSocketHandlers(io: Server): void {
             reason: result.winReason,
           });
 
-          // Report result to draft system if this was a draft match
+          // Persist win/loss stats to database
           const draftInfo =
             draftRoomManager.getDraftInfoForGameRoom(roomId);
+          const room = roomManager.getRoom(roomId);
+          if (room?.player1Id && room?.player2Id && result.winner) {
+            const mode = draftInfo ? "draft" as const : "normal" as const;
+            const winnerId = result.winner === "player1" ? room.player1Id : room.player2Id;
+            const loserId = result.winner === "player1" ? room.player2Id : room.player1Id;
+            recordMatchResult(winnerId, mode, true).catch(console.error);
+            recordMatchResult(loserId, mode, false).catch(console.error);
+          }
+
+          // Report result to draft system if this was a draft match
           if (draftInfo && result.winner) {
             const winnerId =
               result.winner === "player1"
@@ -414,8 +425,18 @@ export function setupSocketHandlers(io: Server): void {
       reason: "Oponente desconectado (tiempo de espera agotado)",
     });
 
-    // Report to draft system if this was a draft match
+    // Persist win/loss stats to database
+    const room = roomManager.getRoom(roomId);
     const draftInfo = draftRoomManager.getDraftInfoForGameRoom(roomId);
+    if (room?.player1Id && room?.player2Id) {
+      const mode = draftInfo ? "draft" as const : "normal" as const;
+      const winnerId = winner === "player1" ? room.player1Id : room.player2Id;
+      const loserId = winner === "player1" ? room.player2Id : room.player1Id;
+      recordMatchResult(winnerId, mode, true).catch(console.error);
+      recordMatchResult(loserId, mode, false).catch(console.error);
+    }
+
+    // Report to draft system if this was a draft match
     if (draftInfo) {
       const winnerId =
         winner === "player1" ? draftInfo.player1Id : draftInfo.player2Id;
