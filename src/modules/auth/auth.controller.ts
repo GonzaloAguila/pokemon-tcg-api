@@ -21,10 +21,12 @@ const router = Router();
 
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
 
+const IS_PROD = process.env.NODE_ENV === "production";
+
 const REFRESH_COOKIE_OPTIONS = {
   httpOnly: true,
-  secure: process.env.NODE_ENV === "production",
-  sameSite: "lax" as const,
+  secure: IS_PROD,
+  sameSite: IS_PROD ? ("none" as const) : ("lax" as const),
   path: "/api/auth",
   maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
 };
@@ -36,8 +38,8 @@ function setRefreshCookie(res: Response, token: string) {
 function clearRefreshCookie(res: Response) {
   res.clearCookie("refreshToken", {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax" as const,
+    secure: IS_PROD,
+    sameSite: IS_PROD ? ("none" as const) : ("lax" as const),
     path: "/api/auth",
   });
 }
