@@ -7,7 +7,8 @@
 
 import {
   baseSetCards,
-  getBaseSetImageUrl,
+  jungleCards,
+  getCardImageUrl as getCoreImageUrl,
   decks,
   getDeckById,
   resolveDeck,
@@ -63,8 +64,10 @@ function getDeckFeaturedPokemon(deck: Deck, count: number = 3): PokemonCard[] {
   // If deck has explicit featured Pokemon, use them
   if (deck.featuredPokemon) {
     const featured: PokemonCard[] = [];
-    for (const cardNumber of deck.featuredPokemon) {
-      const entry = resolved.find((e) => e.card.number === cardNumber);
+    for (const ref of deck.featuredPokemon) {
+      const entry = resolved.find(
+        (e) => e.card.number === ref.cardNumber && (!ref.set || e.card.set === ref.set)
+      );
       if (entry && isPokemonCard(entry.card)) {
         featured.push(entry.card);
       }
@@ -94,6 +97,13 @@ const SETS: SetInfo[] = [
     releaseDate: "1999-01-09",
     totalCards: 102,
   },
+  {
+    id: "jungle",
+    name: "Jungle",
+    code: "JU",
+    releaseDate: "1999-06-16",
+    totalCards: 48,
+  },
 ];
 
 /**
@@ -117,36 +127,41 @@ export function getSetById(setId: string): SetInfo | undefined {
 /**
  * Get all cards in a set
  */
+/** Map set IDs to their card arrays */
+const setCardMap: Record<string, Card[]> = {
+  "base-set": baseSetCards,
+  jungle: jungleCards,
+};
+
 export function getCardsBySet(setId: string): Card[] {
-  if (setId === "base-set") {
-    return baseSetCards;
-  }
-  return [];
+  return setCardMap[setId] ?? [];
 }
 
 /**
  * Get a single card by ID (format: "base-set-1-alakazam")
  */
 export function getCardById(cardId: string): Card | undefined {
-  // Try to find in base set
-  return baseSetCards.find((c) => c.id === cardId);
+  for (const cards of Object.values(setCardMap)) {
+    const found = cards.find((c) => c.id === cardId);
+    if (found) return found;
+  }
+  return undefined;
 }
 
 /**
  * Get a card by set and number
  */
 export function getCardByNumber(setId: string, number: number): Card | undefined {
-  if (setId === "base-set") {
-    return baseSetCards.find((c) => c.number === number);
-  }
-  return undefined;
+  const cards = setCardMap[setId];
+  if (!cards) return undefined;
+  return cards.find((c) => c.number === number);
 }
 
 /**
  * Get image URL for a card
  */
 export function getCardImageUrl(card: Card): string {
-  return getBaseSetImageUrl(card);
+  return getCoreImageUrl(card);
 }
 
 /**
@@ -154,7 +169,9 @@ export function getCardImageUrl(card: Card): string {
  */
 export function searchCards(query: string, setId?: string): Card[] {
   const normalizedQuery = query.toLowerCase();
-  const cards = setId ? getCardsBySet(setId) : baseSetCards;
+  const cards = setId
+    ? getCardsBySet(setId)
+    : Object.values(setCardMap).flat();
 
   return cards.filter((c) => c.name.toLowerCase().includes(normalizedQuery));
 }
