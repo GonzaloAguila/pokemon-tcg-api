@@ -3,6 +3,7 @@
  *
  * Each new user picks a color on signup and receives one of these decks.
  * All decks share the same trainer base (16 cards) and total 60 cards.
+ * Decks include cards from both Base Set and Jungle.
  */
 
 import type { DeckCardEntry } from "./decks.service.js";
@@ -24,7 +25,7 @@ const TRAINER_BASE: DeckCardEntry[] = [
 ];
 
 // ---------------------------------------------------------------------------
-// Fire Deck — Ninetales + Charmeleon (21 pokemon + 23 energy)
+// Fire Deck — Ninetales + Flareon (21 pokemon + 23 energy)
 // ---------------------------------------------------------------------------
 
 const FIRE_DECK: DeckCardEntry[] = [
@@ -38,15 +39,15 @@ const FIRE_DECK: DeckCardEntry[] = [
   // Fillers
   { cardDefId: "base-set-036-magmar", quantity: 3 },
   { cardDefId: "base-set-028-growlithe", quantity: 1 },
-  { cardDefId: "base-set-061-rattata", quantity: 3 },
-  { cardDefId: "base-set-027-farfetchd", quantity: 1 },
-  { cardDefId: "base-set-048-doduo", quantity: 1 },
+  // Jungle: Flareon line
+  { cardDefId: "jungle-051-eevee", quantity: 4 },
+  { cardDefId: "jungle-003-flareon", quantity: 1 },
   // Energy
   { cardDefId: "base-set-098-fire-energy", quantity: 23 },
 ];
 
 // ---------------------------------------------------------------------------
-// Water Deck — Poliwrath + Wartortle (22 pokemon + 22 energy)
+// Water Deck — Poliwrath + Vaporeon (22 pokemon + 22 energy)
 // ---------------------------------------------------------------------------
 
 const WATER_DECK: DeckCardEntry[] = [
@@ -61,14 +62,15 @@ const WATER_DECK: DeckCardEntry[] = [
   // Fillers
   { cardDefId: "base-set-041-seel", quantity: 3 },
   { cardDefId: "base-set-025-dewgong", quantity: 1 },
-  { cardDefId: "base-set-065-staryu", quantity: 2 },
-  { cardDefId: "base-set-061-rattata", quantity: 1 },
+  // Jungle: Goldeen + Seaking
+  { cardDefId: "jungle-053-goldeen", quantity: 2 },
+  { cardDefId: "jungle-046-seaking", quantity: 1 },
   // Energy
   { cardDefId: "base-set-102-water-energy", quantity: 22 },
 ];
 
 // ---------------------------------------------------------------------------
-// Grass Deck — Beedrill + Ivysaur (22 pokemon + 22 energy)
+// Grass Deck — Beedrill + Victreebel (22 pokemon + 22 energy)
 // ---------------------------------------------------------------------------
 
 const GRASS_DECK: DeckCardEntry[] = [
@@ -82,15 +84,16 @@ const GRASS_DECK: DeckCardEntry[] = [
   { cardDefId: "base-set-030-ivysaur", quantity: 2 },
   // Fillers
   { cardDefId: "base-set-066-tangela", quantity: 3 },
-  { cardDefId: "base-set-055-nidoran", quantity: 2 },
-  { cardDefId: "base-set-037-nidorino", quantity: 1 },
-  { cardDefId: "base-set-061-rattata", quantity: 1 },
+  // Jungle: Bellsprout + Weepinbell + Paras
+  { cardDefId: "jungle-049-bellsprout", quantity: 2 },
+  { cardDefId: "jungle-048-weepinbell", quantity: 1 },
+  { cardDefId: "jungle-059-paras", quantity: 1 },
   // Energy
   { cardDefId: "base-set-099-grass-energy", quantity: 22 },
 ];
 
 // ---------------------------------------------------------------------------
-// Electric Deck — Raichu + Magneton (20 pokemon + 24 energy)
+// Electric Deck — Raichu + Jolteon (20 pokemon + 24 energy)
 // ---------------------------------------------------------------------------
 
 const ELECTRIC_DECK: DeckCardEntry[] = [
@@ -104,14 +107,15 @@ const ELECTRIC_DECK: DeckCardEntry[] = [
   // Fillers
   { cardDefId: "base-set-067-voltorb", quantity: 4 },
   { cardDefId: "base-set-020-electabuzz", quantity: 1 },
-  { cardDefId: "base-set-061-rattata", quantity: 2 },
-  { cardDefId: "base-set-027-farfetchd", quantity: 1 },
+  // Jungle: Jolteon line
+  { cardDefId: "jungle-051-eevee", quantity: 2 },
+  { cardDefId: "jungle-004-jolteon", quantity: 1 },
   // Energy
   { cardDefId: "base-set-100-lightning-energy", quantity: 24 },
 ];
 
 // ---------------------------------------------------------------------------
-// Psychic Deck — Kadabra + Dragonair (22 pokemon + 22 energy)
+// Psychic Deck — Kadabra + Mr. Mime (22 pokemon + 22 energy)
 // ---------------------------------------------------------------------------
 
 const PSYCHIC_DECK: DeckCardEntry[] = [
@@ -125,15 +129,16 @@ const PSYCHIC_DECK: DeckCardEntry[] = [
   // Fillers
   { cardDefId: "base-set-050-gastly", quantity: 3 },
   { cardDefId: "base-set-029-haunter", quantity: 2 },
-  { cardDefId: "base-set-049-drowzee", quantity: 2 },
-  { cardDefId: "base-set-031-jynx", quantity: 2 },
-  { cardDefId: "base-set-061-rattata", quantity: 1 },
+  // Jungle: Mr. Mime + Exeggutor line
+  { cardDefId: "jungle-006-mr-mime", quantity: 1 },
+  { cardDefId: "jungle-052-exeggcute", quantity: 2 },
+  { cardDefId: "jungle-035-exeggutor", quantity: 2 },
   // Energy
   { cardDefId: "base-set-101-psychic-energy", quantity: 22 },
 ];
 
 // ---------------------------------------------------------------------------
-// Fighting Deck — Machoke + Pidgeotto (22 pokemon + 22 energy)
+// Fighting Deck — Machoke + Primeape (22 pokemon + 22 energy)
 // ---------------------------------------------------------------------------
 
 const FIGHTING_DECK: DeckCardEntry[] = [
@@ -146,10 +151,11 @@ const FIGHTING_DECK: DeckCardEntry[] = [
   { cardDefId: "base-set-022-pidgeotto", quantity: 2 },
   // Fillers
   { cardDefId: "base-set-062-sandshrew", quantity: 3 },
-  { cardDefId: "base-set-047-diglett", quantity: 2 },
   { cardDefId: "base-set-056-onix", quantity: 2 },
   { cardDefId: "base-set-007-hitmonchan", quantity: 1 },
-  { cardDefId: "base-set-061-rattata", quantity: 1 },
+  // Jungle: Mankey + Primeape
+  { cardDefId: "jungle-055-mankey", quantity: 2 },
+  { cardDefId: "jungle-043-primeape", quantity: 1 },
   // Energy
   { cardDefId: "base-set-097-fighting-energy", quantity: 22 },
 ];
