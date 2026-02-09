@@ -19,20 +19,35 @@ const fullProfileSelect = {
   coupons: true,
   level: true,
   experience: true,
-  normalWins: true,
-  normalLosses: true,
-  rankedWins: true,
-  rankedLosses: true,
-  draftWins: true,
-  draftLosses: true,
-  currentStreak: true,
-  bestStreak: true,
+  stats: {
+    select: {
+      normalWins: true,
+      normalLosses: true,
+      rankedWins: true,
+      rankedLosses: true,
+      draftWins: true,
+      draftLosses: true,
+      currentStreak: true,
+      bestStreak: true,
+    },
+  },
   lastDailyCoinsAt: true,
   lastWheelSpinAt: true,
   lastSlotSpinAt: true,
   permissions: true,
-  medalsData: true,
-  achievementsData: true,
+  medals: {
+    select: {
+      medalId: true,
+      unlockedAt: true,
+    },
+  },
+  achievements: {
+    select: {
+      achievementId: true,
+      progress: true,
+      unlockedAt: true,
+    },
+  },
   activeCoinId: true,
   activeCardBackId: true,
   maxDeckSlots: true,
@@ -209,18 +224,18 @@ export async function recordMatchResult(
   const winsField = `${mode}Wins` as const;
   const lossesField = `${mode}Losses` as const;
 
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
+  const stats = await prisma.userStats.findUnique({
+    where: { userId },
     select: { currentStreak: true, bestStreak: true },
   });
 
-  if (!user) throw Errors.NotFound("Usuario");
+  if (!stats) throw Errors.NotFound("Usuario");
 
-  const newStreak = isWin ? user.currentStreak + 1 : 0;
-  const newBestStreak = Math.max(user.bestStreak, newStreak);
+  const newStreak = isWin ? stats.currentStreak + 1 : 0;
+  const newBestStreak = Math.max(stats.bestStreak, newStreak);
 
-  return prisma.user.update({
-    where: { id: userId },
+  return prisma.userStats.update({
+    where: { userId },
     data: {
       [winsField]: isWin ? { increment: 1 } : undefined,
       [lossesField]: !isWin ? { increment: 1 } : undefined,
@@ -245,28 +260,14 @@ export async function recordMatchResult(
 // ---------------------------------------------------------------------------
 
 export async function grantMedal(userId: string, medalId: string) {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { medalsData: true },
+  const medal = await prisma.userMedal.upsert({
+    where: { userId_medalId: { userId, medalId } },
+    update: {},
+    create: { userId, medalId },
+    select: { medalId: true, unlockedAt: true },
   });
 
-  if (!user) throw Errors.NotFound("Usuario");
-
-  const medals = (user.medalsData ?? []) as Array<{ id: string; unlockedAt?: string }>;
-
-  // Don't duplicate
-  if (medals.some((m) => m.id === medalId)) {
-    return { medalsData: medals };
-  }
-
-  const updated = [...medals, { id: medalId, unlockedAt: new Date().toISOString() }];
-
-  await prisma.user.update({
-    where: { id: userId },
-    data: { medalsData: updated },
-  });
-
-  return { medalsData: updated };
+  return { medal };
 }
 
 // ---------------------------------------------------------------------------
@@ -378,14 +379,16 @@ export async function setStarterDeck(userId: string, starterColor: StarterColor)
   // Set it as active
   await setActiveDeck(userId, deck.id);
 
-  // Add all cards to the user's collection
-  for (const entry of starter.cards) {
-    await prisma.userCard.upsert({
-      where: { userId_cardDefId: { userId, cardDefId: entry.cardDefId } },
-      update: { quantity: { increment: entry.quantity } },
-      create: { userId, cardDefId: entry.cardDefId, quantity: entry.quantity },
-    });
-  }
+  // Add all cards to the user's collection (single transaction)
+  await prisma.$transaction(async (tx) => {
+    for (const entry of starter.cards) {
+      await tx.userCard.upsert({
+        where: { userId_cardDefId: { userId, cardDefId: entry.cardDefId } },
+        update: { quantity: { increment: entry.quantity } },
+        create: { userId, cardDefId: entry.cardDefId, quantity: entry.quantity },
+      });
+    }
+  });
 
   // Return updated profile
   return getUserProfile(userId);

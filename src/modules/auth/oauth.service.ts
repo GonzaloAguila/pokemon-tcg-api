@@ -81,6 +81,7 @@ async function handleOAuthCallback(
         emailVerified: true,
         coins: 1000,
         coupons: 1,
+        stats: { create: {} },
       },
     });
     isNewUser = true;

@@ -68,22 +68,6 @@ model User {
   level      Int @default(1)
   experience Int @default(0)
 
-  // Game stats — Normal (casual/multiplayer)
-  normalWins   Int @default(0)
-  normalLosses Int @default(0)
-
-  // Game stats — Competitive (ranked)
-  rankedWins   Int @default(0)
-  rankedLosses Int @default(0)
-
-  // Game stats — Draft
-  draftWins   Int @default(0)
-  draftLosses Int @default(0)
-
-  // Streaks
-  currentStreak Int @default(0)
-  bestStreak    Int @default(0)
-
   // Daily rewards — server-side timestamps (UTC)
   lastDailyCoinsAt DateTime?
   lastWheelSpinAt  DateTime?
@@ -91,12 +75,6 @@ model User {
 
   // Permissions / Restrictions (JSON array of permission strings)
   permissions Json @default("[]")
-
-  // Medals progress (JSON — 8 gym badges with status/progress)
-  medalsData Json @default("[]")
-
-  // Achievements progress (JSON — achievement ids with unlock state)
-  achievementsData Json @default("[]")
 
   // Active cosmetics
   activeCoinId     String? @default("eevee")
@@ -113,6 +91,9 @@ model User {
   updatedAt DateTime @updatedAt
 
   // Relations
+  stats            UserStats?
+  medals           UserMedal[]
+  achievements     UserAchievement[]
   decks            Deck[]
   matchesAsPlayer1 Match[]        @relation("Player1")
   matchesAsPlayer2 Match[]        @relation("Player2")
@@ -144,6 +125,8 @@ model Deck {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@index([userId])
+  @@index([userId, isActive])
   @@map("decks")
 }
 
@@ -296,6 +279,7 @@ model BattlePass {
   updatedAt    DateTime         @updatedAt
   userPasses   UserBattlePass[]
 
+  @@index([status])
   @@map("battle_passes")
 }
 
@@ -327,4 +311,55 @@ model UserBattlePassReward {
 
   @@unique([userBattlePassId, day, track])
   @@map("user_battle_pass_rewards")
+}
+
+// =============================================================================
+// User Stats (1:1)
+// =============================================================================
+
+model UserStats {
+  id            String @id @default(uuid())
+  userId        String @unique
+  user          User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  normalWins    Int    @default(0)
+  normalLosses  Int    @default(0)
+  rankedWins    Int    @default(0)
+  rankedLosses  Int    @default(0)
+  draftWins     Int    @default(0)
+  draftLosses   Int    @default(0)
+  currentStreak Int    @default(0)
+  bestStreak    Int    @default(0)
+
+  @@map("user_stats")
+}
+
+// =============================================================================
+// User Medals
+// =============================================================================
+
+model UserMedal {
+  id         String   @id @default(uuid())
+  userId     String
+  medalId    String
+  unlockedAt DateTime @default(now())
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, medalId])
+  @@map("user_medals")
+}
+
+// =============================================================================
+// User Achievements
+// =============================================================================
+
+model UserAchievement {
+  id            String   @id @default(uuid())
+  userId        String
+  achievementId String
+  progress      Int      @default(0)
+  unlockedAt    DateTime @default(now())
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, achievementId])
+  @@map("user_achievements")
 }

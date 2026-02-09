@@ -132,14 +132,16 @@ router.post(
       // Generate cards
       const result = boosterService.openPack(packId);
 
-      // Persist to user's collection
-      for (const pulled of result.cards) {
-        await prisma.userCard.upsert({
-          where: { userId_cardDefId: { userId, cardDefId: pulled.card.id } },
-          update: { quantity: { increment: 1 } },
-          create: { userId, cardDefId: pulled.card.id, quantity: 1 },
-        });
-      }
+      // Persist to user's collection (single transaction)
+      await prisma.$transaction(async (tx) => {
+        for (const pulled of result.cards) {
+          await tx.userCard.upsert({
+            where: { userId_cardDefId: { userId, cardDefId: pulled.card.id } },
+            update: { quantity: { increment: 1 } },
+            create: { userId, cardDefId: pulled.card.id, quantity: 1 },
+          });
+        }
+      });
 
       res.json(result);
     } catch (error) {

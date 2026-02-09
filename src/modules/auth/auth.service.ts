@@ -49,20 +49,35 @@ const profileSelect = {
   coins: true,
   level: true,
   experience: true,
-  normalWins: true,
-  normalLosses: true,
-  rankedWins: true,
-  rankedLosses: true,
-  draftWins: true,
-  draftLosses: true,
-  currentStreak: true,
-  bestStreak: true,
+  stats: {
+    select: {
+      normalWins: true,
+      normalLosses: true,
+      rankedWins: true,
+      rankedLosses: true,
+      draftWins: true,
+      draftLosses: true,
+      currentStreak: true,
+      bestStreak: true,
+    },
+  },
   lastDailyCoinsAt: true,
   lastWheelSpinAt: true,
   lastSlotSpinAt: true,
   permissions: true,
-  medalsData: true,
-  achievementsData: true,
+  medals: {
+    select: {
+      medalId: true,
+      unlockedAt: true,
+    },
+  },
+  achievements: {
+    select: {
+      achievementId: true,
+      progress: true,
+      unlockedAt: true,
+    },
+  },
   activeCoinId: true,
   activeCardBackId: true,
   maxDeckSlots: true,
@@ -109,6 +124,7 @@ export async function registerUser(data: RegisterRequest) {
       starterColor: data.starterColor ?? null,
       coins: 1000,
       coupons: 1,
+      stats: { create: {} },
     },
   });
 
