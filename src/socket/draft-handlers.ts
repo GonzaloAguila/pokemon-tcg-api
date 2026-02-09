@@ -86,6 +86,22 @@ export async function createMatchGames(
       `🎮 Draft match R${roundNumber}-M${pairing.matchNumber}: ${p1.name} vs ${p2.name} → room ${gameRoomId}`,
     );
 
+    // Store pending match info for reconnection
+    draftRoomManager.setPendingMatchInfo(draftRoomId, p1.id, {
+      gameRoomId,
+      matchNumber: pairing.matchNumber,
+      roundNumber,
+      isPlayer1: true,
+      opponentName: p2.name,
+    });
+    draftRoomManager.setPendingMatchInfo(draftRoomId, p2.id, {
+      gameRoomId,
+      matchNumber: pairing.matchNumber,
+      roundNumber,
+      isPlayer1: false,
+      opponentName: p1.name,
+    });
+
     // Notify each player with their match info
     if (p1.socketId) {
       io.to(p1.socketId).emit("draft:matchReady", {
@@ -169,6 +185,27 @@ export function registerDraftEvents(
         broadcastDraftState(io, roomId);
         broadcastRoomList(io);
 
+        // Re-send pending match info if player reconnected during matching phase
+        const pendingMatch = draftRoomManager.getPendingMatchInfo(roomId, userId);
+        if (pendingMatch && room.phase === "matching") {
+          const gameRoom = gameRoomManager.getRoom(pendingMatch.gameRoomId);
+          if (gameRoom?.gameState) {
+            socket.emit("draft:matchReady", {
+              matchNumber: pendingMatch.matchNumber,
+              roundNumber: pendingMatch.roundNumber,
+              draftRoomId: roomId,
+              gameRoomId: pendingMatch.gameRoomId,
+              userId,
+              isPlayer1: pendingMatch.isPlayer1,
+              opponentName: pendingMatch.opponentName,
+              gameState: maskGameStateForPlayer(
+                gameRoom.gameState,
+                pendingMatch.isPlayer1 ? "player1" : "player2",
+              ),
+            });
+          }
+        }
+
         console.log(`🎴 ${name} joined draft room ${roomId}`);
       } catch (error) {
         socket.emit("draft:error", { message: (error as Error).message });
@@ -230,6 +267,19 @@ export function registerDraftEvents(
       socket.emit("draft:error", { message: (error as Error).message });
     }
   });
+
+  socket.on(
+    "draft:bonusPick",
+    (payload: { roomId: string; cardDefIds: string[] }) => {
+      try {
+        const { roomId, cardDefIds } = payload;
+        draftRoomManager.bonusPick(roomId, socket.id, cardDefIds);
+        broadcastDraftState(io, roomId);
+      } catch (error) {
+        socket.emit("draft:error", { message: (error as Error).message });
+      }
+    },
+  );
 
   socket.on(
     "draft:submitDeck",
@@ -310,6 +360,10 @@ export function registerDraftEvents(
             reason: `${forfeitingPlayer.name} abandonó la partida`,
           });
         }
+
+        // Clear pending match info
+        draftRoomManager.clearPendingMatchInfo(draftRoomId, winnerId);
+        draftRoomManager.clearPendingMatchInfo(draftRoomId, loserId);
 
         // Notify both players about the draft match ending
         for (const p of draftRoom.players) {

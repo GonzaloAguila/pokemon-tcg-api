@@ -345,6 +345,16 @@ export function setupSocketHandlers(io: Server): void {
               draftInfo.draftRoomId,
             );
 
+            // Clear pending match info
+            draftRoomManager.clearPendingMatchInfo(
+              draftInfo.draftRoomId,
+              winnerId,
+            );
+            draftRoomManager.clearPendingMatchInfo(
+              draftInfo.draftRoomId,
+              loserId,
+            );
+
             // Notify players about the draft match ending
             if (draftRoom) {
               for (const p of draftRoom.players) {
@@ -451,6 +461,10 @@ export function setupSocketHandlers(io: Server): void {
         loserId,
         roomId,
       );
+
+      // Clear pending match info
+      draftRoomManager.clearPendingMatchInfo(draftInfo.draftRoomId, winnerId);
+      draftRoomManager.clearPendingMatchInfo(draftInfo.draftRoomId, loserId);
 
       const draftRoom = draftRoomManager.getRoom(draftInfo.draftRoomId);
 

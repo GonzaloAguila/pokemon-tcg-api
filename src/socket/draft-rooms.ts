@@ -10,6 +10,7 @@
 
 import {
   baseSetCards,
+  jungleCards,
   isBasicEnergy,
   isEnergyCard,
 } from "@gonzaloaguila/game-core";
@@ -31,9 +32,18 @@ export type DraftConfig = {
 export type DraftPhase =
   | "lobby"
   | "drafting"
+  | "bonus-pick"
   | "building"
   | "matching"
   | "finished";
+
+export type PendingMatchInfo = {
+  gameRoomId: string;
+  matchNumber: number;
+  roundNumber: number;
+  isPlayer1: boolean;
+  opponentName: string;
+};
 
 export type DraftPlayer = {
   id: string;
@@ -45,6 +55,7 @@ export type DraftPlayer = {
   deck: GameCard[] | null;
   isReady: boolean;
   isAdmin: boolean;
+  pendingMatchInfo: PendingMatchInfo | null;
 };
 
 export type DraftEvent = {
@@ -68,6 +79,7 @@ export type DraftRoom = {
   pickTimer: ReturnType<typeof setTimeout> | null;
   matchPairings: MatchPairing[] | null;
   tournament: Tournament | null;
+  bonusPickPool: GameCard[];
 };
 
 /** Masked player visible to other players (hides pack & specific cards) */
@@ -147,6 +159,7 @@ export type ClientDraftState = {
   events: DraftEvent[];
   matchPairings: MatchPairing[] | null;
   tournament: Tournament | null;
+  bonusPickPool: GameCard[];
 };
 
 /** Room info for the lobby list */
@@ -165,7 +178,7 @@ export type BroadcastFn = (roomId: string) => void;
 // Pack Generation
 // ============================================================================
 
-const draftPool = baseSetCards.filter((card) => !isBasicEnergy(card));
+const draftPool = [...baseSetCards, ...jungleCards].filter((card) => !isBasicEnergy(card));
 
 const poolByRarity = {
   common: draftPool.filter((c) => c.rarity === "common"),
@@ -281,6 +294,7 @@ export class DraftRoomManager {
           deck: null,
           isReady: false,
           isAdmin: true,
+          pendingMatchInfo: null,
         },
       ],
       currentRound: 0,
@@ -292,6 +306,7 @@ export class DraftRoomManager {
       pickTimer: null,
       matchPairings: null,
       tournament: null,
+      bonusPickPool: [],
     };
 
     this.rooms.set(roomId, room);
@@ -331,6 +346,7 @@ export class DraftRoomManager {
       deck: null,
       isReady: false,
       isAdmin: false,
+      pendingMatchInfo: null,
     });
 
     room.events.push(this.createEvent("info", `${name} se unió al draft`));
@@ -418,6 +434,12 @@ export class DraftRoomManager {
     room.currentPick = 1;
     room.direction = "clockwise";
 
+    // Defensive: ensure clean state before starting
+    for (const p of room.players) {
+      p.draftedCards = [];
+      p.isReady = false;
+    }
+
     this.generatePacksForRound(room);
     room.events.push(
       this.createEvent("system", "¡Comienza la Ronda 1! Dirección: →"),
@@ -450,6 +472,38 @@ export class DraftRoomManager {
     // Advance when all connected players have picked
     if (this.allPlayersPicked(room)) {
       this.advancePick(room);
+    }
+
+    return room;
+  }
+
+  bonusPick(roomId: string, socketId: string, cardDefIds: string[]): DraftRoom {
+    const room = this.rooms.get(roomId);
+    if (!room) throw new Error("Sala no encontrada");
+    if (room.phase !== "bonus-pick") throw new Error("No es fase de bonus pick");
+
+    const player = room.players.find((p) => p.socketId === socketId);
+    if (!player) throw new Error("Jugador no encontrado");
+    if (player.isReady) throw new Error("Ya elegiste tus cartas bonus");
+    if (cardDefIds.length !== 3) throw new Error("Debes elegir exactamente 3 cartas");
+
+    // Find cards from the bonus pool by their draft ID
+    for (const defId of cardDefIds) {
+      const template = room.bonusPickPool.find((c) => c.id === defId);
+      if (!template) throw new Error(`Carta ${defId} no encontrada en el pool`);
+      // Create a new GameCard instance with unique draft ID
+      player.draftedCards.push({ ...template, id: generateCardId() });
+    }
+
+    player.isReady = true;
+    room.events.push(this.createEvent("pick", `${player.name} eligió sus 3 cartas bonus`));
+
+    // When all players have picked, transition to building
+    if (room.players.every((p) => p.isReady || p.socketId === null)) {
+      room.phase = "building";
+      for (const p of room.players) p.isReady = false;
+      room.bonusPickPool = []; // Free memory
+      room.events.push(this.createEvent("system", "Hora de construir tu mazo."));
     }
 
     return room;
@@ -548,6 +602,7 @@ export class DraftRoomManager {
       events: room.events,
       matchPairings: room.matchPairings,
       tournament: room.tournament,
+      bonusPickPool: room.phase === "bonus-pick" ? room.bonusPickPool : [],
     };
   }
 
@@ -575,6 +630,34 @@ export class DraftRoomManager {
 
   getRoomBySocket(socketId: string): string | undefined {
     return this.socketToRoom.get(socketId);
+  }
+
+  setPendingMatchInfo(
+    roomId: string,
+    playerId: string,
+    info: PendingMatchInfo,
+  ): void {
+    const room = this.rooms.get(roomId);
+    if (!room) return;
+    const player = room.players.find((p) => p.id === playerId);
+    if (player) player.pendingMatchInfo = info;
+  }
+
+  getPendingMatchInfo(
+    roomId: string,
+    playerId: string,
+  ): PendingMatchInfo | null {
+    const room = this.rooms.get(roomId);
+    if (!room) return null;
+    const player = room.players.find((p) => p.id === playerId);
+    return player?.pendingMatchInfo ?? null;
+  }
+
+  clearPendingMatchInfo(roomId: string, playerId: string): void {
+    const room = this.rooms.get(roomId);
+    if (!room) return;
+    const player = room.players.find((p) => p.id === playerId);
+    if (player) player.pendingMatchInfo = null;
   }
 
   handleDisconnect(socketId: string): DraftRoom | null {
@@ -653,12 +736,16 @@ export class DraftRoomManager {
       room.currentRound++;
 
       if (room.currentRound > room.config.packsPerPlayer) {
-        // All rounds done → building phase
-        room.phase = "building";
+        // All rounds done → bonus-pick phase
+        room.phase = "bonus-pick";
+        room.bonusPickPool = [...baseSetCards, ...jungleCards]
+          .filter((card) => !isBasicEnergy(card))
+          .map(toGameCard);
+        for (const p of room.players) p.isReady = false;
         room.events.push(
           this.createEvent(
             "system",
-            "¡Draft completado! Hora de construir tu mazo.",
+            "¡Draft completado! Elige 3 cartas bonus del catálogo.",
           ),
         );
         this.broadcast(room.id);
