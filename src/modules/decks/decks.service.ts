@@ -24,11 +24,11 @@ const MAX_COPIES_PER_CARD = 4;
 
 // Basic energy card IDs (unlimited copies allowed)
 const BASIC_ENERGY_IDS = new Set([
-  "base-set-097-fire-energy",
-  "base-set-098-grass-energy",
-  "base-set-099-lightning-energy",
-  "base-set-100-psychic-energy",
-  "base-set-101-fighting-energy",
+  "base-set-097-fighting-energy",
+  "base-set-098-fire-energy",
+  "base-set-099-grass-energy",
+  "base-set-100-lightning-energy",
+  "base-set-101-psychic-energy",
   "base-set-102-water-energy",
 ]);
 
