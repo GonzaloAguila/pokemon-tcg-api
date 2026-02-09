@@ -6,6 +6,7 @@
 
 import {
   baseSetCards,
+  jungleCards,
   type Card,
 } from "@gonzaloaguila/game-core";
 
@@ -73,8 +74,26 @@ function initializeDefaultPacks(): void {
     available: true,
   };
 
+  // Jungle Booster Pack - 11 cards
+  const junglePack: BoosterPackType = {
+    id: "jungle-booster",
+    name: "Jungle Booster",
+    description: "Contains 11 random cards from the Jungle expansion. Includes 1 guaranteed Rare!",
+    setId: "jungle",
+    image: "/packs/jungle/Jungle_Booster_Scyther.webp",
+    cardCount: 11,
+    slots: [
+      { rarity: "rare", count: 1, holoChance: 0.33 },
+      { rarity: "uncommon", count: 3, upgradeChance: 0.05 },
+      { rarity: "common", count: 5 },
+    ],
+    price: 200,
+    available: true,
+  };
+
   packTypes.set(baseSetPack.id, baseSetPack);
   packTypes.set(baseSetThemePack.id, baseSetThemePack);
+  packTypes.set(junglePack.id, junglePack);
 }
 
 // Initialize on module load
@@ -142,13 +161,20 @@ export function deletePack(packId: string): boolean {
 // Pack Opening Logic
 // =============================================================================
 
+/** Map set IDs to their card arrays */
+const setCardMap: Record<string, Card[]> = {
+  "base-set": baseSetCards,
+  jungle: jungleCards,
+};
+
 /**
  * Get cards by rarity from a set
  */
 function getCardsByRarity(setId: string, rarity: string): Card[] {
-  if (setId !== "base-set") return [];
+  const cards = setCardMap[setId];
+  if (!cards) return [];
 
-  return baseSetCards.filter((card) => {
+  return cards.filter((card) => {
     if (rarity === "rare-holo") {
       return card.rarity === "rare-holo";
     }
@@ -160,11 +186,12 @@ function getCardsByRarity(setId: string, rarity: string): Card[] {
 }
 
 /**
- * Get energy cards from a set
+ * Get energy cards from a set (Jungle has no energy, falls back to Base Set)
  */
 function getEnergyCards(setId: string): Card[] {
-  if (setId !== "base-set") return [];
-  return baseSetCards.filter((card) => card.kind === "energy");
+  const cards = setCardMap[setId] ?? baseSetCards;
+  const energy = cards.filter((card) => card.kind === "energy");
+  return energy.length > 0 ? energy : baseSetCards.filter((card) => card.kind === "energy");
 }
 
 /**
@@ -223,7 +250,7 @@ export function openPack(packId: string): PackOpeningResult {
   }
 
   // Add energy cards for standard booster packs (2 basic energy)
-  if (pack.id === "base-set-booster") {
+  if (pack.id === "base-set-booster" || pack.id === "jungle-booster") {
     const energyCards = getEnergyCards(pack.setId);
     const pickedEnergy = pickRandom(energyCards, 2);
     for (const card of pickedEnergy) {
