@@ -47,6 +47,8 @@ const profileSelect = {
   avatarUrl: true,
   avatarPresetId: true,
   coins: true,
+  coupons: true,
+  rareCandy: true,
   level: true,
   experience: true,
   stats: {
@@ -123,7 +125,7 @@ export async function registerUser(data: RegisterRequest) {
       provider: "local",
       starterColor: data.starterColor ?? null,
       coins: 1000,
-      coupons: 1,
+      coupons: 10,
       stats: { create: {} },
     },
   });

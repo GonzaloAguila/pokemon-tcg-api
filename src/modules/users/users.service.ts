@@ -17,6 +17,7 @@ const fullProfileSelect = {
   avatarPresetId: true,
   coins: true,
   coupons: true,
+  rareCandy: true,
   level: true,
   experience: true,
   stats: {
@@ -207,6 +208,162 @@ export async function spendCoins(
     });
 
     return { coins: newBalance };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Coupons — add / spend (atomic with transaction log)
+// ---------------------------------------------------------------------------
+
+export async function addCoupons(
+  userId: string,
+  amount: number,
+  type: string,
+  description: string,
+) {
+  return prisma.$transaction(async (tx) => {
+    const user = await tx.user.findUnique({
+      where: { id: userId },
+      select: { coupons: true },
+    });
+
+    if (!user) throw Errors.NotFound("Usuario");
+
+    const newBalance = user.coupons + amount;
+
+    await tx.user.update({
+      where: { id: userId },
+      data: { coupons: newBalance },
+    });
+
+    await tx.transaction.create({
+      data: {
+        userId,
+        type,
+        description,
+        amount,
+        balanceAfter: newBalance,
+      },
+    });
+
+    return { coupons: newBalance };
+  });
+}
+
+export async function spendCoupons(
+  userId: string,
+  amount: number,
+  type: string,
+  description: string,
+) {
+  return prisma.$transaction(async (tx) => {
+    const user = await tx.user.findUnique({
+      where: { id: userId },
+      select: { coupons: true },
+    });
+
+    if (!user) throw Errors.NotFound("Usuario");
+
+    if (user.coupons < amount) {
+      throw Errors.BadRequest("No tienes suficientes cupones");
+    }
+
+    const newBalance = user.coupons - amount;
+
+    await tx.user.update({
+      where: { id: userId },
+      data: { coupons: newBalance },
+    });
+
+    await tx.transaction.create({
+      data: {
+        userId,
+        type,
+        description,
+        amount: -amount,
+        balanceAfter: newBalance,
+      },
+    });
+
+    return { coupons: newBalance };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Rare Candy — add / spend (atomic with transaction log)
+// ---------------------------------------------------------------------------
+
+export async function addRareCandy(
+  userId: string,
+  amount: number,
+  type: string,
+  description: string,
+) {
+  return prisma.$transaction(async (tx) => {
+    const user = await tx.user.findUnique({
+      where: { id: userId },
+      select: { rareCandy: true },
+    });
+
+    if (!user) throw Errors.NotFound("Usuario");
+
+    const newBalance = user.rareCandy + amount;
+
+    await tx.user.update({
+      where: { id: userId },
+      data: { rareCandy: newBalance },
+    });
+
+    await tx.transaction.create({
+      data: {
+        userId,
+        type,
+        description,
+        amount,
+        balanceAfter: newBalance,
+      },
+    });
+
+    return { rareCandy: newBalance };
+  });
+}
+
+export async function spendRareCandy(
+  userId: string,
+  amount: number,
+  type: string,
+  description: string,
+) {
+  return prisma.$transaction(async (tx) => {
+    const user = await tx.user.findUnique({
+      where: { id: userId },
+      select: { rareCandy: true },
+    });
+
+    if (!user) throw Errors.NotFound("Usuario");
+
+    if (user.rareCandy < amount) {
+      throw Errors.BadRequest("No tienes suficientes Caramelos Raros");
+    }
+
+    const newBalance = user.rareCandy - amount;
+
+    await tx.user.update({
+      where: { id: userId },
+      data: { rareCandy: newBalance },
+    });
+
+    await tx.transaction.create({
+      data: {
+        userId,
+        type,
+        description,
+        amount: -amount,
+        balanceAfter: newBalance,
+      },
+    });
+
+    return { rareCandy: newBalance };
   });
 }
 

@@ -250,10 +250,70 @@ Use `/skill <name>` for detailed guides:
 4. **No Auth Yet** - Uses anonymous `userId` from client sessionStorage
 5. **Card ID Format** - `base-set-001-alakazam` (set-number-name, zero-padded)
 
+## Admin Operations
+
+### Add Cards to a User's Collection
+
+To add cards to a user, create and run a temporary Prisma script. The user will provide:
+- **Email or User ID** — to identify the account
+- **Card ID** — format: `{set}-{number}-{name}` (e.g., `jungle-002-electrode`, `base-set-025-pikachu`)
+- **Quantity** — how many copies to set
+
+**Card ID format:** `{set-slug}-{zero-padded-number}-{lowercase-name}`
+- Set slugs: `base-set`, `jungle`
+- Number: 3-digit zero-padded (e.g., `002`, `035`, `102`)
+- Name: lowercase, spaces→hyphens, accents stripped, special chars removed (`Nidoran♀`→`nidoranf`, `Mr. Mime`→`mr-mime`)
+
+**Script pattern:**
+```typescript
+// tmp-seed.ts — run with: npx tsx tmp-seed.ts
+import { PrismaClient } from "@prisma/client";
+const prisma = new PrismaClient();
+
+async function main() {
+  // Find user by email or ID
+  const user = await prisma.user.findUnique({
+    where: { email: "user@example.com" }, // or { id: "uuid-here" }
+    select: { id: true, username: true },
+  });
+  if (!user) { console.error("User not found"); process.exit(1); }
+  console.log(`User: ${user.username} (${user.id})`);
+
+  // Cards to add/set
+  const cards = [
+    { cardDefId: "jungle-002-electrode", quantity: 4 },
+    { cardDefId: "jungle-035-exeggutor", quantity: 4 },
+  ];
+
+  for (const card of cards) {
+    const result = await prisma.userCard.upsert({
+      where: { userId_cardDefId: { userId: user.id, cardDefId: card.cardDefId } },
+      update: { quantity: card.quantity },
+      create: { userId: user.id, cardDefId: card.cardDefId, quantity: card.quantity },
+    });
+    console.log(`  ${card.cardDefId}: qty=${result.quantity}`);
+  }
+
+  await prisma.$disconnect();
+}
+main();
+```
+
+**Important:** `upsert` with `update: { quantity }` **sets** the quantity (doesn't add). To increment instead, use `update: { quantity: { increment: N } }`. Delete the temp file after running.
+
+### Superadmin Seed
+
+A seed script at `prisma/seed.ts` creates the superadmin user. Run with:
+```bash
+npx tsx prisma/seed.ts
+```
+
+The `SUPERADMIN_EMAIL` env var also auto-assigns superadmin role on registration.
+
 ## TODO
 
 - [x] ~~Implement state masking (hide opponent hand/deck)~~ - Done via `maskGameStateForPlayer`
-- [ ] Add OAuth authentication
+- [x] ~~Add OAuth authentication~~ - Google + Discord OAuth
 - [ ] Persist game state for reconnection
-- [ ] Add rate limiting
+- [x] ~~Add rate limiting~~ - Login, register, password reset
 - [ ] Add request logging

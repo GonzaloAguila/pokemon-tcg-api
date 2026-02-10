@@ -61,8 +61,9 @@ model User {
   avatarPresetId String?
 
   // Economy
-  coins   Int @default(0)
-  coupons Int @default(0)
+  coins     Int @default(0)
+  coupons   Int @default(0)
+  rareCandy Int @default(0)
 
   // Level / XP
   level      Int @default(1)
@@ -105,6 +106,7 @@ model User {
   ownedCoins       UserCoin[]
   ownedCardBacks   UserCardBack[]
   battlePasses     UserBattlePass[]
+  dailyPurchases   DailyPurchase[]
 
   @@index([providerId, provider])
   @@map("users")
@@ -311,6 +313,23 @@ model UserBattlePassReward {
 
   @@unique([userBattlePassId, day, track])
   @@map("user_battle_pass_rewards")
+}
+
+// =============================================================================
+// Daily Purchases (one-time daily market buys)
+// =============================================================================
+
+model DailyPurchase {
+  id        String   @id @default(uuid())
+  userId    String
+  itemKey   String   // e.g. "card:base-25", "cosmetic:coin:charizard"
+  date      String   // "2026-02-09" (UTC date string)
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, itemKey, date])
+  @@index([userId, date])
+  @@map("daily_purchases")
 }
 
 // =============================================================================

@@ -42,30 +42,38 @@ export async function getDailyRewardsStatus(userId: string) {
 }
 
 // ---------------------------------------------------------------------------
-// Claim daily coins (500/day)
+// Claim daily coins (200/day, Sundays: +500 coins & +5 coupons)
 // ---------------------------------------------------------------------------
 
-const DAILY_COINS_AMOUNT = 500;
+const DAILY_COINS_AMOUNT = 200;
+const SUNDAY_BONUS_COINS = 500;
+const SUNDAY_BONUS_COUPONS = 5;
 
 export async function claimDailyCoins(userId: string) {
   return prisma.$transaction(async (tx) => {
     const user = await tx.user.findUnique({
       where: { id: userId },
-      select: { lastDailyCoinsAt: true, coins: true },
+      select: { lastDailyCoinsAt: true, coins: true, coupons: true },
     });
 
     if (!user) throw Errors.NotFound("Usuario");
 
     if (!isAvailableToday(user.lastDailyCoinsAt)) {
-      return { coins: user.coins, awarded: 0, alreadyClaimed: true };
+      return { coins: user.coins, coupons: user.coupons, awardedCoins: 0, awardedCoupons: 0, alreadyClaimed: true };
     }
 
-    const newBalance = user.coins + DAILY_COINS_AMOUNT;
+    const isSunday = new Date().getUTCDay() === 0;
+    const totalCoins = DAILY_COINS_AMOUNT + (isSunday ? SUNDAY_BONUS_COINS : 0);
+    const totalCoupons = isSunday ? SUNDAY_BONUS_COUPONS : 0;
+
+    const newCoinBalance = user.coins + totalCoins;
+    const newCouponBalance = user.coupons + totalCoupons;
 
     await tx.user.update({
       where: { id: userId },
       data: {
-        coins: newBalance,
+        coins: newCoinBalance,
+        coupons: newCouponBalance,
         lastDailyCoinsAt: new Date(),
       },
     });
@@ -74,13 +82,22 @@ export async function claimDailyCoins(userId: string) {
       data: {
         userId,
         type: "daily_login",
-        description: "Recompensa diaria de monedas",
-        amount: DAILY_COINS_AMOUNT,
-        balanceAfter: newBalance,
+        description: isSunday
+          ? `Recompensa diaria: ${totalCoins} monedas + ${totalCoupons} cupones (bonus domingo)`
+          : `Recompensa diaria: ${totalCoins} monedas`,
+        amount: totalCoins,
+        balanceAfter: newCoinBalance,
       },
     });
 
-    return { coins: newBalance, awarded: DAILY_COINS_AMOUNT, alreadyClaimed: false };
+    return {
+      coins: newCoinBalance,
+      coupons: newCouponBalance,
+      awardedCoins: totalCoins,
+      awardedCoupons: totalCoupons,
+      isSunday,
+      alreadyClaimed: false,
+    };
   });
 }
 
