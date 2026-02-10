@@ -100,8 +100,9 @@ const AVAILABLE_COINS = [
 ];
 
 const AVAILABLE_CARD_BACKS = [
-  { itemId: "default", name: "Clasico", imageUrl: "/card-backs/default.jpg" },
   { itemId: "haymaker", name: "Haymaker", imageUrl: "/card-backs/haymakerBKC.jpeg" },
+  { itemId: "draw", name: "Draw", imageUrl: "/card-backs/card-back-draw.jpg" },
+  { itemId: "pikachu", name: "Pikachu", imageUrl: "/card-backs/card-back-pikachu.jpg" },
 ];
 
 const AVAILABLE_AVATARS = [
