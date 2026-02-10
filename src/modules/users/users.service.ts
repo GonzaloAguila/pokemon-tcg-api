@@ -526,6 +526,14 @@ export async function getUserAvatars(userId: string) {
   });
 }
 
+export async function getUserCardSkins(userId: string) {
+  return prisma.userCardSkin.findMany({
+    where: { userId },
+    select: { skinId: true, obtainedAt: true },
+    orderBy: { obtainedAt: "desc" },
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Starter deck — choose color, create deck + add to collection
 // ---------------------------------------------------------------------------

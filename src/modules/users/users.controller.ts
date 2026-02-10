@@ -263,12 +263,13 @@ router.get(
   requireAuth,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const [coins, cardBacks, avatars] = await Promise.all([
+      const [coins, cardBacks, avatars, cardSkins] = await Promise.all([
         usersService.getUserCoins(req.user!.userId),
         usersService.getUserCardBacks(req.user!.userId),
         usersService.getUserAvatars(req.user!.userId),
+        usersService.getUserCardSkins(req.user!.userId),
       ]);
-      res.json({ coins, cardBacks, avatars });
+      res.json({ coins, cardBacks, avatars, cardSkins });
     } catch (err) {
       next(err);
     }
