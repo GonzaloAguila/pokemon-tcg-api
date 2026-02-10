@@ -11,7 +11,7 @@ export interface DailyCardOffer {
 }
 
 export interface DailyCosmeticOffer {
-  type: "coin" | "cardBack" | "avatar" | "variant";
+  type: "coin" | "cardBack" | "avatar" | "variant" | "playmat";
   itemId: string;
   name: string;
   imageUrl?: string;
