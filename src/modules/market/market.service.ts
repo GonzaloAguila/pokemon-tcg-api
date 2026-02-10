@@ -56,6 +56,7 @@ const COSMETIC_PRICES: Record<string, number> = {
   cardBack: 15,
   avatar: 5,
   variant: 50,
+  playmat: 20,
 };
 
 const ENERGY_PRICE = 10;
@@ -128,6 +129,13 @@ const AVAILABLE_VARIANTS = [
   { itemId: "eevee-rainbow", name: "Eevee Arcoíris", cardDefId: "jungle-051-eevee", overlayId: "rainbow", imageUrl: getCardImageUrl(allCards.find((c) => c.id === "jungle-051-eevee")!) },
 ];
 
+// Playmats — board backgrounds
+const AVAILABLE_PLAYMATS = [
+  { itemId: "eevee-evos", name: "Eevee Evoluciones", imageUrl: "/bg/bg-eevee-evos.jpg" },
+  { itemId: "street", name: "Calle Pokémon", imageUrl: "/bg/bg-street.png" },
+  { itemId: "stadium", name: "Estadio", imageUrl: "/bg/bg2.jpg" },
+];
+
 // ---------------------------------------------------------------------------
 // Get daily offers (with user-specific purchase/ownership status)
 // ---------------------------------------------------------------------------
@@ -186,12 +194,14 @@ export async function getDailyOffers(userId?: string): Promise<DailyOffersRespon
   const dailyCardBack = seededPick(AVAILABLE_CARD_BACKS, seed, 11);
   const dailyAvatar = seededPick(AVAILABLE_AVATARS, seed, 12);
   const dailyVariant = seededPick(AVAILABLE_VARIANTS, seed, 13);
+  const dailyPlaymat = seededPick(AVAILABLE_PLAYMATS, seed, 14);
 
   const cosmeticOffers: DailyCosmeticOffer[] = [
     { type: "coin", itemId: dailyCoin.itemId, name: dailyCoin.name, imageUrl: dailyCoin.imageUrl, price: COSMETIC_PRICES.coin },
     { type: "cardBack", itemId: dailyCardBack.itemId, name: dailyCardBack.name, imageUrl: dailyCardBack.imageUrl, price: COSMETIC_PRICES.cardBack },
     { type: "avatar", itemId: dailyAvatar.itemId, name: dailyAvatar.name, imageUrl: dailyAvatar.imageUrl, price: COSMETIC_PRICES.avatar },
     { type: "variant", itemId: dailyVariant.itemId, name: dailyVariant.name, imageUrl: dailyVariant.imageUrl, overlayId: dailyVariant.overlayId, price: COSMETIC_PRICES.variant },
+    { type: "playmat", itemId: dailyPlaymat.itemId, name: dailyPlaymat.name, imageUrl: dailyPlaymat.imageUrl, price: COSMETIC_PRICES.playmat },
   ];
 
   // Energy offers (static — always the same 6)
@@ -217,7 +227,7 @@ export async function getDailyOffers(userId?: string): Promise<DailyOffersRespon
     purchasedToday = purchases.map((p) => p.itemKey);
 
     // Check ownership of today's cosmetic offers
-    const [ownedCoins, ownedCardBacks, ownedAvatars, ownedSkins] = await Promise.all([
+    const [ownedCoins, ownedCardBacks, ownedAvatars, ownedSkins, ownedPlaymats] = await Promise.all([
       prisma.userCoin.findMany({
         where: { userId, coinId: { in: cosmeticOffers.filter((o) => o.type === "coin").map((o) => o.itemId) } },
         select: { coinId: true },
@@ -234,6 +244,10 @@ export async function getDailyOffers(userId?: string): Promise<DailyOffersRespon
         where: { userId, skinId: { in: cosmeticOffers.filter((o) => o.type === "variant").map((o) => o.itemId) } },
         select: { skinId: true },
       }),
+      prisma.userPlaymat.findMany({
+        where: { userId, playmatId: { in: cosmeticOffers.filter((o) => o.type === "playmat").map((o) => o.itemId) } },
+        select: { playmatId: true },
+      }),
     ]);
 
     for (const c of ownedCoins) {
@@ -247,6 +261,9 @@ export async function getDailyOffers(userId?: string): Promise<DailyOffersRespon
     }
     for (const s of ownedSkins) {
       ownedItems.push(`own:variant:${s.skinId}`);
+    }
+    for (const p of ownedPlaymats) {
+      ownedItems.push(`own:playmat:${p.playmatId}`);
     }
   }
 
@@ -362,6 +379,14 @@ export async function buyCosmetic(
 
     await usersService.spendCoupons(userId, offer.price, "cosmetic_purchase", `Compra de variante: ${offer.name}`);
     await prisma.userCardSkin.create({ data: { userId, skinId: itemId } });
+  } else if (type === "playmat") {
+    const existing = await prisma.userPlaymat.findUnique({
+      where: { userId_playmatId: { userId, playmatId: itemId } },
+    });
+    if (existing) throw Errors.BadRequest("Ya posees este tapete");
+
+    await usersService.spendCoupons(userId, offer.price, "cosmetic_purchase", `Compra de tapete: ${offer.name}`);
+    await prisma.userPlaymat.create({ data: { userId, playmatId: itemId } });
   }
 
   // Record the daily purchase

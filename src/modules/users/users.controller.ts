@@ -29,6 +29,7 @@ const updateCosmeticsSchema = z.object({
   activeCoinId: z.string().optional(),
   activeCardBackId: z.string().optional(),
   activeAvatarId: z.string().optional(),
+  activePlaymatId: z.string().optional(),
 });
 
 const updatePermissionsSchema = z.object({
@@ -263,13 +264,14 @@ router.get(
   requireAuth,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const [coins, cardBacks, avatars, cardSkins] = await Promise.all([
+      const [coins, cardBacks, avatars, cardSkins, playmats] = await Promise.all([
         usersService.getUserCoins(req.user!.userId),
         usersService.getUserCardBacks(req.user!.userId),
         usersService.getUserAvatars(req.user!.userId),
         usersService.getUserCardSkins(req.user!.userId),
+        usersService.getUserPlaymats(req.user!.userId),
       ]);
-      res.json({ coins, cardBacks, avatars, cardSkins });
+      res.json({ coins, cardBacks, avatars, cardSkins, playmats });
     } catch (err) {
       next(err);
     }

@@ -18,6 +18,7 @@ const prizeSchema: z.ZodType = z.lazy(() =>
     z.object({ type: z.literal("card_back"), cardBackId: z.string() }),
     z.object({ type: z.literal("collectible_coin"), coinId: z.string() }),
     z.object({ type: z.literal("avatar"), avatarId: z.string() }),
+    z.object({ type: z.literal("playmat"), playmatId: z.string() }),
     z.object({ type: z.literal("free_pack") }),
     z.object({ type: z.literal("spin_again"), bonusCoins: z.number() }),
     z.object({

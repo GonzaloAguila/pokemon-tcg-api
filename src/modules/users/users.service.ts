@@ -52,6 +52,7 @@ const fullProfileSelect = {
   activeCoinId: true,
   activeCardBackId: true,
   activeAvatarId: true,
+  activePlaymatId: true,
   maxDeckSlots: true,
   starterColor: true,
   emailVerified: true,
@@ -106,9 +107,9 @@ export async function updateUserProfile(
 
 export async function updateCosmetics(
   userId: string,
-  data: { activeCoinId?: string; activeCardBackId?: string; activeAvatarId?: string },
+  data: { activeCoinId?: string; activeCardBackId?: string; activeAvatarId?: string; activePlaymatId?: string },
 ) {
-  // Verify the user owns the coin/card back/avatar
+  // Verify the user owns the coin/card back/avatar/playmat
   if (data.activeCoinId) {
     const owned = await prisma.userCoin.findUnique({
       where: { userId_coinId: { userId, coinId: data.activeCoinId } },
@@ -140,10 +141,21 @@ export async function updateCosmetics(
     }
   }
 
+  if (data.activePlaymatId) {
+    if (data.activePlaymatId !== "field") {
+      const owned = await prisma.userPlaymat.findUnique({
+        where: { userId_playmatId: { userId, playmatId: data.activePlaymatId } },
+      });
+      if (!owned) {
+        throw Errors.BadRequest("No posees ese tapete");
+      }
+    }
+  }
+
   return prisma.user.update({
     where: { id: userId },
     data,
-    select: { activeCoinId: true, activeCardBackId: true, activeAvatarId: true },
+    select: { activeCoinId: true, activeCardBackId: true, activeAvatarId: true, activePlaymatId: true },
   });
 }
 
@@ -530,6 +542,14 @@ export async function getUserCardSkins(userId: string) {
   return prisma.userCardSkin.findMany({
     where: { userId },
     select: { skinId: true, obtainedAt: true },
+    orderBy: { obtainedAt: "desc" },
+  });
+}
+
+export async function getUserPlaymats(userId: string) {
+  return prisma.userPlaymat.findMany({
+    where: { userId },
+    select: { playmatId: true, obtainedAt: true },
     orderBy: { obtainedAt: "desc" },
   });
 }

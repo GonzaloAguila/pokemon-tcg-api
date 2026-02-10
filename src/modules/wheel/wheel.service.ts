@@ -16,6 +16,7 @@ interface ResolvedPrize {
   cardBackId?: string;    // card_back
   coinId?: string;        // collectible_coin
   avatarId?: string;      // avatar
+  playmatId?: string;     // playmat
   bonusCoins?: number;    // spin_again
   prizes?: ResolvedPrize[]; // jackpot sub-prizes
 }
@@ -76,6 +77,16 @@ export async function claimWheelPrize(userId: string, prize: ResolvedPrize) {
         where: { userId_cardBackId: { userId, cardBackId: prize.cardBackId } },
         update: {},
         create: { userId, cardBackId: prize.cardBackId },
+      });
+      break;
+    }
+
+    case "playmat": {
+      if (!prize.playmatId) break;
+      await prisma.userPlaymat.upsert({
+        where: { userId_playmatId: { userId, playmatId: prize.playmatId } },
+        update: {},
+        create: { userId, playmatId: prize.playmatId },
       });
       break;
     }
