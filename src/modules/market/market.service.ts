@@ -116,6 +116,7 @@ const AVAILABLE_AVATARS = [
 
 // Variants — card skins with overlays (paired: card + overlay effect)
 const AVAILABLE_VARIANTS = [
+  { itemId: "alakazam-glitch", name: "Alakazam Glitch", cardDefId: "base-set-001-alakazam", overlayId: "negative", imageUrl: getCardImageUrl(allCards.find((c) => c.id === "base-set-001-alakazam")!) },
   { itemId: "wigglytuff-rainbow", name: "Wigglytuff Arcoíris", cardDefId: "jungle-016-wigglytuff", overlayId: "rainbow", imageUrl: getCardImageUrl(allCards.find((c) => c.id === "jungle-016-wigglytuff")!) },
   { itemId: "wigglytuff-gold", name: "Wigglytuff Dorado", cardDefId: "jungle-016-wigglytuff", overlayId: "gold", imageUrl: getCardImageUrl(allCards.find((c) => c.id === "jungle-016-wigglytuff")!) },
   { itemId: "clefable-galaxy", name: "Clefable Galaxia", cardDefId: "jungle-001-clefable", overlayId: "galaxy", imageUrl: getCardImageUrl(allCards.find((c) => c.id === "jungle-001-clefable")!) },
