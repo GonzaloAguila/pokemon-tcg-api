@@ -15,6 +15,8 @@ export interface DailyCosmeticOffer {
   itemId: string;
   name: string;
   imageUrl?: string;
+  /** Overlay effect ID for variant skins (e.g. "rainbow", "frost") */
+  overlayId?: string;
   price: number;
 }
 

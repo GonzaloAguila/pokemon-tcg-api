@@ -114,14 +114,19 @@ const AVAILABLE_AVATARS = [
   { itemId: "voltorb", name: "Voltorb", imageUrl: "/avatars/darius-dan/voltorb.png" },
 ];
 
-// Variants — filter out Mewtwo (no real variant exists), use Alakazam as special glitch variant
-const AVAILABLE_VARIANTS = rareCards
-  .filter((c) => isPokemonCard(c) && c.name !== "Mewtwo")
-  .map((c) => ({
-    itemId: c.id,
-    name: isPokemonCard(c) ? c.name : c.id,
-    imageUrl: getCardImageUrl(c),
-  }));
+// Variants — card skins with overlays (paired: card + overlay effect)
+const AVAILABLE_VARIANTS = [
+  { itemId: "wigglytuff-rainbow", name: "Wigglytuff Arcoíris", cardDefId: "jungle-016-wigglytuff", overlayId: "rainbow", imageUrl: getCardImageUrl(allCards.find((c) => c.id === "jungle-016-wigglytuff")!) },
+  { itemId: "wigglytuff-gold", name: "Wigglytuff Dorado", cardDefId: "jungle-016-wigglytuff", overlayId: "gold", imageUrl: getCardImageUrl(allCards.find((c) => c.id === "jungle-016-wigglytuff")!) },
+  { itemId: "clefable-galaxy", name: "Clefable Galaxia", cardDefId: "jungle-001-clefable", overlayId: "galaxy", imageUrl: getCardImageUrl(allCards.find((c) => c.id === "jungle-001-clefable")!) },
+  { itemId: "clefable-crystal", name: "Clefable Cristal", cardDefId: "jungle-001-clefable", overlayId: "crystal", imageUrl: getCardImageUrl(allCards.find((c) => c.id === "jungle-001-clefable")!) },
+  { itemId: "mr-mime-neon", name: "Mr. Mime Neón", cardDefId: "jungle-006-mr-mime", overlayId: "neon", imageUrl: getCardImageUrl(allCards.find((c) => c.id === "jungle-006-mr-mime")!) },
+  { itemId: "mr-mime-prism", name: "Mr. Mime Prisma", cardDefId: "jungle-006-mr-mime", overlayId: "prism", imageUrl: getCardImageUrl(allCards.find((c) => c.id === "jungle-006-mr-mime")!) },
+  { itemId: "scyther-frost", name: "Scyther Escarcha", cardDefId: "jungle-010-scyther", overlayId: "frost", imageUrl: getCardImageUrl(allCards.find((c) => c.id === "jungle-010-scyther")!) },
+  { itemId: "scyther-fire", name: "Scyther Ígneo", cardDefId: "jungle-010-scyther", overlayId: "fire", imageUrl: getCardImageUrl(allCards.find((c) => c.id === "jungle-010-scyther")!) },
+  { itemId: "eevee-holo-sparkle", name: "Eevee Destello", cardDefId: "jungle-051-eevee", overlayId: "holo-sparkle", imageUrl: getCardImageUrl(allCards.find((c) => c.id === "jungle-051-eevee")!) },
+  { itemId: "eevee-rainbow", name: "Eevee Arcoíris", cardDefId: "jungle-051-eevee", overlayId: "rainbow", imageUrl: getCardImageUrl(allCards.find((c) => c.id === "jungle-051-eevee")!) },
+];
 
 // ---------------------------------------------------------------------------
 // Get daily offers (with user-specific purchase/ownership status)
@@ -186,7 +191,7 @@ export async function getDailyOffers(userId?: string): Promise<DailyOffersRespon
     { type: "coin", itemId: dailyCoin.itemId, name: dailyCoin.name, imageUrl: dailyCoin.imageUrl, price: COSMETIC_PRICES.coin },
     { type: "cardBack", itemId: dailyCardBack.itemId, name: dailyCardBack.name, imageUrl: dailyCardBack.imageUrl, price: COSMETIC_PRICES.cardBack },
     { type: "avatar", itemId: dailyAvatar.itemId, name: dailyAvatar.name, imageUrl: dailyAvatar.imageUrl, price: COSMETIC_PRICES.avatar },
-    { type: "variant", itemId: dailyVariant.itemId, name: dailyVariant.name, imageUrl: dailyVariant.imageUrl, price: COSMETIC_PRICES.variant },
+    { type: "variant", itemId: dailyVariant.itemId, name: dailyVariant.name, imageUrl: dailyVariant.imageUrl, overlayId: dailyVariant.overlayId, price: COSMETIC_PRICES.variant },
   ];
 
   // Energy offers (static — always the same 6)
