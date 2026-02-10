@@ -107,6 +107,7 @@ model User {
   ownedCoins       UserCoin[]
   ownedCardBacks   UserCardBack[]
   ownedAvatars     UserAvatar[]
+  ownedCardSkins   UserCardSkin[]
   battlePasses     UserBattlePass[]
   dailyPurchases   DailyPurchase[]
 
@@ -268,6 +269,17 @@ model UserAvatar {
 
   @@unique([userId, avatarId])
   @@map("user_avatars")
+}
+
+model UserCardSkin {
+  id         String   @id @default(uuid())
+  userId     String
+  skinId     String // e.g. "alakazam-glitch", "wigglytuff-rainbow"
+  obtainedAt DateTime @default(now())
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, skinId])
+  @@map("user_card_skins")
 }
 
 // =============================================================================

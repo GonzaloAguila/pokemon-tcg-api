@@ -93,7 +93,6 @@ function seededPick<T>(arr: T[], seed: number, offset: number): T {
 
 const AVAILABLE_COINS = [
   { itemId: "charizard", name: "Charizard", imageUrl: "/coins/TCGP_Coin_Charizard.png" },
-  { itemId: "eevee", name: "Eevee", imageUrl: "/coins/TCGP_Coin_Eevee.png" },
   { itemId: "lucario", name: "Lucario", imageUrl: "/coins/TCGP_Coin_Lucario.png" },
   { itemId: "venusaur", name: "Venusaur", imageUrl: "/coins/TCGP_Coin_Venusaur.png" },
   { itemId: "vulpix-alola", name: "Vulpix Alola", imageUrl: "/coins/vulpix-alola-coin.png" },
@@ -218,7 +217,7 @@ export async function getDailyOffers(userId?: string): Promise<DailyOffersRespon
     purchasedToday = purchases.map((p) => p.itemKey);
 
     // Check ownership of today's cosmetic offers
-    const [ownedCoins, ownedCardBacks, ownedAvatars] = await Promise.all([
+    const [ownedCoins, ownedCardBacks, ownedAvatars, ownedSkins] = await Promise.all([
       prisma.userCoin.findMany({
         where: { userId, coinId: { in: cosmeticOffers.filter((o) => o.type === "coin").map((o) => o.itemId) } },
         select: { coinId: true },
@@ -231,6 +230,10 @@ export async function getDailyOffers(userId?: string): Promise<DailyOffersRespon
         where: { userId, avatarId: { in: cosmeticOffers.filter((o) => o.type === "avatar").map((o) => o.itemId) } },
         select: { avatarId: true },
       }),
+      prisma.userCardSkin.findMany({
+        where: { userId, skinId: { in: cosmeticOffers.filter((o) => o.type === "variant").map((o) => o.itemId) } },
+        select: { skinId: true },
+      }),
     ]);
 
     for (const c of ownedCoins) {
@@ -241,6 +244,9 @@ export async function getDailyOffers(userId?: string): Promise<DailyOffersRespon
     }
     for (const a of ownedAvatars) {
       ownedItems.push(`own:avatar:${a.avatarId}`);
+    }
+    for (const s of ownedSkins) {
+      ownedItems.push(`own:variant:${s.skinId}`);
     }
   }
 
@@ -348,9 +354,14 @@ export async function buyCosmetic(
 
     await usersService.spendCoupons(userId, offer.price, "cosmetic_purchase", `Compra de avatar: ${offer.name}`);
     await prisma.userAvatar.create({ data: { userId, avatarId: itemId } });
-  } else {
-    // variant — just charge coupons (variant system TBD)
-    await usersService.spendCoupons(userId, offer.price, "cosmetic_purchase", `Compra de ${type}: ${offer.name}`);
+  } else if (type === "variant") {
+    const existing = await prisma.userCardSkin.findUnique({
+      where: { userId_skinId: { userId, skinId: itemId } },
+    });
+    if (existing) throw Errors.BadRequest("Ya posees esta variante");
+
+    await usersService.spendCoupons(userId, offer.price, "cosmetic_purchase", `Compra de variante: ${offer.name}`);
+    await prisma.userCardSkin.create({ data: { userId, skinId: itemId } });
   }
 
   // Record the daily purchase
