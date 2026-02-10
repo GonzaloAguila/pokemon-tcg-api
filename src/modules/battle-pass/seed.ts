@@ -14,6 +14,7 @@ async function main() {
     where: { slug: "base-set-season-1" },
     update: {
       rewards: SEASON_1_REWARDS as any,
+      premiumPrice: 2,
     },
     create: {
       slug: "base-set-season-1",
@@ -22,7 +23,7 @@ async function main() {
         "El primer pase de batalla. 30 dias de recompensas exclusivas del Set Base.",
       imageUrl: "/battle-pass/season-1.png",
       durationDays: 30,
-      premiumPrice: 2000,
+      premiumPrice: 2,
       status: "active",
       rewards: SEASON_1_REWARDS as any,
     },

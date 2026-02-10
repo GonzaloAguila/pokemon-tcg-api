@@ -155,7 +155,7 @@ export async function upgradeToPremium(passId: string, userId: string) {
   if (!enrollment) throw Errors.BadRequest("Primero debes activar el pase");
   if (enrollment.isPremium) throw Errors.Conflict("Ya tienes el pase premium");
 
-  await usersService.spendCoins(
+  await usersService.spendRareCandy(
     userId,
     pass.premiumPrice,
     "battle_pass_upgrade",

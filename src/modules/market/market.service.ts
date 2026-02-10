@@ -45,10 +45,10 @@ const basicEnergyCards = allCards.filter(
 // ---------------------------------------------------------------------------
 
 const CARD_PRICES: Record<string, number> = {
-  rare: 200,
-  uncommon: 100,
-  common: 50,
-  mystery: 200,
+  rare: 150,
+  uncommon: 50,
+  common: 20,
+  mystery: 100,
 };
 
 const COSMETIC_PRICES: Record<string, number> = {
@@ -62,7 +62,7 @@ const ENERGY_PRICE = 10;
 
 // Rare Candy conversion rates
 const CANDY_TO_COINS = 2000;
-const CANDY_TO_COUPONS = 10;
+const CANDY_TO_COUPONS = 50;
 
 // ---------------------------------------------------------------------------
 // Deterministic daily seed (same picks for all users on the same day)
