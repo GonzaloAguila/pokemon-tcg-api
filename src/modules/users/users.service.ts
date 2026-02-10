@@ -51,6 +51,7 @@ const fullProfileSelect = {
   },
   activeCoinId: true,
   activeCardBackId: true,
+  activeAvatarId: true,
   maxDeckSlots: true,
   starterColor: true,
   emailVerified: true,
@@ -105,9 +106,9 @@ export async function updateUserProfile(
 
 export async function updateCosmetics(
   userId: string,
-  data: { activeCoinId?: string; activeCardBackId?: string },
+  data: { activeCoinId?: string; activeCardBackId?: string; activeAvatarId?: string },
 ) {
-  // Verify the user owns the coin/card back
+  // Verify the user owns the coin/card back/avatar
   if (data.activeCoinId) {
     const owned = await prisma.userCoin.findUnique({
       where: { userId_coinId: { userId, coinId: data.activeCoinId } },
@@ -126,10 +127,23 @@ export async function updateCosmetics(
     }
   }
 
+  if (data.activeAvatarId) {
+    // "collector" and "girl" are starter avatars — always owned
+    const STARTER_AVATARS = ["collector", "girl"];
+    if (!STARTER_AVATARS.includes(data.activeAvatarId)) {
+      const owned = await prisma.userAvatar.findUnique({
+        where: { userId_avatarId: { userId, avatarId: data.activeAvatarId } },
+      });
+      if (!owned) {
+        throw Errors.BadRequest("No posees ese avatar");
+      }
+    }
+  }
+
   return prisma.user.update({
     where: { id: userId },
     data,
-    select: { activeCoinId: true, activeCardBackId: true },
+    select: { activeCoinId: true, activeCardBackId: true, activeAvatarId: true },
   });
 }
 
@@ -500,6 +514,14 @@ export async function getUserCardBacks(userId: string) {
   return prisma.userCardBack.findMany({
     where: { userId },
     select: { cardBackId: true, obtainedAt: true },
+    orderBy: { obtainedAt: "desc" },
+  });
+}
+
+export async function getUserAvatars(userId: string) {
+  return prisma.userAvatar.findMany({
+    where: { userId },
+    select: { avatarId: true, obtainedAt: true },
     orderBy: { obtainedAt: "desc" },
   });
 }

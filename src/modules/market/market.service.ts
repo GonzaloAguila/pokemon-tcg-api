@@ -211,7 +211,7 @@ export async function getDailyOffers(userId?: string): Promise<DailyOffersRespon
     purchasedToday = purchases.map((p) => p.itemKey);
 
     // Check ownership of today's cosmetic offers
-    const [ownedCoins, ownedCardBacks] = await Promise.all([
+    const [ownedCoins, ownedCardBacks, ownedAvatars] = await Promise.all([
       prisma.userCoin.findMany({
         where: { userId, coinId: { in: cosmeticOffers.filter((o) => o.type === "coin").map((o) => o.itemId) } },
         select: { coinId: true },
@@ -220,6 +220,10 @@ export async function getDailyOffers(userId?: string): Promise<DailyOffersRespon
         where: { userId, cardBackId: { in: cosmeticOffers.filter((o) => o.type === "cardBack").map((o) => o.itemId) } },
         select: { cardBackId: true },
       }),
+      prisma.userAvatar.findMany({
+        where: { userId, avatarId: { in: cosmeticOffers.filter((o) => o.type === "avatar").map((o) => o.itemId) } },
+        select: { avatarId: true },
+      }),
     ]);
 
     for (const c of ownedCoins) {
@@ -227,6 +231,9 @@ export async function getDailyOffers(userId?: string): Promise<DailyOffersRespon
     }
     for (const cb of ownedCardBacks) {
       ownedItems.push(`own:cardBack:${cb.cardBackId}`);
+    }
+    for (const a of ownedAvatars) {
+      ownedItems.push(`own:avatar:${a.avatarId}`);
     }
   }
 
@@ -326,8 +333,16 @@ export async function buyCosmetic(
 
     await usersService.spendCoupons(userId, offer.price, "cosmetic_purchase", `Compra de card back: ${offer.name}`);
     await prisma.userCardBack.create({ data: { userId, cardBackId: itemId } });
+  } else if (type === "avatar") {
+    const existing = await prisma.userAvatar.findUnique({
+      where: { userId_avatarId: { userId, avatarId: itemId } },
+    });
+    if (existing) throw Errors.BadRequest("Ya posees este avatar");
+
+    await usersService.spendCoupons(userId, offer.price, "cosmetic_purchase", `Compra de avatar: ${offer.name}`);
+    await prisma.userAvatar.create({ data: { userId, avatarId: itemId } });
   } else {
-    // avatar and variant — just charge coupons (avatar/variant system TBD)
+    // variant — just charge coupons (variant system TBD)
     await usersService.spendCoupons(userId, offer.price, "cosmetic_purchase", `Compra de ${type}: ${offer.name}`);
   }
 

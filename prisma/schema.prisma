@@ -80,6 +80,7 @@ model User {
   // Active cosmetics
   activeCoinId     String? @default("eevee")
   activeCardBackId String? @default("default")
+  activeAvatarId   String? @default("collector")
 
   // Starter deck color chosen at signup
   starterColor String?
@@ -105,6 +106,7 @@ model User {
   transactions     Transaction[]
   ownedCoins       UserCoin[]
   ownedCardBacks   UserCardBack[]
+  ownedAvatars     UserAvatar[]
   battlePasses     UserBattlePass[]
   dailyPurchases   DailyPurchase[]
 
@@ -255,6 +257,17 @@ model UserCardBack {
 
   @@unique([userId, cardBackId])
   @@map("user_card_backs")
+}
+
+model UserAvatar {
+  id         String   @id @default(uuid())
+  userId     String
+  avatarId   String // e.g. "collector", "girl", "bellsprout", "pikachu"
+  obtainedAt DateTime @default(now())
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, avatarId])
+  @@map("user_avatars")
 }
 
 // =============================================================================
