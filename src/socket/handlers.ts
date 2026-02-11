@@ -7,6 +7,7 @@ import {
   createMatchGames,
 } from "./draft-handlers.js";
 import { recordMatchResult } from "../modules/users/users.service.js";
+import { checkAndUpdateProgress } from "../modules/achievements/achievements.service.js";
 
 // Types for Socket.io events
 interface JoinRoomPayload {
@@ -316,8 +317,8 @@ export function setupSocketHandlers(io: Server): void {
             const mode = draftInfo ? "draft" as const : "normal" as const;
             const winnerId = result.winner === "player1" ? room.player1Id : room.player2Id;
             const loserId = result.winner === "player1" ? room.player2Id : room.player1Id;
-            recordMatchResult(winnerId, mode, true).catch(console.error);
-            recordMatchResult(loserId, mode, false).catch(console.error);
+            recordMatchResult(winnerId, mode, true).then(() => checkAndUpdateProgress(winnerId)).catch(console.error);
+            recordMatchResult(loserId, mode, false).then(() => checkAndUpdateProgress(loserId)).catch(console.error);
           }
 
           // Report result to draft system if this was a draft match
@@ -442,8 +443,8 @@ export function setupSocketHandlers(io: Server): void {
       const mode = draftInfo ? "draft" as const : "normal" as const;
       const winnerId = winner === "player1" ? room.player1Id : room.player2Id;
       const loserId = winner === "player1" ? room.player2Id : room.player1Id;
-      recordMatchResult(winnerId, mode, true).catch(console.error);
-      recordMatchResult(loserId, mode, false).catch(console.error);
+      recordMatchResult(winnerId, mode, true).then(() => checkAndUpdateProgress(winnerId)).catch(console.error);
+      recordMatchResult(loserId, mode, false).then(() => checkAndUpdateProgress(loserId)).catch(console.error);
     }
 
     // Report to draft system if this was a draft match

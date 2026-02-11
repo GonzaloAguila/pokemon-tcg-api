@@ -410,12 +410,12 @@ model UserMedal {
 // =============================================================================
 
 model UserAchievement {
-  id            String   @id @default(uuid())
+  id            String    @id @default(uuid())
   userId        String
   achievementId String
-  progress      Int      @default(0)
-  unlockedAt    DateTime @default(now())
-  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  progress      Int       @default(0)
+  unlockedAt    DateTime?
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, achievementId])
   @@map("user_achievements")

@@ -15,6 +15,7 @@ import { decksRouter } from "./modules/decks/index.js";
 import { battlePassRouter } from "./modules/battle-pass/index.js";
 import { marketRouter } from "./modules/market/index.js";
 import { wheelRouter } from "./modules/wheel/index.js";
+import { achievementsRouter } from "./modules/achievements/index.js";
 
 // Load environment variables
 dotenv.config();
@@ -53,6 +54,7 @@ app.use("/api/users", decksRouter);
 app.use("/api", battlePassRouter);
 app.use("/api", marketRouter);
 app.use("/api", wheelRouter);
+app.use("/api", achievementsRouter);
 // app.use("/api/matchmaking", matchmakingRouter);
 
 // Error handler
