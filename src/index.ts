@@ -16,6 +16,8 @@ import { battlePassRouter } from "./modules/battle-pass/index.js";
 import { marketRouter } from "./modules/market/index.js";
 import { wheelRouter } from "./modules/wheel/index.js";
 import { achievementsRouter } from "./modules/achievements/index.js";
+import { chatRouter } from "./modules/chat/index.js";
+import { cleanupOldMessages } from "./modules/chat/chat.service.js";
 
 // Load environment variables
 dotenv.config();
@@ -55,6 +57,7 @@ app.use("/api", battlePassRouter);
 app.use("/api", marketRouter);
 app.use("/api", wheelRouter);
 app.use("/api", achievementsRouter);
+app.use("/api", chatRouter);
 // app.use("/api/matchmaking", matchmakingRouter);
 
 // Error handler
@@ -62,6 +65,9 @@ app.use(errorHandler);
 
 // Socket.io handlers
 setupSocketHandlers(io);
+
+// Cleanup old chat messages every 6 hours
+setInterval(() => cleanupOldMessages().catch(console.error), 6 * 60 * 60 * 1000);
 
 // Start server
 const PORT = process.env.PORT || 3001;

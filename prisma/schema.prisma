@@ -112,6 +112,7 @@ model User {
   ownedPlaymats    UserPlaymat[]
   battlePasses     UserBattlePass[]
   dailyPurchases   DailyPurchase[]
+  chatMessages     ChatMessage[]
 
   @@index([providerId, provider])
   @@map("users")
@@ -419,4 +420,20 @@ model UserAchievement {
 
   @@unique([userId, achievementId])
   @@map("user_achievements")
+}
+
+// =============================================================================
+// Chat
+// =============================================================================
+
+model ChatMessage {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  content   String   @db.VarChar(500)
+  type      String   @default("text")
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@map("chat_messages")
 }

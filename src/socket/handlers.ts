@@ -8,6 +8,8 @@ import {
 } from "./draft-handlers.js";
 import { recordMatchResult } from "../modules/users/users.service.js";
 import { checkAndUpdateProgress } from "../modules/achievements/achievements.service.js";
+import { verifyAccessToken } from "../lib/jwt.js";
+import * as chatService from "../modules/chat/chat.service.js";
 
 // Types for Socket.io events
 interface JoinRoomPayload {
@@ -35,6 +37,18 @@ interface ChatMessage {
 const roomManager = new GameRoomManager();
 
 export function setupSocketHandlers(io: Server): void {
+  // Optional auth — attach user data if token present, but always allow connection
+  io.use((socket, next) => {
+    const token = socket.handshake.auth?.token as string | undefined;
+    if (token) {
+      const payload = verifyAccessToken(token);
+      if (payload) {
+        socket.data.user = payload;
+      }
+    }
+    next();
+  });
+
   io.on("connection", (socket: Socket) => {
     console.log(`🔌 Client connected: ${socket.id}`);
 
@@ -407,6 +421,42 @@ export function setupSocketHandlers(io: Server): void {
         content: message.content,
         timestamp: Date.now(),
       });
+    });
+
+    // ==========================================================================
+    // Global Chat
+    // ==========================================================================
+
+    socket.on("globalChat:join", () => {
+      socket.join("global-chat");
+    });
+
+    socket.on("globalChat:leave", () => {
+      socket.leave("global-chat");
+    });
+
+    socket.on("globalChat:message", async (payload: { content: string; type?: string }) => {
+      const user = socket.data.user;
+      if (!user) return;
+
+      const { content, type = "text" } = payload;
+
+      // Validate text messages
+      if (type === "text") {
+        if (!content || content.trim().length === 0 || content.length > 500) return;
+      }
+
+      // Validate sticker messages
+      if (type === "sticker") {
+        if (!content || content.length > 100) return;
+      }
+
+      try {
+        const saved = await chatService.saveMessage(user.userId, content.trim(), type);
+        io.to("global-chat").emit("globalChat:message", saved);
+      } catch (err) {
+        console.error("Error saving chat message:", err);
+      }
     });
 
     // ==========================================================================
