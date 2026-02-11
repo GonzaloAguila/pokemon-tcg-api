@@ -17,6 +17,9 @@ interface JoinRoomPayload {
   roomId: string;
   userId: string;
   deckId?: string;
+  username?: string;
+  avatarId?: string;
+  titleId?: string;
 }
 
 interface PlayerAction {
@@ -51,6 +54,9 @@ function serializeRoom(r: ReturnType<typeof roomManager.getRoom>) {
     creatorUsername: r.creator.username,
     creatorAvatarId: r.creator.avatarId,
     creatorTitleId: r.creator.titleId,
+    joinerUsername: r.joiner.username,
+    joinerAvatarId: r.joiner.avatarId,
+    joinerTitleId: r.joiner.titleId,
   };
 }
 
@@ -157,9 +163,13 @@ export function setupSocketHandlers(io: Server): void {
     socket.on("joinRoom", async (payload: JoinRoomPayload) => {
       console.log(`[joinRoom] Received:`, payload);
       try {
-        const { roomId, userId, deckId } = payload;
+        const { roomId, userId, deckId, username, avatarId, titleId } = payload;
         console.log(`[joinRoom] Attempting to join room ${roomId} as ${userId}`);
-        const room = await roomManager.joinRoom(roomId, userId, socket.id);
+        const room = await roomManager.joinRoom(roomId, userId, socket.id, {
+          username: username || null,
+          avatarId: avatarId || null,
+          titleId: titleId || null,
+        });
         console.log(`[joinRoom] Room state after join:`, {
           player1Id: room.player1Id,
           player2Id: room.player2Id,
@@ -198,6 +208,7 @@ export function setupSocketHandlers(io: Server): void {
             roomId,
             gameState: maskGameStateForPlayer(room.gameState, isPlayer1 ? "player1" : "player2"),
             isPlayer1,
+            opponentInfo: isPlayer1 ? room.joiner : room.creator,
           });
           return;
         }
@@ -217,11 +228,13 @@ export function setupSocketHandlers(io: Server): void {
             roomId,
             gameState: maskGameStateForPlayer(gameState, "player1"),
             isPlayer1: true,
+            opponentInfo: room.joiner,
           });
           io.to(room.player2SocketId!).emit("gameStart", {
             roomId,
             gameState: maskGameStateForPlayer(gameState, "player2"),
             isPlayer1: false,
+            opponentInfo: room.creator,
           });
 
           console.log(`🎮 Game auto-started in room ${roomId}`);
@@ -263,9 +276,11 @@ export function setupSocketHandlers(io: Server): void {
           // Send masked state to each player
           io.to(room.player1SocketId!).emit("gameStart", {
             gameState: maskGameStateForPlayer(gameState, "player1"),
+            opponentInfo: room.joiner,
           });
           io.to(room.player2SocketId!).emit("gameStart", {
             gameState: maskGameStateForPlayer(gameState, "player2"),
+            opponentInfo: room.creator,
           });
 
           console.log(`🎮 Game started in room ${roomId}`);

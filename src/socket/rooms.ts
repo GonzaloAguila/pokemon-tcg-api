@@ -101,6 +101,7 @@ interface GameRoom {
   // Room config
   config: RoomConfig;
   creator: CreatorInfo;
+  joiner: CreatorInfo;
 
   // Metadata
   players: string[];
@@ -343,6 +344,11 @@ export class GameRoomManager {
         avatarId: creator?.avatarId ?? null,
         titleId: creator?.titleId ?? null,
       },
+      joiner: {
+        username: null,
+        avatarId: null,
+        titleId: null,
+      },
       players: [],
       createdAt: new Date(),
     };
@@ -354,7 +360,7 @@ export class GameRoomManager {
   /**
    * Join an existing room or create if doesn't exist
    */
-  async joinRoom(roomId: string, userId: string, socketId: string): Promise<GameRoom> {
+  async joinRoom(roomId: string, userId: string, socketId: string, displayInfo?: Partial<CreatorInfo>): Promise<GameRoom> {
     let room = this.rooms.get(roomId);
 
     if (!room) {
@@ -393,6 +399,14 @@ export class GameRoomManager {
       room.player2Id = userId;
       room.player2SocketId = socketId;
       room.players.push(userId);
+      // Store joiner display info
+      if (displayInfo) {
+        room.joiner = {
+          username: displayInfo.username ?? null,
+          avatarId: displayInfo.avatarId ?? null,
+          titleId: displayInfo.titleId ?? null,
+        };
+      }
     }
 
     this.socketToRoom.set(socketId, roomId);
