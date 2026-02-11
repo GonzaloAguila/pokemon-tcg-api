@@ -114,20 +114,35 @@ const AVAILABLE_AVATARS = [
   { itemId: "voltorb", name: "Voltorb", imageUrl: "/avatars/darius-dan/voltorb.png" },
 ];
 
-// Variants — card skins with overlays (paired: card + overlay effect)
-const AVAILABLE_VARIANTS = [
-  { itemId: "alakazam-glitch", name: "Alakazam Glitch", cardDefId: "base-set-001-alakazam", overlayId: "negative", imageUrl: getCardImageUrl(allCards.find((c) => c.id === "base-set-001-alakazam")!) },
-  { itemId: "wigglytuff-rainbow", name: "Wigglytuff Arcoíris", cardDefId: "jungle-016-wigglytuff", overlayId: "rainbow", imageUrl: getCardImageUrl(allCards.find((c) => c.id === "jungle-016-wigglytuff")!) },
-  { itemId: "wigglytuff-gold", name: "Wigglytuff Dorado", cardDefId: "jungle-016-wigglytuff", overlayId: "gold", imageUrl: getCardImageUrl(allCards.find((c) => c.id === "jungle-016-wigglytuff")!) },
-  { itemId: "clefable-galaxy", name: "Clefable Galaxia", cardDefId: "jungle-001-clefable", overlayId: "galaxy", imageUrl: getCardImageUrl(allCards.find((c) => c.id === "jungle-001-clefable")!) },
-  { itemId: "clefable-crystal", name: "Clefable Cristal", cardDefId: "jungle-001-clefable", overlayId: "crystal", imageUrl: getCardImageUrl(allCards.find((c) => c.id === "jungle-001-clefable")!) },
-  { itemId: "mr-mime-neon", name: "Mr. Mime Neón", cardDefId: "jungle-006-mr-mime", overlayId: "neon", imageUrl: getCardImageUrl(allCards.find((c) => c.id === "jungle-006-mr-mime")!) },
-  { itemId: "mr-mime-prism", name: "Mr. Mime Prisma", cardDefId: "jungle-006-mr-mime", overlayId: "prism", imageUrl: getCardImageUrl(allCards.find((c) => c.id === "jungle-006-mr-mime")!) },
-  { itemId: "scyther-frost", name: "Scyther Escarcha", cardDefId: "jungle-010-scyther", overlayId: "frost", imageUrl: getCardImageUrl(allCards.find((c) => c.id === "jungle-010-scyther")!) },
-  { itemId: "scyther-fire", name: "Scyther Ígneo", cardDefId: "jungle-010-scyther", overlayId: "fire", imageUrl: getCardImageUrl(allCards.find((c) => c.id === "jungle-010-scyther")!) },
-  { itemId: "eevee-holo-sparkle", name: "Eevee Destello", cardDefId: "jungle-051-eevee", overlayId: "holo-sparkle", imageUrl: getCardImageUrl(allCards.find((c) => c.id === "jungle-051-eevee")!) },
-  { itemId: "eevee-rainbow", name: "Eevee Arcoíris", cardDefId: "jungle-051-eevee", overlayId: "rainbow", imageUrl: getCardImageUrl(allCards.find((c) => c.id === "jungle-051-eevee")!) },
+// Variants — dynamically generated from all Rare Holo Pokemon × all overlays
+const OVERLAY_DEFS = [
+  { id: "holo-sparkle", label: "Holo" },
+  { id: "sepia", label: "Sepia" },
+  { id: "rainbow", label: "Arcoíris" },
+  { id: "negative", label: "Glitch" },
+  { id: "frost", label: "Hielo" },
+  { id: "galaxy", label: "Galaxia" },
+  { id: "gold", label: "Dorado" },
+  { id: "crystal", label: "Cristal" },
+  { id: "neon", label: "Neón" },
+  { id: "prism", label: "Prisma" },
+  { id: "fire", label: "Ígneo" },
 ];
+
+const AVAILABLE_VARIANTS = rareCards.flatMap((card) => {
+  const pokeName = isPokemonCard(card) ? card.name : card.id;
+  return OVERLAY_DEFS.map((overlay) => {
+    // Build a slug: "alakazam-glitch", "charizard-rainbow", etc.
+    const slug = `${pokeName.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${overlay.id}`;
+    return {
+      itemId: slug,
+      name: `${pokeName} ${overlay.label}`,
+      cardDefId: card.id,
+      overlayId: overlay.id,
+      imageUrl: getCardImageUrl(card),
+    };
+  });
+});
 
 // Playmats — board backgrounds
 const AVAILABLE_PLAYMATS = [
