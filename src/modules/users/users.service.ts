@@ -394,6 +394,51 @@ export async function spendRareCandy(
 }
 
 // ---------------------------------------------------------------------------
+// Leaderboard
+// ---------------------------------------------------------------------------
+
+export async function getLeaderboard(limit = 10) {
+  const stats = await prisma.userStats.findMany({
+    orderBy: [
+      { normalWins: "desc" },
+    ],
+    take: limit,
+    select: {
+      userId: true,
+      normalWins: true,
+      normalLosses: true,
+      rankedWins: true,
+      rankedLosses: true,
+      draftWins: true,
+      draftLosses: true,
+      user: {
+        select: {
+          username: true,
+          activeAvatarId: true,
+          role: true,
+        },
+      },
+    },
+  });
+
+  return stats.map((s) => {
+    const totalWins = s.normalWins + s.rankedWins + s.draftWins;
+    const totalLosses = s.normalLosses + s.rankedLosses + s.draftLosses;
+    const totalGames = totalWins + totalLosses;
+    const winRate = totalGames > 0 ? Math.round((totalWins / totalGames) * 1000) / 10 : 0;
+    return {
+      userId: s.userId,
+      username: s.user.username,
+      activeAvatarId: s.user.activeAvatarId,
+      role: s.user.role,
+      totalWins,
+      totalGames,
+      winRate,
+    };
+  }).sort((a, b) => b.totalWins - a.totalWins);
+}
+
+// ---------------------------------------------------------------------------
 // Match result recording
 // ---------------------------------------------------------------------------
 

@@ -37,6 +37,24 @@ const updatePermissionsSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// GET /leaderboard — Top players by wins
+// ---------------------------------------------------------------------------
+
+router.get(
+  "/leaderboard",
+  requireAuth,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const limit = Math.min(Number(req.query.limit) || 10, 50);
+      const leaderboard = await usersService.getLeaderboard(limit);
+      res.json({ leaderboard });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
 // GET /me — Full profile
 // ---------------------------------------------------------------------------
 

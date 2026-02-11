@@ -10,6 +10,7 @@ import { recordMatchResult } from "../modules/users/users.service.js";
 import { checkAndUpdateProgress } from "../modules/achievements/achievements.service.js";
 import { verifyAccessToken } from "../lib/jwt.js";
 import * as chatService from "../modules/chat/chat.service.js";
+import { prisma } from "../lib/prisma.js";
 
 // Types for Socket.io events
 interface JoinRoomPayload {
@@ -412,13 +413,26 @@ export function setupSocketHandlers(io: Server): void {
     // Chat
     // ==========================================================================
 
-    socket.on("chatMessage", (payload: { roomId: string; message: ChatMessage }) => {
+    socket.on("chatMessage", async (payload: { roomId: string; message: ChatMessage }) => {
       const { roomId, message } = payload;
+      const tokenUser = socket.data.user;
+      if (!tokenUser) return;
 
-      // Broadcast to room (including sender)
+      const content = message.content?.trim();
+      if (!content || content.length === 0 || content.length > 500) return;
+
+      // Fetch username from DB (not in JWT)
+      const dbUser = await prisma.user.findUnique({
+        where: { id: tokenUser.userId },
+        select: { username: true, role: true },
+      });
+
       io.to(roomId).emit("chatMessage", {
         senderId: socket.id,
-        content: message.content,
+        userId: tokenUser.userId,
+        username: dbUser?.username ?? "Anónimo",
+        role: dbUser?.role ?? "user",
+        content,
         timestamp: Date.now(),
       });
     });
