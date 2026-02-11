@@ -13,8 +13,28 @@ router.post(
   requireAuth,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const newlyUnlocked = await achievementsService.checkAndUpdateProgress(req.user!.userId);
-      res.json({ newlyUnlocked });
+      const newlyClaimable = await achievementsService.checkAndUpdateProgress(req.user!.userId);
+      res.json({ newlyClaimable });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// POST /achievements/claim/:achievementId — Claim reward for a completed achievement
+// ---------------------------------------------------------------------------
+
+router.post(
+  "/achievements/claim/:achievementId",
+  requireAuth,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const result = await achievementsService.claimAchievement(
+        req.user!.userId,
+        req.params.achievementId,
+      );
+      res.json(result);
     } catch (err) {
       next(err);
     }

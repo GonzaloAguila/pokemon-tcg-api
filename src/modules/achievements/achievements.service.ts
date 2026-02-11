@@ -90,22 +90,27 @@ const ACHIEVEMENT_DEFS: AchievementDef[] = [
 ];
 
 // ---------------------------------------------------------------------------
-// Public interface
+// Public interfaces
 // ---------------------------------------------------------------------------
 
-export interface UnlockedAchievement {
+export interface ClaimableAchievement {
   achievementId: string;
   name: string;
   tier: string;
+}
+
+export interface ClaimResult {
+  achievementId: string;
   coins: number;
   coupons: number;
 }
 
 // ---------------------------------------------------------------------------
 // Check and update all achievement progress for a user
+// (Only updates progress — NEVER grants rewards or sets unlockedAt)
 // ---------------------------------------------------------------------------
 
-export async function checkAndUpdateProgress(userId: string): Promise<UnlockedAchievement[]> {
+export async function checkAndUpdateProgress(userId: string): Promise<ClaimableAchievement[]> {
   // Load all needed data in parallel
   const [user, stats, distinctCardCount, existingAchievements] = await Promise.all([
     prisma.user.findUnique({
@@ -141,10 +146,10 @@ export async function checkAndUpdateProgress(userId: string): Promise<UnlockedAc
   // Build a map of existing achievement state
   const existingMap = new Map(existingAchievements.map((a) => [a.achievementId, a]));
 
-  // Count already-unlocked achievements (for "meta" checker)
-  const unlockedCount = existingAchievements.filter((a) => a.unlockedAt !== null).length;
+  // Count already-claimed achievements (for "meta" checker)
+  const claimedCount = existingAchievements.filter((a) => a.unlockedAt !== null).length;
 
-  const newlyUnlocked: UnlockedAchievement[] = [];
+  const newlyClaimable: ClaimableAchievement[] = [];
 
   for (const def of ACHIEVEMENT_DEFS) {
     // Skip manual achievements — they need in-game event tracking
@@ -172,8 +177,7 @@ export async function checkAndUpdateProgress(userId: string): Promise<UnlockedAc
         currentProgress = user.level;
         break;
       case "meta":
-        // Count unlocked achievements (excluding this one itself) + any we're unlocking in this run
-        currentProgress = unlockedCount + newlyUnlocked.length;
+        currentProgress = claimedCount;
         break;
     }
 
@@ -184,49 +188,64 @@ export async function checkAndUpdateProgress(userId: string): Promise<UnlockedAc
     const existing = existingMap.get(def.id);
 
     if (!existing) {
-      // No record exists — create one
+      // No record exists — create one (never set unlockedAt here)
       await prisma.userAchievement.create({
-        data: {
-          userId,
-          achievementId: def.id,
-          progress,
-          unlockedAt: isComplete ? new Date() : null,
-        },
+        data: { userId, achievementId: def.id, progress },
       });
 
       if (isComplete) {
-        const reward = await grantReward(userId, def);
-        newlyUnlocked.push(reward);
+        newlyClaimable.push({ achievementId: def.id, name: def.name, tier: def.tier });
       }
     } else if (existing.unlockedAt === null) {
-      // Record exists but not yet unlocked — update progress
-      if (isComplete) {
-        // Unlock it!
-        await prisma.userAchievement.update({
-          where: { userId_achievementId: { userId, achievementId: def.id } },
-          data: { progress, unlockedAt: new Date() },
-        });
-        const reward = await grantReward(userId, def);
-        newlyUnlocked.push(reward);
-      } else if (progress !== existing.progress) {
-        // Just update progress
+      // Record exists, not yet claimed — update progress if changed
+      if (progress !== existing.progress) {
         await prisma.userAchievement.update({
           where: { userId_achievementId: { userId, achievementId: def.id } },
           data: { progress },
         });
       }
+      // Track newly claimable (was below target, now at/above)
+      if (isComplete && existing.progress < def.progressTarget) {
+        newlyClaimable.push({ achievementId: def.id, name: def.name, tier: def.tier });
+      }
     }
-    // If already unlocked, skip entirely
+    // If already claimed (unlockedAt set), skip entirely
   }
 
-  return newlyUnlocked;
+  return newlyClaimable;
+}
+
+// ---------------------------------------------------------------------------
+// Claim an achievement reward
+// ---------------------------------------------------------------------------
+
+export async function claimAchievement(userId: string, achievementId: string): Promise<ClaimResult> {
+  const def = ACHIEVEMENT_DEFS.find((d) => d.id === achievementId);
+  if (!def) throw Object.assign(new Error("Achievement not found"), { status: 404 });
+
+  const record = await prisma.userAchievement.findUnique({
+    where: { userId_achievementId: { userId, achievementId } },
+  });
+
+  if (!record) throw Object.assign(new Error("No progress for this achievement"), { status: 400 });
+  if (record.progress < def.progressTarget) throw Object.assign(new Error("Achievement not yet complete"), { status: 400 });
+  if (record.unlockedAt !== null) throw Object.assign(new Error("Achievement already claimed"), { status: 400 });
+
+  // Mark as claimed
+  await prisma.userAchievement.update({
+    where: { userId_achievementId: { userId, achievementId } },
+    data: { unlockedAt: new Date() },
+  });
+
+  // Grant reward
+  return grantReward(userId, def);
 }
 
 // ---------------------------------------------------------------------------
 // Grant reward for an achievement
 // ---------------------------------------------------------------------------
 
-async function grantReward(userId: string, def: AchievementDef): Promise<UnlockedAchievement> {
+async function grantReward(userId: string, def: AchievementDef): Promise<ClaimResult> {
   const reward = TIER_REWARDS[def.tier] ?? { coins: 0, coupons: 0 };
 
   if (reward.coins > 0) {
@@ -238,8 +257,6 @@ async function grantReward(userId: string, def: AchievementDef): Promise<Unlocke
 
   return {
     achievementId: def.id,
-    name: def.name,
-    tier: def.tier,
     coins: reward.coins,
     coupons: reward.coupons,
   };
