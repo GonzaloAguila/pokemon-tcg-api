@@ -37,6 +37,29 @@ interface ChatMessage {
 // Room manager instance
 const roomManager = new GameRoomManager();
 
+/** Serialize a room for the lobby room list */
+function serializeRoom(r: ReturnType<typeof roomManager.getRoom>) {
+  if (!r) return null;
+  return {
+    id: r.id,
+    status: r.status,
+    createdAt: r.createdAt,
+    playerCount: r.players.length,
+    prizeCount: r.config.prizeCount,
+    betAmount: r.config.betAmount,
+    reservedUserId: r.config.reservedUserId,
+    creatorUsername: r.creator.username,
+    creatorAvatarId: r.creator.avatarId,
+    creatorTitleId: r.creator.titleId,
+  };
+}
+
+function broadcastRoomList(io: Server) {
+  io.emit("roomList", {
+    rooms: roomManager.getActiveRooms().map(serializeRoom).filter(Boolean),
+  });
+}
+
 export function setupSocketHandlers(io: Server): void {
   // Optional auth — attach user data if token present, but always allow connection
   io.use((socket, next) => {
@@ -58,20 +81,28 @@ export function setupSocketHandlers(io: Server): void {
     // ==========================================================================
 
     socket.on("getRooms", () => {
-      const rooms = roomManager.getAvailableRooms();
       socket.emit("roomList", {
-        rooms: rooms.map((r) => ({
-          id: r.id,
-          createdAt: r.createdAt,
-          playerCount: r.players.length,
-        })),
+        rooms: roomManager.getActiveRooms().map(serializeRoom).filter(Boolean),
       });
     });
 
-    socket.on("createRoom", async (payload: { userId: string; deckId?: string }) => {
+    socket.on("createRoom", async (payload: {
+      userId: string;
+      deckId?: string;
+      prizeCount?: number;
+      betAmount?: number;
+      reservedUserId?: string;
+      username?: string;
+      avatarId?: string;
+      titleId?: string;
+    }) => {
       try {
-        const { userId, deckId } = payload;
-        const room = roomManager.createRoom();
+        const { userId, deckId, prizeCount, betAmount, reservedUserId, username, avatarId, titleId } = payload;
+        const room = roomManager.createRoom(
+          undefined,
+          { prizeCount, betAmount, reservedUserId: reservedUserId || null },
+          { username: username || null, avatarId: avatarId || null, titleId: titleId || null },
+        );
         await roomManager.joinRoom(room.id, userId, socket.id);
 
         // Set deck if provided
@@ -87,16 +118,9 @@ export function setupSocketHandlers(io: Server): void {
           isPlayer1: true,
         });
 
-        // Broadcast updated room list to all clients in lobby
-        io.emit("roomList", {
-          rooms: roomManager.getAvailableRooms().map((r) => ({
-            id: r.id,
-            createdAt: r.createdAt,
-            playerCount: r.players.length,
-          })),
-        });
+        broadcastRoomList(io);
 
-        console.log(`🏠 Room ${room.id} created by ${userId}`);
+        console.log(`🏠 Room ${room.id} created by ${userId} (prizes:${room.config.prizeCount}, bet:${room.config.betAmount})`);
       } catch (error) {
         socket.emit("error", { message: (error as Error).message });
       }
@@ -115,14 +139,7 @@ export function setupSocketHandlers(io: Server): void {
           socket.leave(roomId);
           socket.emit("roomDeleted", { roomId });
 
-          // Broadcast updated room list
-          io.emit("roomList", {
-            rooms: roomManager.getAvailableRooms().map((r) => ({
-              id: r.id,
-              createdAt: r.createdAt,
-              playerCount: r.players.length,
-            })),
-          });
+          broadcastRoomList(io);
 
           console.log(`🗑️ Room ${roomId} deleted`);
         } else {
@@ -192,14 +209,8 @@ export function setupSocketHandlers(io: Server): void {
           const gameState = await roomManager.startGame(roomId);
           console.log(`[joinRoom] Game started, phase: ${gameState.gamePhase}`);
 
-          // Update room list (room no longer available)
-          io.emit("roomList", {
-            rooms: roomManager.getAvailableRooms().map((r) => ({
-              id: r.id,
-              createdAt: r.createdAt,
-              playerCount: r.players.length,
-            })),
-          });
+          // Update room list (room now playing)
+          broadcastRoomList(io);
 
           // Send masked state to each player
           io.to(room.player1SocketId!).emit("gameStart", {

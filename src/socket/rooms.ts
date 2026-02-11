@@ -68,6 +68,18 @@ interface PlayerAction {
   payload: Record<string, unknown>;
 }
 
+interface RoomConfig {
+  prizeCount: number;           // 4, 5, or 6
+  betAmount: number;            // 0 = no bet
+  reservedUserId: string | null; // null = open to all
+}
+
+interface CreatorInfo {
+  username: string | null;
+  avatarId: string | null;
+  titleId: string | null;
+}
+
 interface GameRoom {
   id: string;
   status: "waiting" | "ready" | "playing" | "finished";
@@ -85,6 +97,10 @@ interface GameRoom {
 
   // Game state
   gameState: GameState | null;
+
+  // Room config
+  config: RoomConfig;
+  creator: CreatorInfo;
 
   // Metadata
   players: string[];
@@ -302,8 +318,9 @@ export class GameRoomManager {
   /**
    * Create a new room
    */
-  createRoom(roomId?: string): GameRoom {
+  createRoom(roomId?: string, config?: Partial<RoomConfig>, creator?: Partial<CreatorInfo>): GameRoom {
     const id = roomId || this.generateRoomId();
+    const prizeCount = config?.prizeCount ?? 6;
     const room: GameRoom = {
       id,
       status: "waiting",
@@ -316,6 +333,16 @@ export class GameRoomManager {
       player2Ready: false,
       player2DeckId: null,
       gameState: null,
+      config: {
+        prizeCount: prizeCount >= 4 && prizeCount <= 6 ? prizeCount : 6,
+        betAmount: config?.betAmount ?? 0,
+        reservedUserId: config?.reservedUserId ?? null,
+      },
+      creator: {
+        username: creator?.username ?? null,
+        avatarId: creator?.avatarId ?? null,
+        titleId: creator?.titleId ?? null,
+      },
       players: [],
       createdAt: new Date(),
     };
@@ -332,6 +359,11 @@ export class GameRoomManager {
 
     if (!room) {
       room = this.createRoom(roomId);
+    }
+
+    // Check reservation (only for new player2 joins, not reconnects)
+    if (room.config.reservedUserId && room.player1Id && !room.player2Id && room.config.reservedUserId !== userId && room.player1Id !== userId) {
+      throw new Error("Esta mesa está reservada para otro jugador");
     }
 
     // Check if room is full
@@ -445,8 +477,17 @@ export class GameRoomManager {
     // Player 1 = "player" side, Player 2 = "opponent" side
     let gameState = initializeMultiplayerGame(player1Deck, player2Deck);
 
-    // Start the game (deals cards, sets up prizes)
+    // Start the game (deals cards, sets up prizes — always 6)
     gameState = startGame(gameState);
+
+    // Adjust prize count if room is configured for fewer prizes
+    const trimCount = 6 - room.config.prizeCount;
+    if (trimCount > 0) {
+      const excessPlayer = gameState.playerPrizes.splice(-trimCount);
+      gameState.playerDeck.push(...excessPlayer);
+      const excessOpponent = gameState.opponentPrizes.splice(-trimCount);
+      gameState.opponentDeck.push(...excessOpponent);
+    }
 
     // Neutralize initial events (always canonical: Tú=P1, Rival=P2)
     gameState = {
@@ -1358,6 +1399,19 @@ export class GameRoomManager {
     const rooms: GameRoom[] = [];
     for (const room of this.rooms.values()) {
       if (room.status === "waiting" && !room.player2Id) {
+        rooms.push(room);
+      }
+    }
+    return rooms;
+  }
+
+  /**
+   * Get all active rooms (waiting or playing)
+   */
+  getActiveRooms(): GameRoom[] {
+    const rooms: GameRoom[] = [];
+    for (const room of this.rooms.values()) {
+      if (room.status === "waiting" || room.status === "playing") {
         rooms.push(room);
       }
     }
