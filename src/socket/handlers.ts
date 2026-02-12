@@ -1,4 +1,9 @@
 import type { Server, Socket } from "socket.io";
+import {
+  baseSetCards,
+  jungleCards,
+  isPokemonCard,
+} from "@gonzaloaguila/game-core";
 import { GameRoomManager } from "./rooms.js";
 import { maskGameStateForPlayer } from "./state-masking.js";
 import {
@@ -11,6 +16,47 @@ import { checkAndUpdateProgress } from "../modules/achievements/achievements.ser
 import { verifyAccessToken } from "../lib/jwt.js";
 import * as chatService from "../modules/chat/chat.service.js";
 import { prisma } from "../lib/prisma.js";
+import type { DeckCardEntry } from "../modules/decks/decks.service.js";
+
+// Card catalog for variant map lookups
+const allCards = [...baseSetCards, ...jungleCards];
+const cardById = new Map(allCards.map((c) => [c.id, c]));
+
+/**
+ * Build a variant map from deck entries: card name -> overlay ID.
+ * Only includes entries that have a variantId set.
+ */
+function buildVariantMap(entries: DeckCardEntry[]): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (const entry of entries) {
+    if (!entry.variantId) continue;
+    const card = cardById.get(entry.cardDefId);
+    if (!card) continue;
+    const name = isPokemonCard(card) ? card.name : card.name;
+    map[name] = entry.variantId;
+  }
+  return map;
+}
+
+/**
+ * Fetch deck entries from the database and build a variant map.
+ * Returns an empty map if the deck is not found or is a theme deck ID.
+ */
+async function getVariantMapForDeck(deckId: string | null): Promise<Record<string, string>> {
+  if (!deckId) return {};
+  // Theme deck IDs (from game-core) won't be UUIDs — skip DB lookup
+  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(deckId);
+  if (!isUuid) return {};
+
+  const deck = await prisma.deck.findUnique({
+    where: { id: deckId },
+    select: { cards: true },
+  });
+  if (!deck || !deck.cards) return {};
+
+  const entries = deck.cards as unknown as DeckCardEntry[];
+  return buildVariantMap(entries);
+}
 
 // Types for Socket.io events
 interface JoinRoomPayload {
@@ -203,12 +249,21 @@ export function setupSocketHandlers(io: Server): void {
         if (room.status === "playing" && room.gameState) {
           console.log(`[joinRoom] Reconnecting to existing game, sending current state to socket ${socket.id}`);
           console.log(`[joinRoom] Room socket IDs: P1=${room.player1SocketId}, P2=${room.player2SocketId}`);
+
+          // Build variant maps for reconnection
+          const [p1Variants, p2Variants] = await Promise.all([
+            getVariantMapForDeck(room.player1DeckId),
+            getVariantMapForDeck(room.player2DeckId),
+          ]);
+
           // Send current game state to the reconnecting player
           socket.emit("gameStart", {
             roomId,
             gameState: maskGameStateForPlayer(room.gameState, isPlayer1 ? "player1" : "player2"),
             isPlayer1,
             opponentInfo: isPlayer1 ? room.joiner : room.creator,
+            playerVariantMap: isPlayer1 ? p1Variants : p2Variants,
+            opponentVariantMap: isPlayer1 ? p2Variants : p1Variants,
           });
           return;
         }
@@ -223,18 +278,28 @@ export function setupSocketHandlers(io: Server): void {
           // Update room list (room now playing)
           broadcastRoomList(io);
 
+          // Build variant maps from deck entries
+          const [p1Variants, p2Variants] = await Promise.all([
+            getVariantMapForDeck(room.player1DeckId),
+            getVariantMapForDeck(room.player2DeckId),
+          ]);
+
           // Send masked state to each player
           io.to(room.player1SocketId!).emit("gameStart", {
             roomId,
             gameState: maskGameStateForPlayer(gameState, "player1"),
             isPlayer1: true,
             opponentInfo: room.joiner,
+            playerVariantMap: p1Variants,
+            opponentVariantMap: p2Variants,
           });
           io.to(room.player2SocketId!).emit("gameStart", {
             roomId,
             gameState: maskGameStateForPlayer(gameState, "player2"),
             isPlayer1: false,
             opponentInfo: room.creator,
+            playerVariantMap: p2Variants,
+            opponentVariantMap: p1Variants,
           });
 
           console.log(`🎮 Game auto-started in room ${roomId}`);
@@ -273,14 +338,24 @@ export function setupSocketHandlers(io: Server): void {
         if (room.player1Ready && room.player2Ready) {
           const gameState = await roomManager.startGame(roomId);
 
+          // Build variant maps from deck entries
+          const [p1Variants, p2Variants] = await Promise.all([
+            getVariantMapForDeck(room.player1DeckId),
+            getVariantMapForDeck(room.player2DeckId),
+          ]);
+
           // Send masked state to each player
           io.to(room.player1SocketId!).emit("gameStart", {
             gameState: maskGameStateForPlayer(gameState, "player1"),
             opponentInfo: room.joiner,
+            playerVariantMap: p1Variants,
+            opponentVariantMap: p2Variants,
           });
           io.to(room.player2SocketId!).emit("gameStart", {
             gameState: maskGameStateForPlayer(gameState, "player2"),
             opponentInfo: room.creator,
+            playerVariantMap: p2Variants,
+            opponentVariantMap: p1Variants,
           });
 
           console.log(`🎮 Game started in room ${roomId}`);

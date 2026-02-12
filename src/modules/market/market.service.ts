@@ -129,19 +129,24 @@ const OVERLAY_DEFS = [
   { id: "fire", label: "Ígneo" },
 ];
 
+// Only these overlays are purchasable in the market
+const MARKET_OVERLAY_IDS = ["holo-sparkle", "sepia", "rainbow"];
+
 const AVAILABLE_VARIANTS = rareCards.flatMap((card) => {
   const pokeName = isPokemonCard(card) ? card.name : card.id;
-  return OVERLAY_DEFS.map((overlay) => {
-    // Build a slug: "alakazam-glitch", "charizard-rainbow", etc.
-    const slug = `${pokeName.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${overlay.id}`;
-    return {
-      itemId: slug,
-      name: `${pokeName} ${overlay.label}`,
-      cardDefId: card.id,
-      overlayId: overlay.id,
-      imageUrl: getCardImageUrl(card),
-    };
-  });
+  return OVERLAY_DEFS
+    .filter((overlay) => MARKET_OVERLAY_IDS.includes(overlay.id))
+    .map((overlay) => {
+      // Build a slug: "alakazam-holo-sparkle", "charizard-rainbow", etc.
+      const slug = `${pokeName.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${overlay.id}`;
+      return {
+        itemId: slug,
+        name: `${pokeName} ${overlay.label}`,
+        cardDefId: card.id,
+        overlayId: overlay.id,
+        imageUrl: getCardImageUrl(card),
+      };
+    });
 });
 
 // Playmats — board backgrounds

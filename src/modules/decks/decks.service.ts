@@ -16,6 +16,7 @@ import * as usersService from "../users/users.service.js";
 export interface DeckCardEntry {
   cardDefId: string;
   quantity: number;
+  variantId?: string;
 }
 
 const DECK_SLOT_PRICE = 500;
