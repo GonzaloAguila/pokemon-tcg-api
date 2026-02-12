@@ -27,6 +27,8 @@ export type DraftConfig = {
   pickTimeSeconds: number; // default 45
   keepInCollection: boolean;
   minDeckSize: number; // default 40
+  entryFee: number; // 0 = free, default 2000
+  adminPlays: boolean; // if true, admin takes seat 0 and plays (doesn't pay)
 };
 
 export type DraftPhase =
@@ -80,6 +82,12 @@ export type DraftRoom = {
   matchPairings: MatchPairing[] | null;
   tournament: Tournament | null;
   bonusPickPool: GameCard[];
+  /** Admin user ID (always set, even when admin is also a player) */
+  adminId: string;
+  /** Admin socket ID for sending state updates when admin is spectating */
+  adminSocketId: string | null;
+  /** Admin display name (for room list when admin is not a player) */
+  adminName: string;
 };
 
 /** Masked player visible to other players (hides pack & specific cards) */
@@ -170,6 +178,8 @@ export type DraftRoomInfo = {
   playerCount: number;
   maxPlayers: number;
   adminName: string;
+  entryFee: number;
+  adminPlays: boolean;
 };
 
 export type BroadcastFn = (roomId: string) => void;
@@ -277,26 +287,33 @@ export class DraftRoomManager {
       pickTimeSeconds: config.pickTimeSeconds ?? 45,
       keepInCollection: config.keepInCollection ?? false,
       minDeckSize: config.minDeckSize ?? 40,
+      entryFee: config.entryFee ?? 2000,
+      adminPlays: config.adminPlays ?? false,
     };
+
+    const players: DraftPlayer[] = [];
+
+    // If adminPlays, admin takes seat 0 as a participating player
+    if (fullConfig.adminPlays) {
+      players.push({
+        id: adminId,
+        socketId: adminSocketId,
+        name: adminName,
+        seatIndex: 0,
+        currentPack: [],
+        draftedCards: [],
+        deck: null,
+        isReady: false,
+        isAdmin: true,
+        pendingMatchInfo: null,
+      });
+    }
 
     const room: DraftRoom = {
       id: roomId,
       config: fullConfig,
       phase: "lobby",
-      players: [
-        {
-          id: adminId,
-          socketId: adminSocketId,
-          name: adminName,
-          seatIndex: 0,
-          currentPack: [],
-          draftedCards: [],
-          deck: null,
-          isReady: false,
-          isAdmin: true,
-          pendingMatchInfo: null,
-        },
-      ],
+      players,
       currentRound: 0,
       currentPick: 0,
       direction: "clockwise",
@@ -307,6 +324,9 @@ export class DraftRoomManager {
       matchPairings: null,
       tournament: null,
       bonusPickPool: [],
+      adminId,
+      adminSocketId,
+      adminName,
     };
 
     this.rooms.set(roomId, room);
@@ -322,6 +342,13 @@ export class DraftRoomManager {
   ): DraftRoom {
     const room = this.rooms.get(roomId);
     if (!room) throw new Error("Sala no encontrada");
+
+    // Reconnection: spectating admin reconnects (not in players array)
+    if (room.adminId === userId && !room.players.find((p) => p.id === userId)) {
+      room.adminSocketId = socketId;
+      this.socketToRoom.set(socketId, roomId);
+      return room;
+    }
 
     // Reconnection: existing player updates their socket (allowed in any phase)
     const existing = room.players.find((p) => p.id === userId);
@@ -399,17 +426,48 @@ export class DraftRoomManager {
     return room;
   }
 
+  /**
+   * Remove a player by userId (used for kicking players who can't pay entry fee).
+   * Only works during lobby phase.
+   */
+  removePlayer(roomId: string, userId: string): DraftPlayer | null {
+    const room = this.rooms.get(roomId);
+    if (!room) return null;
+
+    const idx = room.players.findIndex((p) => p.id === userId);
+    if (idx === -1) return null;
+
+    const player = room.players[idx];
+    if (player.socketId) this.socketToRoom.delete(player.socketId);
+
+    room.players.splice(idx, 1);
+    // Re-index seat positions
+    room.players.forEach((p, i) => {
+      p.seatIndex = i;
+    });
+
+    room.events.push(
+      this.createEvent("system", `${player.name} fue removido del draft`),
+    );
+
+    return player;
+  }
+
   deleteRoom(roomId: string, socketId: string): boolean {
     const room = this.rooms.get(roomId);
     if (!room) return false;
 
-    const admin = room.players.find((p) => p.socketId === socketId);
-    if (!admin?.isAdmin) return false;
+    // Check if the requesting socket is the admin (either in players or as spectating admin)
+    const isAdminPlayer = room.players.find((p) => p.socketId === socketId)?.isAdmin;
+    const isAdminSpectator = room.adminSocketId === socketId;
+    if (!isAdminPlayer && !isAdminSpectator) return false;
 
     if (room.pickTimer) clearTimeout(room.pickTimer);
     for (const p of room.players) {
       if (p.socketId) this.socketToRoom.delete(p.socketId);
     }
+    // Also clean up spectating admin socket mapping
+    if (room.adminSocketId) this.socketToRoom.delete(room.adminSocketId);
     this.rooms.delete(roomId);
     return true;
   }
@@ -422,8 +480,10 @@ export class DraftRoomManager {
     const room = this.rooms.get(roomId);
     if (!room) throw new Error("Sala no encontrada");
 
-    const admin = room.players.find((p) => p.socketId === socketId);
-    if (!admin?.isAdmin)
+    // Admin can be in players array (adminPlays) or spectating (adminSocketId)
+    const isAdminPlayer = room.players.find((p) => p.socketId === socketId)?.isAdmin;
+    const isAdminSpectator = room.adminSocketId === socketId;
+    if (!isAdminPlayer && !isAdminSpectator)
       throw new Error("Solo el admin puede iniciar el draft");
     if (room.players.length < 2)
       throw new Error("Se necesitan al menos 2 jugadores");
@@ -610,14 +670,15 @@ export class DraftRoomManager {
     const list: DraftRoomInfo[] = [];
     for (const room of this.rooms.values()) {
       if (room.phase === "lobby") {
-        const admin = room.players.find((p) => p.isAdmin);
         list.push({
           id: room.id,
           config: room.config,
           phase: room.phase,
           playerCount: room.players.length,
           maxPlayers: room.config.maxPlayers,
-          adminName: admin?.name ?? "Admin",
+          adminName: room.adminName,
+          entryFee: room.config.entryFee,
+          adminPlays: room.config.adminPlays,
         });
       }
     }
@@ -667,10 +728,24 @@ export class DraftRoomManager {
     const room = this.rooms.get(roomId);
     if (!room) return null;
 
+    this.socketToRoom.delete(socketId);
+
+    // Check if the disconnecting socket is the spectating admin (not in players)
+    if (room.adminSocketId === socketId && !room.players.find((p) => p.socketId === socketId)) {
+      room.adminSocketId = null;
+      room.events.push(
+        this.createEvent("system", `${room.adminName} (admin) se desconectó`),
+      );
+      // If lobby is empty and admin disconnected, clean up
+      if (room.phase === "lobby" && room.players.length === 0) {
+        this.rooms.delete(roomId);
+        return null;
+      }
+      return room;
+    }
+
     const player = room.players.find((p) => p.socketId === socketId);
     if (!player) return null;
-
-    this.socketToRoom.delete(socketId);
 
     if (room.phase === "lobby") {
       this.leaveRoom(roomId, socketId);

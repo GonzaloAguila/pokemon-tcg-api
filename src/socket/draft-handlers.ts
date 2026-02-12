@@ -10,22 +10,33 @@ import { DraftRoomManager } from "./draft-rooms.js";
 import { GameRoomManager } from "./rooms.js";
 import { maskGameStateForPlayer } from "./state-masking.js";
 import type { DraftConfig } from "./draft-rooms.js";
+import { prisma } from "../lib/prisma.js";
 
 // Singleton draft room manager (exported for game-over reporting)
 export const draftRoomManager = new DraftRoomManager();
 
 /**
- * Broadcast masked draft state to all connected players in a room.
+ * Broadcast masked draft state to all connected players in a room,
+ * and to the spectating admin if they are not in the players array.
  */
 function broadcastDraftState(io: Server, roomId: string): void {
   const room = draftRoomManager.getRoom(roomId);
   if (!room) return;
 
+  const sentSocketIds = new Set<string>();
+
   for (const player of room.players) {
     if (player.socketId) {
       const masked = draftRoomManager.getMaskedState(roomId, player.socketId);
       io.to(player.socketId).emit("draft:state", masked);
+      sentSocketIds.add(player.socketId);
     }
+  }
+
+  // Also send to spectating admin (when adminPlays is false)
+  if (room.adminSocketId && !sentSocketIds.has(room.adminSocketId)) {
+    const masked = draftRoomManager.getMaskedState(roomId, room.adminSocketId);
+    io.to(room.adminSocketId).emit("draft:state", masked);
   }
 }
 
@@ -152,9 +163,22 @@ export function registerDraftEvents(
 
   socket.on(
     "draft:create",
-    (payload: { userId: string; name: string; config?: Partial<DraftConfig> }) => {
+    async (payload: { userId: string; name: string; config?: Partial<DraftConfig> }) => {
       try {
         const { userId, name, config } = payload;
+
+        // Only admins and superadmins can create draft rooms
+        const user = await prisma.user.findUnique({
+          where: { id: userId },
+          select: { role: true },
+        });
+        if (!user || (user.role !== "admin" && user.role !== "superadmin")) {
+          socket.emit("draft:error", {
+            message: "Solo los administradores pueden crear salas de draft",
+          });
+          return;
+        }
+
         const room = draftRoomManager.createRoom(
           config ?? {},
           userId,
@@ -176,9 +200,29 @@ export function registerDraftEvents(
 
   socket.on(
     "draft:join",
-    (payload: { roomId: string; userId: string; name: string }) => {
+    async (payload: { roomId: string; userId: string; name: string }) => {
       try {
         const { roomId, userId, name } = payload;
+
+        // Check if the player has enough coins for the entry fee (new players only)
+        const existingRoom = draftRoomManager.getRoom(roomId);
+        if (existingRoom && existingRoom.phase === "lobby") {
+          const isReconnect = existingRoom.players.some((p) => p.id === userId);
+          const isSpectatingAdmin = existingRoom.adminId === userId && !existingRoom.config.adminPlays;
+          if (!isReconnect && !isSpectatingAdmin && existingRoom.config.entryFee > 0) {
+            const user = await prisma.user.findUnique({
+              where: { id: userId },
+              select: { coins: true },
+            });
+            if (!user || user.coins < existingRoom.config.entryFee) {
+              socket.emit("draft:error", {
+                message: `No tienes suficientes monedas para unirte (necesitas ${existingRoom.config.entryFee})`,
+              });
+              return;
+            }
+          }
+        }
+
         const room = draftRoomManager.joinRoom(roomId, userId, socket.id, name);
 
         socket.join(room.id);
@@ -245,9 +289,67 @@ export function registerDraftEvents(
   // Draft Actions
   // --------------------------------------------------------------------------
 
-  socket.on("draft:start", (payload: { roomId: string }) => {
+  socket.on("draft:start", async (payload: { roomId: string }) => {
     try {
       const { roomId } = payload;
+
+      // Entry fee logic: check and charge players before starting
+      const room = draftRoomManager.getRoom(roomId);
+      if (!room) {
+        socket.emit("draft:error", { message: "Sala no encontrada" });
+        return;
+      }
+
+      const entryFee = room.config.entryFee;
+
+      if (entryFee > 0) {
+        const kicked: string[] = [];
+
+        // Check all non-admin players can pay
+        for (const player of [...room.players]) {
+          if (player.isAdmin) continue; // admin doesn't pay
+          const dbUser = await prisma.user.findUnique({
+            where: { id: player.id },
+            select: { coins: true },
+          });
+          if (!dbUser || dbUser.coins < entryFee) {
+            kicked.push(player.id);
+            const removedPlayer = draftRoomManager.removePlayer(roomId, player.id);
+            // Notify kicked player
+            if (removedPlayer?.socketId) {
+              const kickedSocket = io.sockets.sockets.get(removedPlayer.socketId);
+              if (kickedSocket) {
+                kickedSocket.emit("draft:error", {
+                  message: "No tienes suficientes monedas. Fuiste removido del draft.",
+                });
+                kickedSocket.leave(roomId);
+              }
+            }
+          }
+        }
+
+        // Re-check minimum players after kicks
+        const remainingRoom = draftRoomManager.getRoom(roomId);
+        if (!remainingRoom || remainingRoom.players.length < 2) {
+          socket.emit("draft:error", {
+            message: "No hay suficientes jugadores con fondos para iniciar.",
+          });
+          // Broadcast updated state so clients see the kicked players removed
+          broadcastDraftState(io, roomId);
+          return;
+        }
+
+        // Charge remaining non-admin players
+        for (const player of remainingRoom.players) {
+          if (player.isAdmin) continue;
+          await prisma.user.update({
+            where: { id: player.id },
+            data: { coins: { decrement: entryFee } },
+          });
+        }
+      }
+
+      // Now proceed with starting the draft
       draftRoomManager.startDraft(roomId, socket.id);
       broadcastDraftState(io, roomId);
       broadcastRoomList(io); // room no longer visible in lobby
