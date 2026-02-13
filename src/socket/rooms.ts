@@ -763,7 +763,7 @@ export class GameRoomManager {
                 };
               }
 
-              return endTurn(updatedState);
+              return endTurn(updatedState, true);
             });
             break;
           }
@@ -802,7 +802,7 @@ export class GameRoomManager {
 
             // Execute Metronome via game-core
             usedExecuteForPlayer = true;
-            newState = executeForPlayer((state) => executeMetronome(state, copiedAttack));
+            newState = executeForPlayer((state) => executeMetronome(state, copiedAttack, false, true));
           } else {
             // ── Normal attack ──
             if (activePokemon && isPokemonCard(activePokemon.pokemon)) {
@@ -822,7 +822,7 @@ export class GameRoomManager {
             }
 
             usedExecuteForPlayer = true;
-            newState = executeForPlayer((state) => executeAttack(state, attackIndex));
+            newState = executeForPlayer((state) => executeAttack(state, attackIndex, false, true));
           }
 
           // Apply coin flip effects that executeAttack/executeMetronome skipped
@@ -864,7 +864,7 @@ export class GameRoomManager {
 
         case "endTurn":
           usedExecuteForPlayer = true;
-          newState = executeForPlayer((state) => endTurn(state));
+          newState = executeForPlayer((state) => endTurn(state, true));
           break;
 
         case "retreat": {
@@ -1289,7 +1289,8 @@ export class GameRoomManager {
                 return moveDamageWithDamageSwap(state, side, sourcePokemonId, targetPokemonId, amount);
               }
               case "energyBurn": {
-                return activateEnergyBurn(state, side);
+                const ebPokemonId = action.payload.pokemonId as string | undefined;
+                return activateEnergyBurn(state, side, ebPokemonId);
               }
               case "buzzap": {
                 const electrodePokemonId = action.payload.electrodePokemonId as string;

@@ -20,7 +20,10 @@
       "Bash(findstr:*)",
       "Bash(taskkill:*)",
       "Bash(railway:*)",
-      "Bash(cmd //c \"taskkill /PID 36852 /F\")"
+      "Bash(cmd //c \"taskkill /PID 36852 /F\")",
+      "Bash(test:*)",
+      "Bash(tasklist:*)",
+      "Bash(echo:*)"
     ]
   }
 }
