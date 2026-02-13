@@ -1,8 +1,11 @@
 import type { Server, Socket } from "socket.io";
 import {
+  type GameCard,
   baseSetCards,
   jungleCards,
   isPokemonCard,
+  getDeckById as getThemeDeckById,
+  decks as themeDeckList,
 } from "@gonzaloaguila/game-core";
 import { GameRoomManager } from "./rooms.js";
 import { maskGameStateForPlayer } from "./state-masking.js";
@@ -18,9 +21,82 @@ import * as chatService from "../modules/chat/chat.service.js";
 import { prisma } from "../lib/prisma.js";
 import type { DeckCardEntry } from "../modules/decks/decks.service.js";
 
-// Card catalog for variant map lookups
+// Card catalog for variant map lookups and deck resolution
 const allCards = [...baseSetCards, ...jungleCards];
 const cardById = new Map(allCards.map((c) => [c.id, c]));
+
+/** UUID pattern used to distinguish user DB deck IDs from theme deck IDs */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Resolve a deck ID into an array of GameCard instances ready for play.
+ *
+ * - If `deckId` is a UUID it is treated as a user-created deck stored in the
+ *   database.  The deck's `cards` JSON column (DeckCardEntry[]) is read and
+ *   each entry's `cardDefId` is looked up in the combined card catalog.
+ *
+ * - Otherwise it is treated as a built-in theme deck ID and resolved via the
+ *   game-core helper.
+ *
+ * Returns `null` only when the deck cannot be found at all (the caller should
+ * fall back to a sensible default).
+ */
+async function resolveDeckCards(deckId: string | null): Promise<GameCard[] | null> {
+  if (!deckId) return null;
+
+  // ── User database deck ──────────────────────────────────────────────
+  if (UUID_RE.test(deckId)) {
+    const deck = await prisma.deck.findUnique({
+      where: { id: deckId },
+      select: { cards: true },
+    });
+    if (!deck || !deck.cards) return null;
+
+    const entries = deck.cards as unknown as DeckCardEntry[];
+    const cards: GameCard[] = [];
+
+    for (const entry of entries) {
+      const template = cardById.get(entry.cardDefId);
+      if (!template) {
+        console.warn(`[resolveDeckCards] Card definition not found: ${entry.cardDefId}`);
+        continue;
+      }
+      for (let i = 0; i < entry.quantity; i++) {
+        cards.push({
+          ...template,
+          id: `${template.name}-${i}-${Date.now()}-${Math.random()}`,
+        });
+      }
+    }
+
+    return cards.length > 0 ? cards : null;
+  }
+
+  // ── Built-in theme deck ─────────────────────────────────────────────
+  const themeDeck = getThemeDeckById(deckId);
+  if (!themeDeck) return null;
+
+  // Build card instances the same way game-core's buildDeckFromEntries does,
+  // but search the full catalog (Base Set + Jungle) instead of only Base Set.
+  const cards: GameCard[] = [];
+  for (const entry of themeDeck.cards) {
+    // Theme deck entries use {cardNumber, quantity, set?}
+    const template = allCards.find(
+      (c) => c.number === entry.cardNumber && (!entry.set || c.set === entry.set),
+    );
+    if (!template) {
+      console.warn(`[resolveDeckCards] Theme deck card #${entry.cardNumber} not found`);
+      continue;
+    }
+    for (let i = 0; i < entry.quantity; i++) {
+      cards.push({
+        ...template,
+        id: `${template.name}-${i}-${Date.now()}-${Math.random()}`,
+      });
+    }
+  }
+  return cards.length > 0 ? cards : null;
+}
 
 /**
  * Build a variant map from deck entries: card name -> overlay ID.
@@ -56,6 +132,43 @@ async function getVariantMapForDeck(deckId: string | null): Promise<Record<strin
 
   const entries = deck.cards as unknown as DeckCardEntry[];
   return buildVariantMap(entries);
+}
+
+/**
+ * Resolve both players' decks and start the game in the given room.
+ *
+ * When either (or both) players have selected a user-created database deck
+ * we resolve the card entries into GameCard[] arrays and pass them to
+ * startGame() as pre-resolved decks.  This ensures the prize-count
+ * adjustment and event neutralization still take place.
+ *
+ * When BOTH decks are theme-deck IDs (or missing), startGame() falls back
+ * to the built-in theme deck path internally.
+ */
+async function resolveAndStartGame(roomManager: GameRoomManager, roomId: string) {
+  const room = roomManager.getRoom(roomId);
+  if (!room) throw new Error("Room not found");
+
+  const p1Cards = await resolveDeckCards(room.player1DeckId);
+  const p2Cards = await resolveDeckCards(room.player2DeckId);
+
+  // If at least one player has a resolved custom deck, use the raw-cards path
+  if (p1Cards || p2Cards) {
+    // Fallback for any player that couldn't be resolved
+    const fallback1 = await resolveDeckCards(themeDeckList[0]?.id ?? "brushfire");
+    const fallback2 = await resolveDeckCards(themeDeckList[1]?.id ?? "overgrowth");
+
+    const deck1 = p1Cards ?? fallback1 ?? [];
+    const deck2 = p2Cards ?? fallback2 ?? [];
+
+    return roomManager.startGame(roomId, {
+      player1Cards: deck1,
+      player2Cards: deck2,
+    });
+  }
+
+  // Both are theme decks (or missing) — use the standard theme deck path
+  return roomManager.startGame(roomId);
 }
 
 // Types for Socket.io events
@@ -272,7 +385,7 @@ export function setupSocketHandlers(io: Server): void {
         console.log(`[joinRoom] Checking if room is ready: ${roomManager.isRoomReady(roomId)}`);
         if (roomManager.isRoomReady(roomId) && room.status === "waiting") {
           console.log(`[joinRoom] Room is ready, starting game...`);
-          const gameState = await roomManager.startGame(roomId);
+          const gameState = await resolveAndStartGame(roomManager, roomId);
           console.log(`[joinRoom] Game started, phase: ${gameState.gamePhase}`);
 
           // Update room list (room now playing)
@@ -336,7 +449,7 @@ export function setupSocketHandlers(io: Server): void {
 
         // Check if both players ready
         if (room.player1Ready && room.player2Ready) {
-          const gameState = await roomManager.startGame(roomId);
+          const gameState = await resolveAndStartGame(roomManager, roomId);
 
           // Build variant maps from deck entries
           const [p1Variants, p2Variants] = await Promise.all([

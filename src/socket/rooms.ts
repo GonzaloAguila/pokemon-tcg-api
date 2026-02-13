@@ -471,9 +471,16 @@ export class GameRoomManager {
   }
 
   /**
-   * Start the game
+   * Start the game.
+   *
+   * When `resolvedDecks` is provided (pre-resolved GameCard arrays from
+   * user database decks) those cards are used directly.  Otherwise the
+   * room's deckId values are treated as built-in theme deck IDs.
    */
-  async startGame(roomId: string): Promise<GameState> {
+  async startGame(
+    roomId: string,
+    resolvedDecks?: { player1Cards: GameCard[]; player2Cards: GameCard[] },
+  ): Promise<GameState> {
     const room = this.rooms.get(roomId);
     if (!room) throw new Error("Room not found");
 
@@ -483,16 +490,49 @@ export class GameRoomManager {
 
     room.status = "playing";
 
-    // Get decks - use default if not selected
-    const player1Deck = getDeckById(room.player1DeckId || "brushfire") || decks[0];
-    const player2Deck = getDeckById(room.player2DeckId || "overgrowth") || decks[1];
+    let gameState: GameState;
 
-    // Initialize multiplayer game with both decks
-    // Player 1 = "player" side, Player 2 = "opponent" side
-    let gameState = initializeMultiplayerGame(player1Deck, player2Deck);
-
-    // Start the game (deals cards, sets up prizes — always 6)
-    gameState = startGame(gameState);
+    if (resolvedDecks) {
+      // Use pre-resolved card arrays (user database decks)
+      gameState = {
+        playerDeck: shuffle(resolvedDecks.player1Cards),
+        playerHand: [],
+        playerPrizes: [],
+        playerDiscard: [],
+        playerActivePokemon: null,
+        playerBench: [],
+        opponentDeck: shuffle(resolvedDecks.player2Cards),
+        opponentHand: [],
+        opponentPrizes: [],
+        opponentDiscard: [],
+        opponentActivePokemon: null,
+        opponentBench: [],
+        selectedDeckId: "custom",
+        turnNumber: 0,
+        startingPlayer: null,
+        isPlayerTurn: false,
+        gameStarted: false,
+        gamePhase: GamePhase.Mulligan,
+        playerReady: false,
+        opponentReady: false,
+        energyAttachedThisTurn: false,
+        retreatedThisTurn: false,
+        playerCanTakePrize: false,
+        opponentCanTakePrize: false,
+        playerNeedsToPromote: false,
+        opponentNeedsToPromote: false,
+        activeModifiers: [],
+        gameResult: null,
+        events: [createGameEvent("Partida inicializada", "system")],
+      };
+      gameState = startGame(gameState);
+    } else {
+      // Fall back to built-in theme decks
+      const player1Deck = getDeckById(room.player1DeckId || "brushfire") || decks[0];
+      const player2Deck = getDeckById(room.player2DeckId || "overgrowth") || decks[1];
+      gameState = initializeMultiplayerGame(player1Deck, player2Deck);
+      gameState = startGame(gameState);
+    }
 
     // Adjust prize count if room is configured for fewer prizes
     const trimCount = 6 - room.config.prizeCount;
