@@ -11,11 +11,13 @@ import {
   type PokemonInPlay,
   type EnergyType,
   type AttackEffect,
+  type Attack,
   GamePhase,
   initializeMultiplayerGame,
   startGame,
   shuffle,
   executeAttack,
+  executeMetronome,
   endTurn,
   executeRetreat,
   doMulligan,
@@ -31,6 +33,12 @@ import {
   createGameEvent,
   AttackEffectType,
   applyStatusCondition,
+  // Pending state handlers
+  executeDeckSearch,
+  executeBenchDamage,
+  applyForceSwitch,
+  applySelfSwitch,
+  skipPendingSwitch,
   // Trainers
   playBill,
   playSwitch,
@@ -53,6 +61,7 @@ import {
   playPokemonBreeder,
   playPokemonTrader,
   playScoopUp,
+  playPokeBall,
   // Powers
   attachEnergyWithRainDance,
   moveEnergyWithEnergyTrans,
@@ -635,7 +644,7 @@ export class GameRoomManager {
 
     // Validate turn - player1 plays when isPlayerTurn is true
     // During MULLIGAN/SETUP, both players can place Pokemon regardless of turn
-    const turnFreeActions = ["ready", "mulligan", "playerReady", "takePrize", "promote"];
+    const turnFreeActions = ["ready", "mulligan", "playerReady", "takePrize", "promote", "deckSearch", "forceSwitch", "selfSwitch", "skipSwitch", "benchDamage"];
     const setupActions = ["playBasicToActive", "playBasicToBench"];
     const isSetupPhase = room.gameState.gamePhase === "MULLIGAN" || room.gameState.gamePhase === "SETUP";
     const isMyTurn = isPlayer1 ? room.gameState.isPlayerTurn : !room.gameState.isPlayerTurn;
@@ -706,32 +715,64 @@ export class GameRoomManager {
       switch (action.type) {
         case "attack": {
           const attackIndex = action.payload.attackIndex as number;
+          const metronomePayload = action.payload.metronomeAttack as { name: string; index: number } | undefined;
 
-          // Check if attack has coin flip effects and generate results
+          // Determine which attack to check for coin flips
           const activePokemon = isPlayer1 ? room.gameState!.playerActivePokemon : room.gameState!.opponentActivePokemon;
           let coinFlipInfo: { attackName: string; results: Array<"heads" | "tails"> } | null = null;
           let coinFlipEffects: AttackEffect[] = [];
 
-          if (activePokemon && isPokemonCard(activePokemon.pokemon)) {
-            const attack = activePokemon.pokemon.attacks[attackIndex];
-            if (attack) {
-              coinFlipEffects = (attack.effects || []).filter(e => e.coinFlip);
-              if (coinFlipEffects.length > 0) {
-                const count = coinFlipEffects[0].coinFlip!.count;
-                const results: Array<"heads" | "tails"> = [];
-                for (let i = 0; i < count; i++) {
-                  results.push(Math.random() < 0.5 ? "heads" : "tails");
+          if (metronomePayload) {
+            // ── Metronome: find the copied attack from opponent's active Pokemon ──
+            const opponentActive = isPlayer1 ? room.gameState!.opponentActivePokemon : room.gameState!.playerActivePokemon;
+            if (!opponentActive || !isPokemonCard(opponentActive.pokemon)) {
+              return { success: false, error: "Opponent has no active Pokemon to copy attack from" };
+            }
+            const copiedAttack: Attack | undefined = opponentActive.pokemon.attacks[metronomePayload.index];
+            if (!copiedAttack) {
+              return { success: false, error: "Copied attack not found on opponent's active Pokemon" };
+            }
+
+            console.log(`[attack] Metronome copying ${copiedAttack.name} from opponent's ${opponentActive.pokemon.name}`);
+
+            // Check coin flip effects on the COPIED attack (not the original Metronome)
+            coinFlipEffects = (copiedAttack.effects || []).filter(e => e.coinFlip);
+            if (coinFlipEffects.length > 0) {
+              const count = coinFlipEffects[0].coinFlip!.count;
+              const results: Array<"heads" | "tails"> = [];
+              for (let i = 0; i < count; i++) {
+                results.push(Math.random() < 0.5 ? "heads" : "tails");
+              }
+              coinFlipInfo = { attackName: copiedAttack.name, results };
+              console.log(`[attack] Metronome coin flip for ${copiedAttack.name}: ${results.join(", ")}`);
+            }
+
+            // Execute Metronome via game-core
+            usedExecuteForPlayer = true;
+            newState = executeForPlayer((state) => executeMetronome(state, copiedAttack));
+          } else {
+            // ── Normal attack ──
+            if (activePokemon && isPokemonCard(activePokemon.pokemon)) {
+              const attack = activePokemon.pokemon.attacks[attackIndex];
+              if (attack) {
+                coinFlipEffects = (attack.effects || []).filter(e => e.coinFlip);
+                if (coinFlipEffects.length > 0) {
+                  const count = coinFlipEffects[0].coinFlip!.count;
+                  const results: Array<"heads" | "tails"> = [];
+                  for (let i = 0; i < count; i++) {
+                    results.push(Math.random() < 0.5 ? "heads" : "tails");
+                  }
+                  coinFlipInfo = { attackName: attack.name, results };
+                  console.log(`[attack] Coin flip for ${attack.name}: ${results.join(", ")}`);
                 }
-                coinFlipInfo = { attackName: attack.name, results };
-                console.log(`[attack] Coin flip for ${attack.name}: ${results.join(", ")}`);
               }
             }
+
+            usedExecuteForPlayer = true;
+            newState = executeForPlayer((state) => executeAttack(state, attackIndex));
           }
 
-          usedExecuteForPlayer = true;
-          newState = executeForPlayer((state) => executeAttack(state, attackIndex));
-
-          // Apply coin flip effects that executeAttack skipped
+          // Apply coin flip effects that executeAttack/executeMetronome skipped
           if (coinFlipInfo && coinFlipEffects.length > 0) {
             newState = applyCoinFlipEffects(newState, coinFlipInfo.results, coinFlipEffects, isPlayer1);
             console.log(`[attack] Applied coin flip effects for ${coinFlipInfo.attackName}`);
@@ -1095,6 +1136,40 @@ export class GameRoomManager {
           break;
         }
 
+        case "deckSearch": {
+          const selectedCardId = action.payload.cardId as string | null;
+          usedExecuteForPlayer = true;
+          newState = executeForPlayer((state) => executeDeckSearch(state, selectedCardId));
+          break;
+        }
+
+        case "forceSwitch": {
+          const benchIndex = action.payload.benchIndex as number;
+          usedExecuteForPlayer = true;
+          newState = executeForPlayer((state) => applyForceSwitch(state, benchIndex));
+          break;
+        }
+
+        case "selfSwitch": {
+          const benchIndex = action.payload.benchIndex as number;
+          usedExecuteForPlayer = true;
+          newState = executeForPlayer((state) => applySelfSwitch(state, benchIndex));
+          break;
+        }
+
+        case "skipSwitch": {
+          usedExecuteForPlayer = true;
+          newState = executeForPlayer((state) => skipPendingSwitch(state));
+          break;
+        }
+
+        case "benchDamage": {
+          const selectedPokemonIds = action.payload.selectedPokemonIds as string[];
+          usedExecuteForPlayer = true;
+          newState = executeForPlayer((state) => executeBenchDamage(state, selectedPokemonIds));
+          break;
+        }
+
         case "mulligan": {
           // Mulligan: shuffle hand back into deck and draw 7 new cards
           // isPlayer1 = true means player1's perspective, so isPlayer = true
@@ -1181,6 +1256,7 @@ export class GameRoomManager {
           const cardId = action.payload.cardId as string;
           const trainerName = action.payload.trainerName as string;
           const selections = action.payload.selections as string[][] || [];
+          const coinResult = action.payload.coinResult as string | undefined;
 
           console.log(`[playTrainer] ${isPlayer1 ? 'P1' : 'P2'} playing ${trainerName}`);
 
@@ -1273,6 +1349,11 @@ export class GameRoomManager {
                 const targetPokemonId = selections[0]?.[0] || "";
                 const targetIndex = findTargetIndex(targetPokemonId, state.playerActivePokemon, state.playerBench);
                 return playScoopUp(state, cardId, targetIndex);
+              }
+              case "Poké Ball": {
+                const isHeads = coinResult === "heads";
+                const selectedCardId = selections[0]?.[0] ?? null;
+                return playPokeBall(state, cardId, selectedCardId, isHeads);
               }
               default:
                 console.log(`[playTrainer] Unknown trainer: ${trainerName}`);
