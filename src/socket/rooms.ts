@@ -68,8 +68,16 @@ import {
   moveDamageWithDamageSwap,
   activateEnergyBurn,
   executeBuzzap,
+  executeHealFlip,
+  initiateShift,
+  executeShift,
+  executePeek,
+  clearPendingPeek,
   canUseRainDance,
   canAttachWithPower,
+  // Additional trainers
+  playDevolutionSpray,
+  playPokedex,
 } from "@gonzaloaguila/game-core";
 
 interface PlayerAction {
@@ -644,7 +652,7 @@ export class GameRoomManager {
 
     // Validate turn - player1 plays when isPlayerTurn is true
     // During MULLIGAN/SETUP, both players can place Pokemon regardless of turn
-    const turnFreeActions = ["ready", "mulligan", "playerReady", "takePrize", "promote", "deckSearch", "forceSwitch", "selfSwitch", "skipSwitch", "benchDamage"];
+    const turnFreeActions = ["ready", "mulligan", "playerReady", "takePrize", "promote", "deckSearch", "forceSwitch", "selfSwitch", "skipSwitch", "benchDamage", "clearPeek"];
     const setupActions = ["playBasicToActive", "playBasicToBench"];
     const isSetupPhase = room.gameState.gamePhase === "MULLIGAN" || room.gameState.gamePhase === "SETUP";
     const isMyTurn = isPlayer1 ? room.gameState.isPlayerTurn : !room.gameState.isPlayerTurn;
@@ -715,6 +723,51 @@ export class GameRoomManager {
       switch (action.type) {
         case "attack": {
           const attackIndex = action.payload.attackIndex as number;
+
+          // ── Porygon Conversion 1 / Conversion 2 ──
+          const conversionType = action.payload.conversionType as EnergyType | undefined;
+          const conversionEffect = action.payload.conversionEffect as "changeWeakness" | "changeResistance" | undefined;
+
+          if (conversionType && conversionEffect) {
+            usedExecuteForPlayer = true;
+            newState = executeForPlayer((state) => {
+              const attacker = state.playerActivePokemon;
+              if (!attacker || !isPokemonCard(attacker.pokemon)) return state;
+              const attack = attacker.pokemon.attacks[attackIndex];
+              if (!attack) return state;
+
+              let updatedState = { ...state };
+
+              if (conversionEffect === "changeWeakness") {
+                const defender = updatedState.opponentActivePokemon;
+                if (defender) {
+                  updatedState = {
+                    ...updatedState,
+                    opponentActivePokemon: { ...defender, modifiedWeakness: conversionType },
+                    events: [
+                      ...updatedState.events,
+                      createGameEvent(`${attacker.pokemon.name} usó ${attack.name}`, "action"),
+                      createGameEvent(`La debilidad de ${defender.pokemon.name} cambió a ${conversionType}`, "action"),
+                    ],
+                  };
+                }
+              } else {
+                updatedState = {
+                  ...updatedState,
+                  playerActivePokemon: { ...attacker, modifiedResistance: conversionType },
+                  events: [
+                    ...updatedState.events,
+                    createGameEvent(`${attacker.pokemon.name} usó ${attack.name}`, "action"),
+                    createGameEvent(`La resistencia de ${attacker.pokemon.name} cambió a ${conversionType}`, "action"),
+                  ],
+                };
+              }
+
+              return endTurn(updatedState);
+            });
+            break;
+          }
+
           const metronomePayload = action.payload.metronomeAttack as { name: string; index: number } | undefined;
 
           // Determine which attack to check for coin flips
@@ -1170,6 +1223,12 @@ export class GameRoomManager {
           break;
         }
 
+        case "clearPeek": {
+          usedExecuteForPlayer = true;
+          newState = executeForPlayer((state) => clearPendingPeek(state));
+          break;
+        }
+
         case "mulligan": {
           // Mulligan: shuffle hand back into deck and draw 7 new cards
           // isPlayer1 = true means player1's perspective, so isPlayer = true
@@ -1237,6 +1296,22 @@ export class GameRoomManager {
                 const chosenEnergyType = action.payload.chosenEnergyType as EnergyType;
                 const targetPokemonId = action.payload.targetPokemonId as string;
                 return executeBuzzap(state, side, electrodePokemonId, chosenEnergyType, targetPokemonId);
+              }
+              case "healFlip": {
+                const targetPokemonId = action.payload.targetPokemonId as string;
+                return executeHealFlip(state, targetPokemonId, side, pokemonId);
+              }
+              case "typeShift": {
+                const chosenType = action.payload.chosenType as EnergyType;
+                const initiated = initiateShift(state, side, pokemonId);
+                return executeShift(initiated, side, chosenType);
+              }
+              case "peek": {
+                const peekType = action.payload.peekType as "playerDeck" | "opponentDeck" | "opponentHand" | "playerPrize" | "opponentPrize";
+                return executePeek(state, side, pokemonId, peekType);
+              }
+              case "clearPeek": {
+                return clearPendingPeek(state);
               }
               default:
                 console.log(`[usePower] Unknown power type: ${powerType}`);
@@ -1354,6 +1429,16 @@ export class GameRoomManager {
                 const isHeads = coinResult === "heads";
                 const selectedCardId = selections[0]?.[0] ?? null;
                 return playPokeBall(state, cardId, selectedCardId, isHeads);
+              }
+              case "Devolution Spray": {
+                const pokemonId = selections[0]?.[0] || "";
+                const targetIndex = findTargetIndex(pokemonId, state.playerActivePokemon, state.playerBench);
+                return playDevolutionSpray(state, cardId, targetIndex);
+              }
+              case "Pokédex": {
+                // selections[0] contains the new order as string indices
+                const newOrder = (selections[0] || []).map(s => parseInt(s, 10));
+                return playPokedex(state, cardId, newOrder);
               }
               default:
                 console.log(`[playTrainer] Unknown trainer: ${trainerName}`);
