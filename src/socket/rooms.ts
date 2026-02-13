@@ -152,18 +152,40 @@ function applyCoinFlipEffects(
   for (const effect of effects) {
     if (!effect.coinFlip) continue;
 
-    // ApplyStatus on heads (e.g., Magnemite's Thundershock -> Paralyze)
-    if (effect.type === AttackEffectType.ApplyStatus && effect.status && effect.coinFlip.onHeads && headsCount > 0) {
-      // Status conditions from attacks apply to the defender
-      const defender = isPlayer1 ? newState.opponentActivePokemon : newState.playerActivePokemon;
-      if (defender) {
-        const updatedDefender = applyStatusCondition(defender, effect.status, newState.turnNumber);
-        if (isPlayer1) {
-          newState = { ...newState, opponentActivePokemon: updatedDefender };
-        } else {
-          newState = { ...newState, playerActivePokemon: updatedDefender };
+    // ApplyStatus on heads (e.g., Magnemite's Thundershock -> Paralyze, Venomoth Venom Powder -> Confused+Poisoned)
+    if (effect.type === AttackEffectType.ApplyStatus) {
+      // Status can be in effect.status (no-coinFlip attacks handled by engine) or in coinFlip.onHeads/onTails
+      let statusToApply: string | null = null;
+      if (headsCount > 0 && effect.coinFlip.onHeads && effect.coinFlip.onHeads !== "damage" && effect.coinFlip.onHeads !== "protection") {
+        statusToApply = effect.coinFlip.onHeads;
+      } else if (tailsCount > 0 && headsCount === 0 && effect.coinFlip.onTails && effect.coinFlip.onTails !== "damage" && effect.coinFlip.onTails !== "protection") {
+        statusToApply = effect.coinFlip.onTails;
+      }
+      // Fallback: if effect.status is set and we got heads, use it
+      if (!statusToApply && effect.status && headsCount > 0) {
+        statusToApply = effect.status;
+      }
+
+      if (statusToApply) {
+        const isSelfTarget = effect.target === "self";
+        const defenderKey = isSelfTarget
+          ? (isPlayer1 ? "playerActivePokemon" : "opponentActivePokemon")
+          : (isPlayer1 ? "opponentActivePokemon" : "playerActivePokemon");
+        const target = newState[defenderKey as keyof GameState] as PokemonInPlay | null;
+
+        if (target) {
+          // Apply primary status + any additional statuses (e.g. Venom Powder: confused + poisoned)
+          const allStatuses = [statusToApply, ...((effect as { additionalStatuses?: string[] }).additionalStatuses || [])];
+          for (const st of allStatuses) {
+            const currentTarget = newState[defenderKey as keyof GameState] as PokemonInPlay | null;
+            if (!currentTarget) break;
+            const updated = applyStatusCondition(currentTarget, st as "paralyzed" | "poisoned" | "confused" | "asleep" | "cannotAttack", newState.turnNumber);
+            if (updated !== currentTarget) {
+              newState = { ...newState, [defenderKey]: updated };
+              console.log(`[coinFlip] Applied ${st} to ${isSelfTarget ? "attacker" : "defender"}`);
+            }
+          }
         }
-        console.log(`[coinFlip] Applied ${effect.status} to defender`);
       }
     }
 
@@ -213,6 +235,17 @@ function applyCoinFlipEffects(
         if (isPlayer1) { newState = { ...newState, playerActivePokemon: updatedAttacker }; }
         else { newState = { ...newState, opponentActivePokemon: updatedAttacker }; }
         console.log(`[coinFlip] Applied protection (${protType})`);
+      }
+    }
+
+    // Prevent Retreat on heads (e.g., Victreebel's Acid)
+    if (effect.coinFlip.onHeads === "preventRetreat" && headsCount > 0) {
+      const defender = isPlayer1 ? newState.opponentActivePokemon : newState.playerActivePokemon;
+      if (defender) {
+        const updatedDefender = { ...defender, retreatPrevented: true, retreatPreventedOnTurn: newState.turnNumber };
+        if (isPlayer1) { newState = { ...newState, opponentActivePokemon: updatedDefender }; }
+        else { newState = { ...newState, playerActivePokemon: updatedDefender }; }
+        console.log(`[coinFlip] Applied preventRetreat to defender`);
       }
     }
   }
