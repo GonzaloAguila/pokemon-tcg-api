@@ -220,7 +220,7 @@ function applyCoinFlipEffects(
       }
     }
 
-    // Protection on heads (e.g., Chansey's Scrunch)
+    // Protection on heads (e.g., Chansey's Scrunch, threshold protection)
     if (effect.type === AttackEffectType.Protection && effect.coinFlip.onHeads === "protection" && headsCount > 0) {
       const attacker = isPlayer1 ? newState.playerActivePokemon : newState.opponentActivePokemon;
       if (attacker) {
@@ -230,11 +230,12 @@ function applyCoinFlipEffects(
           protection: {
             type: protType as "damageOnly" | "damageAndEffects",
             expiresAfterTurn: newState.turnNumber + 1,
+            ...(effect.amount !== undefined && { threshold: effect.amount }),
           },
         };
         if (isPlayer1) { newState = { ...newState, playerActivePokemon: updatedAttacker }; }
         else { newState = { ...newState, opponentActivePokemon: updatedAttacker }; }
-        console.log(`[coinFlip] Applied protection (${protType})`);
+        console.log(`[coinFlip] Applied protection (${protType}${effect.amount ? `, threshold: ${effect.amount}` : ""})`);
       }
     }
 
