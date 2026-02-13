@@ -1299,6 +1299,16 @@ export class GameRoomManager {
               }
               case "healFlip": {
                 const targetPokemonId = action.payload.targetPokemonId as string;
+                const coinResult = action.payload.coinResult as string | undefined;
+                if (coinResult === "tails" || targetPokemonId === "__none__") {
+                  // Tails: mark power as used without healing
+                  const usedPowersThisTurn = [...(state.usedPowersThisTurn || []), pokemonId];
+                  return {
+                    ...state,
+                    usedPowersThisTurn,
+                    events: [...state.events, createGameEvent("Heal falló — salió cruz", "info")],
+                  };
+                }
                 return executeHealFlip(state, targetPokemonId, side, pokemonId);
               }
               case "typeShift": {
