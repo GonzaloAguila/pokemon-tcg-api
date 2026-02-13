@@ -12,7 +12,10 @@ export interface BattlePassRewardDef {
     | "profile_coin"
     | "ticket"
     | "card"
-    | "avatar";
+    | "avatar"
+    | "playmat"
+    | "random_card"
+    | "card_skin";
   rewardId?: string;
   amount?: number;
   label: string;
@@ -29,6 +32,9 @@ export interface BattlePassWithProgress {
   premiumPrice: number;
   status: string;
   rewards: BattlePassRewardDef[];
+  year?: number;
+  month?: number;
+  daysRemaining: number;
   enrollment: {
     activatedAt: string;
     isPremium: boolean;
@@ -49,4 +55,7 @@ export interface BattlePassListItem {
   isEnrolled: boolean;
   isPremium: boolean;
   currentDay: number | null;
+  year?: number;
+  month?: number;
+  daysRemaining?: number;
 }

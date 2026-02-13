@@ -1,7 +1,7 @@
 /**
  * Battle Pass Controller
  *
- * REST endpoints for battle pass listing, enrollment, upgrade, and reward claims.
+ * REST endpoints for the calendar-based monthly battle pass.
  */
 
 import {
@@ -24,6 +24,25 @@ const router = Router();
 const claimRewardSchema = z.object({
   track: z.enum(["standard", "premium"]),
 });
+
+// ---------------------------------------------------------------------------
+// GET /battle-pass/current — Current month's pass with auto-enrollment
+// ---------------------------------------------------------------------------
+
+router.get(
+  "/battle-pass/current",
+  requireAuth,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const result = await battlePassService.getCurrentPassWithProgress(
+        req.user!.userId,
+      );
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
 // ---------------------------------------------------------------------------
 // GET /battle-pass — List available passes
@@ -58,26 +77,6 @@ router.get(
         req.user!.userId,
       );
       res.json(result);
-    } catch (err) {
-      next(err);
-    }
-  },
-);
-
-// ---------------------------------------------------------------------------
-// POST /battle-pass/:id/activate — Enroll (free)
-// ---------------------------------------------------------------------------
-
-router.post(
-  "/battle-pass/:id/activate",
-  requireAuth,
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const result = await battlePassService.activatePass(
-        req.params.id,
-        req.user!.userId,
-      );
-      res.status(201).json(result);
     } catch (err) {
       next(err);
     }

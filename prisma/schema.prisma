@@ -316,10 +316,13 @@ model BattlePass {
   premiumPrice Int              @default(2000)
   status       BattlePassStatus @default(active)
   rewards      Json             @default("[]")
+  year         Int?
+  month        Int?
   createdAt    DateTime         @default(now())
   updatedAt    DateTime         @updatedAt
   userPasses   UserBattlePass[]
 
+  @@unique([year, month])
   @@index([status])
   @@map("battle_passes")
 }

@@ -1,12 +1,15 @@
 /**
- * Battle Pass Service
+ * Battle Pass Service — Calendar-based Monthly System
  *
- * Handles pass enrollment, premium upgrade, day progression, and reward claiming.
+ * Each month has its own BattlePass, auto-created on first access.
+ * All users are auto-enrolled. Day progression follows the calendar.
+ * Premium is a monthly purchase that expires with the month.
  */
 
 import { prisma } from "../../lib/prisma.js";
 import { Errors } from "../../middleware/error-handler.js";
 import * as usersService from "../users/users.service.js";
+import { DEFAULT_MONTHLY_REWARDS } from "./seed-data.js";
 import type {
   BattlePassRewardDef,
   BattlePassWithProgress,
@@ -14,78 +17,126 @@ import type {
 } from "./battle-pass.types.js";
 
 // =============================================================================
-// Helpers
+// Calendar Helpers
 // =============================================================================
+
+const MONTH_NAMES = [
+  "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+  "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
+];
+
+function getCurrentDayOfMonth(): number {
+  return new Date().getUTCDate();
+}
+
+function getDaysInMonth(year: number, month: number): number {
+  return new Date(year, month, 0).getDate();
+}
+
+function getCurrentYearMonth(): { year: number; month: number } {
+  const now = new Date();
+  return { year: now.getUTCFullYear(), month: now.getUTCMonth() + 1 };
+}
+
+function getDaysRemaining(year: number, month: number): number {
+  const total = getDaysInMonth(year, month);
+  const current = getCurrentDayOfMonth();
+  return Math.max(total - current, 0);
+}
+
+function isCurrentMonth(pass: { year: number | null; month: number | null }): boolean {
+  if (pass.year == null || pass.month == null) return false;
+  const { year, month } = getCurrentYearMonth();
+  return pass.year === year && pass.month === month;
+}
 
 /**
- * Calculate how many days have been unlocked since activation.
- * Day 1 is unlocked immediately. Day 2 unlocks 24h after activation, etc.
+ * Build rewards array for a specific month length.
+ * - Months < 30 days: filter to day <= durationDays
+ * - 31-day months: add day 31 as 100/200 coins
  */
-function calculateCurrentDay(activatedAt: Date, durationDays: number): number {
-  const now = new Date();
-  const elapsed = now.getTime() - activatedAt.getTime();
-  const daysPassed = Math.floor(elapsed / (24 * 60 * 60 * 1000));
-  return Math.min(daysPassed + 1, durationDays);
+function buildRewardsForMonth(durationDays: number): BattlePassRewardDef[] {
+  const rewards = DEFAULT_MONTHLY_REWARDS.filter((r) => r.day <= durationDays);
+
+  if (durationDays === 31) {
+    rewards.push(
+      { day: 31, track: "standard", rewardType: "coins", amount: 100, label: "100 Monedas", icon: "🪙" },
+      { day: 31, track: "premium",  rewardType: "coins", amount: 200, label: "200 Monedas", icon: "🪙" },
+    );
+  }
+
+  return rewards;
 }
 
 // =============================================================================
-// List available passes
+// Auto-create monthly pass
 // =============================================================================
 
-export async function getAvailablePasses(
-  userId?: string,
-): Promise<BattlePassListItem[]> {
-  const passes = await prisma.battlePass.findMany({
+async function getOrCreateMonthlyPass(year: number, month: number) {
+  const existing = await prisma.battlePass.findUnique({
+    where: { year_month: { year, month } },
+  });
+  if (existing) return existing;
+
+  const durationDays = getDaysInMonth(year, month);
+  const monthName = MONTH_NAMES[month - 1];
+  const slug = `${year}-${String(month).padStart(2, "0")}`;
+  const name = `Pase de Batalla — ${monthName} ${year}`;
+
+  const rewards = buildRewardsForMonth(durationDays);
+
+  // Expire any previous active passes
+  await prisma.battlePass.updateMany({
     where: { status: "active" },
-    orderBy: { createdAt: "desc" },
-    include: userId
-      ? { userPasses: { where: { userId }, take: 1 } }
-      : undefined,
+    data: { status: "expired" },
   });
 
-  return passes.map((pass) => {
-    const enrollment =
-      userId && "userPasses" in pass ? (pass as any).userPasses?.[0] : null;
-    return {
-      id: pass.id,
-      slug: pass.slug,
-      name: pass.name,
-      description: pass.description,
-      imageUrl: pass.imageUrl,
-      durationDays: pass.durationDays,
-      premiumPrice: pass.premiumPrice,
-      status: pass.status,
-      isEnrolled: !!enrollment,
-      isPremium: enrollment?.isPremium ?? false,
-      currentDay: enrollment
-        ? calculateCurrentDay(enrollment.activatedAt, pass.durationDays)
-        : null,
-    };
-  });
-}
-
-// =============================================================================
-// Get pass details with user progress
-// =============================================================================
-
-export async function getPassWithProgress(
-  passId: string,
-  userId: string,
-): Promise<BattlePassWithProgress> {
-  const pass = await prisma.battlePass.findUnique({
-    where: { id: passId },
-    include: {
-      userPasses: {
-        where: { userId },
-        take: 1,
-        include: { claimedRewards: true },
-      },
+  return prisma.battlePass.create({
+    data: {
+      slug,
+      name,
+      description: `Pase de batalla mensual de ${monthName} ${year}.`,
+      imageUrl: "",
+      durationDays,
+      premiumPrice: 2,
+      status: "active",
+      rewards: rewards as any,
+      year,
+      month,
     },
   });
+}
 
-  if (!pass) throw Errors.NotFound("Pase de batalla");
+// =============================================================================
+// Auto-enrollment
+// =============================================================================
 
-  const enrollment = pass.userPasses[0] ?? null;
+async function getOrCreateEnrollment(userId: string, passId: string) {
+  const existing = await prisma.userBattlePass.findUnique({
+    where: { userId_battlePassId: { userId, battlePassId: passId } },
+    include: { claimedRewards: true },
+  });
+  if (existing) return existing;
+
+  return prisma.userBattlePass.create({
+    data: { userId, battlePassId: passId },
+    include: { claimedRewards: true },
+  });
+}
+
+// =============================================================================
+// Get current month's pass with full progress (main endpoint)
+// =============================================================================
+
+export async function getCurrentPassWithProgress(
+  userId: string,
+): Promise<BattlePassWithProgress> {
+  const { year, month } = getCurrentYearMonth();
+  const pass = await getOrCreateMonthlyPass(year, month);
+  const enrollment = await getOrCreateEnrollment(userId, pass.id);
+
+  const currentDay = getCurrentDayOfMonth();
+  const daysRemaining = getDaysRemaining(year, month);
   const rewards = pass.rewards as unknown as BattlePassRewardDef[];
 
   return {
@@ -98,46 +149,105 @@ export async function getPassWithProgress(
     premiumPrice: pass.premiumPrice,
     status: pass.status,
     rewards,
-    enrollment: enrollment
-      ? {
-          activatedAt: enrollment.activatedAt.toISOString(),
-          isPremium: enrollment.isPremium,
-          currentDay: calculateCurrentDay(
-            enrollment.activatedAt,
-            pass.durationDays,
-          ),
-          claimedRewards: enrollment.claimedRewards.map((r) => ({
-            day: r.day,
-            track: r.track,
-          })),
-        }
-      : null,
+    year,
+    month,
+    daysRemaining,
+    enrollment: {
+      activatedAt: enrollment.activatedAt.toISOString(),
+      isPremium: enrollment.isPremium,
+      currentDay,
+      claimedRewards: enrollment.claimedRewards.map((r) => ({
+        day: r.day,
+        track: r.track,
+      })),
+    },
   };
 }
 
 // =============================================================================
-// Activate (free enrollment)
+// List available passes (kept for backwards compatibility)
 // =============================================================================
 
-export async function activatePass(passId: string, userId: string) {
-  const pass = await prisma.battlePass.findUnique({ where: { id: passId } });
+export async function getAvailablePasses(
+  userId?: string,
+): Promise<BattlePassListItem[]> {
+  const { year, month } = getCurrentYearMonth();
+  const pass = await getOrCreateMonthlyPass(year, month);
+
+  const enrollment = userId
+    ? await prisma.userBattlePass.findUnique({
+        where: { userId_battlePassId: { userId, battlePassId: pass.id } },
+      })
+    : null;
+
+  const currentDay = getCurrentDayOfMonth();
+  const daysRemaining = getDaysRemaining(year, month);
+
+  return [
+    {
+      id: pass.id,
+      slug: pass.slug,
+      name: pass.name,
+      description: pass.description,
+      imageUrl: pass.imageUrl,
+      durationDays: pass.durationDays,
+      premiumPrice: pass.premiumPrice,
+      status: pass.status,
+      isEnrolled: true, // always enrolled in calendar system
+      isPremium: enrollment?.isPremium ?? false,
+      currentDay,
+      year,
+      month,
+      daysRemaining,
+    },
+  ];
+}
+
+// =============================================================================
+// Get pass details by ID (kept for backwards compatibility)
+// =============================================================================
+
+export async function getPassWithProgress(
+  passId: string,
+  userId: string,
+): Promise<BattlePassWithProgress> {
+  const pass = await prisma.battlePass.findUnique({
+    where: { id: passId },
+  });
   if (!pass) throw Errors.NotFound("Pase de batalla");
-  if (pass.status !== "active")
-    throw Errors.BadRequest("Este pase no esta disponible");
 
-  const existing = await prisma.userBattlePass.findUnique({
-    where: { userId_battlePassId: { userId, battlePassId: passId } },
-  });
-  if (existing) throw Errors.Conflict("Ya estas inscrito en este pase");
+  // Only allow fetching current month's pass
+  if (!isCurrentMonth(pass)) {
+    throw Errors.BadRequest("Este pase ya expiró");
+  }
 
-  const enrollment = await prisma.userBattlePass.create({
-    data: { userId, battlePassId: passId },
-  });
+  const enrollment = await getOrCreateEnrollment(userId, pass.id);
+  const currentDay = getCurrentDayOfMonth();
+  const daysRemaining = getDaysRemaining(pass.year!, pass.month!);
+  const rewards = pass.rewards as unknown as BattlePassRewardDef[];
 
   return {
-    activatedAt: enrollment.activatedAt.toISOString(),
-    isPremium: false,
-    currentDay: 1,
+    id: pass.id,
+    slug: pass.slug,
+    name: pass.name,
+    description: pass.description,
+    imageUrl: pass.imageUrl,
+    durationDays: pass.durationDays,
+    premiumPrice: pass.premiumPrice,
+    status: pass.status,
+    rewards,
+    year: pass.year ?? undefined,
+    month: pass.month ?? undefined,
+    daysRemaining,
+    enrollment: {
+      activatedAt: enrollment.activatedAt.toISOString(),
+      isPremium: enrollment.isPremium,
+      currentDay,
+      claimedRewards: enrollment.claimedRewards.map((r) => ({
+        day: r.day,
+        track: r.track,
+      })),
+    },
   };
 }
 
@@ -149,10 +259,11 @@ export async function upgradeToPremium(passId: string, userId: string) {
   const pass = await prisma.battlePass.findUnique({ where: { id: passId } });
   if (!pass) throw Errors.NotFound("Pase de batalla");
 
-  const enrollment = await prisma.userBattlePass.findUnique({
-    where: { userId_battlePassId: { userId, battlePassId: passId } },
-  });
-  if (!enrollment) throw Errors.BadRequest("Primero debes activar el pase");
+  if (!isCurrentMonth(pass)) {
+    throw Errors.BadRequest("Solo puedes comprar premium del mes actual");
+  }
+
+  const enrollment = await getOrCreateEnrollment(userId, pass.id);
   if (enrollment.isPremium) throw Errors.Conflict("Ya tienes el pase premium");
 
   await usersService.spendRareCandy(
@@ -187,17 +298,14 @@ export async function claimReward(
   const pass = await prisma.battlePass.findUnique({ where: { id: passId } });
   if (!pass) throw Errors.NotFound("Pase de batalla");
 
-  const enrollment = await prisma.userBattlePass.findUnique({
-    where: { userId_battlePassId: { userId, battlePassId: passId } },
-    include: { claimedRewards: true },
-  });
-  if (!enrollment) throw Errors.BadRequest("No estas inscrito en este pase");
+  if (!isCurrentMonth(pass)) {
+    throw Errors.BadRequest("Este pase ya expiró, no puedes reclamar recompensas");
+  }
 
-  // Validate day is unlocked
-  const currentDay = calculateCurrentDay(
-    enrollment.activatedAt,
-    pass.durationDays,
-  );
+  const enrollment = await getOrCreateEnrollment(userId, pass.id);
+
+  // Validate day is unlocked (calendar day)
+  const currentDay = getCurrentDayOfMonth();
   if (day < 1 || day > currentDay) {
     throw Errors.BadRequest("Este dia aun no esta disponible");
   }
@@ -321,7 +429,48 @@ async function grantReward(
     }
 
     case "avatar": {
+      if (!reward.rewardId) throw Errors.BadRequest("Reward missing rewardId");
+      await tx.userAvatar.upsert({
+        where: { userId_avatarId: { userId, avatarId: reward.rewardId } },
+        update: {},
+        create: { userId, avatarId: reward.rewardId },
+      });
       return { type: "avatar", avatarId: reward.rewardId };
+    }
+
+    case "playmat": {
+      if (!reward.rewardId) throw Errors.BadRequest("Reward missing rewardId");
+      await tx.userPlaymat.upsert({
+        where: { userId_playmatId: { userId, playmatId: reward.rewardId } },
+        update: {},
+        create: { userId, playmatId: reward.rewardId },
+      });
+      return { type: "playmat", playmatId: reward.rewardId };
+    }
+
+    case "random_card": {
+      // Pick a random card from the full catalog
+      const { baseSetCards, jungleCards } = await import("@gonzaloaguila/game-core");
+      const allCards = [...baseSetCards, ...jungleCards];
+      const randomCard = allCards[Math.floor(Math.random() * allCards.length)];
+      const cardDefId = randomCard.id;
+
+      await tx.userCard.upsert({
+        where: { userId_cardDefId: { userId, cardDefId } },
+        update: { quantity: { increment: 1 } },
+        create: { userId, cardDefId, quantity: 1 },
+      });
+      return { type: "random_card", cardDefId, cardName: randomCard.name };
+    }
+
+    case "card_skin": {
+      if (!reward.rewardId) throw Errors.BadRequest("Reward missing rewardId");
+      await tx.userCardSkin.upsert({
+        where: { userId_skinId: { userId, skinId: reward.rewardId } },
+        update: {},
+        create: { userId, skinId: reward.rewardId },
+      });
+      return { type: "card_skin", skinId: reward.rewardId };
     }
 
     default:
