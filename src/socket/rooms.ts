@@ -1388,7 +1388,7 @@ export class GameRoomManager {
                   return {
                     ...state,
                     usedPowersThisTurn,
-                    events: [...state.events, createGameEvent("Heal falló — salió cruz", "info")],
+                    events: [...state.events, createGameEvent("Moneda: [coin:tails] — Heal falló", "info")],
                   };
                 }
                 return executeHealFlip(state, targetPokemonId, side, pokemonId);
