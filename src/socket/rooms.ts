@@ -361,6 +361,14 @@ function neutralizeEvents(
     [/tu banca/g, `la banca de ${self}`],
     [/tu Pokémon activo/g, `el Pokémon activo de ${self}`],
     [/ \(rival\)/g, ""],
+    // Privacy: strip card names from deck search results (Poké Ball, etc.)
+    [/Salió cara — encontraste .+ en tu mazo/, `Moneda: [coin:heads]`],
+    [/Salió cruz — no se encontró ninguna carta/, `Moneda: [coin:tails]`],
+    // Also neutralize remaining "Encontraste X" patterns
+    [/Encontraste (.+?) en tu mazo/g, `${self} encontró una carta en su mazo`],
+    // Adjuntar energy — "Tú adjuntaste" / "Rival adjuntó"
+    [/Tú adjuntaste/g, `${self} adjuntó`],
+    [/Rival adjuntó/g, `${opponent} adjuntó`],
   ];
 
   const newEvents = [...events];
