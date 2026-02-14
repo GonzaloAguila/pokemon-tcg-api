@@ -9,6 +9,7 @@
 import { prisma } from "../../lib/prisma.js";
 import { Errors } from "../../middleware/error-handler.js";
 import * as usersService from "../users/users.service.js";
+import * as boosterService from "../boosters/boosters.service.js";
 import { DEFAULT_MONTHLY_REWARDS } from "./seed-data.js";
 import type {
   BattlePassRewardDef,
@@ -341,7 +342,7 @@ export async function claimReward(
     });
 
     const granted = await grantReward(tx, userId, rewardDef);
-    return { day, track, reward: rewardDef, granted };
+    return { day, track, rewardType: rewardDef.rewardType, label: rewardDef.label, granted };
   });
 }
 
@@ -425,7 +426,20 @@ async function grantReward(
     }
 
     case "pack": {
-      return { type: "pack", packId: reward.rewardId };
+      // Pick random booster (base set or jungle)
+      const packId = Math.random() > 0.5 ? "base-set-booster" : "jungle-booster";
+      const packResult = boosterService.openPack(packId);
+
+      // Persist pulled cards to user's collection
+      for (const pulled of packResult.cards) {
+        await tx.userCard.upsert({
+          where: { userId_cardDefId: { userId, cardDefId: pulled.card.id } },
+          update: { quantity: { increment: 1 } },
+          create: { userId, cardDefId: pulled.card.id, quantity: 1 },
+        });
+      }
+
+      return { type: "pack", packId, packName: packResult.packName, cards: packResult.cards };
     }
 
     case "avatar": {
