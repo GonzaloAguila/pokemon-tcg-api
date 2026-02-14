@@ -75,6 +75,7 @@ import {
   clearPendingPeek,
   canUseRainDance,
   canAttachWithPower,
+  getEnergyTypeInSpanish,
   // Additional trainers
   playDevolutionSpray,
   playPokedex,
@@ -143,7 +144,8 @@ function applyCoinFlipEffects(
   state: GameState,
   results: Array<"heads" | "tails">,
   effects: AttackEffect[],
-  isPlayer1: boolean
+  isPlayer1: boolean,
+  skipCoinLog = false
 ): GameState {
   let newState = state;
   const headsCount = results.filter(r => r === "heads").length;
@@ -157,13 +159,15 @@ function applyCoinFlipEffects(
     cannotAttack: "bloqueado para atacar",
   };
 
-  // Log coin flip results
-  const coinTokens = results.map(r => `[coin:${r}]`).join(" ");
-  const coinResultText = results.length === 1 ? `Moneda: ${coinTokens}` : `Monedas: ${coinTokens}`;
-  newState = {
-    ...newState,
-    events: [...newState.events, createGameEvent(coinResultText, "info")],
-  };
+  // Log coin flip results (skip if already logged before executeAttack)
+  if (!skipCoinLog) {
+    const coinTokens = results.map(r => `[coin:${r}]`).join(" ");
+    const coinResultText = results.length === 1 ? `Moneda: ${coinTokens}` : `Monedas: ${coinTokens}`;
+    newState = {
+      ...newState,
+      events: [...newState.events, createGameEvent(coinResultText, "info")],
+    };
+  }
 
   for (const effect of effects) {
     if (!effect.coinFlip) continue;
@@ -881,6 +885,16 @@ export class GameRoomManager {
               console.log(`[attack] Metronome coin flip for ${copiedAttack.name}: ${results.join(", ")}`);
             }
 
+            // Insert coin result event BEFORE executeMetronome
+            if (coinFlipInfo) {
+              const coinTokens = coinFlipInfo.results.map(r => `[coin:${r}]`).join(" ");
+              const coinResultText = coinFlipInfo.results.length === 1 ? `Moneda: ${coinTokens}` : `Monedas: ${coinTokens}`;
+              room.gameState = {
+                ...room.gameState,
+                events: [...room.gameState.events, createGameEvent(coinResultText, "info")],
+              };
+            }
+
             // Execute Metronome via game-core
             usedExecuteForPlayer = true;
             newState = executeForPlayer((state) => executeMetronome(state, copiedAttack, false, true));
@@ -902,13 +916,23 @@ export class GameRoomManager {
               }
             }
 
+            // Insert coin result event BEFORE executeAttack so it appears before damage/KO events
+            if (coinFlipInfo) {
+              const coinTokens = coinFlipInfo.results.map(r => `[coin:${r}]`).join(" ");
+              const coinResultText = coinFlipInfo.results.length === 1 ? `Moneda: ${coinTokens}` : `Monedas: ${coinTokens}`;
+              room.gameState = {
+                ...room.gameState,
+                events: [...room.gameState.events, createGameEvent(coinResultText, "info")],
+              };
+            }
+
             usedExecuteForPlayer = true;
             newState = executeForPlayer((state) => executeAttack(state, attackIndex, false, true));
           }
 
-          // Apply coin flip effects that executeAttack/executeMetronome skipped
+          // Apply coin flip effects (status, extra damage, protection) — skip re-logging coin result
           if (coinFlipInfo && coinFlipEffects.length > 0) {
-            newState = applyCoinFlipEffects(newState, coinFlipInfo.results, coinFlipEffects, isPlayer1);
+            newState = applyCoinFlipEffects(newState, coinFlipInfo.results, coinFlipEffects, isPlayer1, true);
             console.log(`[attack] Applied coin flip effects for ${coinFlipInfo.attackName}`);
           }
 
@@ -1112,9 +1136,11 @@ export class GameRoomManager {
           }
 
           const newHand = hand.filter((c) => c.id !== cardId);
+          const energyName = getEnergyTypeInSpanish(energyCard.energyType);
+          const selfName = isPlayer1 ? "Jugador 1" : "Jugador 2";
           const eventMsg = useRainDance
-            ? `Rain Dance: Energía ${energyCard.energyType} adjuntada a ${targetPokemon.pokemon.name}`
-            : `Energía ${energyCard.energyType} adjuntada`;
+            ? `Rain Dance: ${selfName} adjuntó energía ${energyName} a ${targetPokemon.pokemon.name}`
+            : `${selfName} adjuntó energía ${energyName} a ${targetPokemon.pokemon.name}`;
 
           // Only set energyAttachedThisTurn if NOT using Rain Dance
           const shouldSetEnergyFlag = !useRainDance;
