@@ -149,6 +149,22 @@ function applyCoinFlipEffects(
   const headsCount = results.filter(r => r === "heads").length;
   const tailsCount = results.filter(r => r === "tails").length;
 
+  const statusMessages: Record<string, string> = {
+    paralyzed: "paralizado",
+    asleep: "dormido",
+    confused: "confundido",
+    poisoned: "envenenado",
+    cannotAttack: "bloqueado para atacar",
+  };
+
+  // Log coin flip results
+  const coinTokens = results.map(r => `[coin:${r}]`).join(" ");
+  const coinResultText = results.length === 1 ? `Moneda: ${coinTokens}` : `Monedas: ${coinTokens}`;
+  newState = {
+    ...newState,
+    events: [...newState.events, createGameEvent(coinResultText, "info")],
+  };
+
   for (const effect of effects) {
     if (!effect.coinFlip) continue;
 
@@ -181,7 +197,14 @@ function applyCoinFlipEffects(
             if (!currentTarget) break;
             const updated = applyStatusCondition(currentTarget, st as "paralyzed" | "poisoned" | "confused" | "asleep" | "cannotAttack", newState.turnNumber);
             if (updated !== currentTarget) {
-              newState = { ...newState, [defenderKey]: updated };
+              newState = {
+                ...newState,
+                [defenderKey]: updated,
+                events: [
+                  ...newState.events,
+                  createGameEvent(`¡${currentTarget.pokemon.name} está ${statusMessages[st] || st}!`, "action"),
+                ],
+              };
               console.log(`[coinFlip] Applied ${st} to ${isSelfTarget ? "attacker" : "defender"}`);
             }
           }
@@ -204,6 +227,10 @@ function applyCoinFlipEffects(
           if (isPlayer1) { newState = { ...newState, opponentActivePokemon: updatedTarget }; }
           else { newState = { ...newState, playerActivePokemon: updatedTarget }; }
         }
+        newState = {
+          ...newState,
+          events: [...newState.events, createGameEvent(`${target.pokemon.name} recibió +${extraDamage} de daño bonus`, "action")],
+        };
         console.log(`[coinFlip] Applied ${extraDamage} extra damage (${headsCount} heads)`);
       }
     }
@@ -216,6 +243,10 @@ function applyCoinFlipEffects(
         const updatedAttacker = { ...attacker, currentDamage: (attacker.currentDamage || 0) + selfDamage };
         if (isPlayer1) { newState = { ...newState, playerActivePokemon: updatedAttacker }; }
         else { newState = { ...newState, opponentActivePokemon: updatedAttacker }; }
+        newState = {
+          ...newState,
+          events: [...newState.events, createGameEvent(`${attacker.pokemon.name} se hizo ${selfDamage} de daño a sí mismo`, "action")],
+        };
         console.log(`[coinFlip] Applied ${selfDamage} self-damage (${tailsCount} tails)`);
       }
     }
@@ -235,6 +266,10 @@ function applyCoinFlipEffects(
         };
         if (isPlayer1) { newState = { ...newState, playerActivePokemon: updatedAttacker }; }
         else { newState = { ...newState, opponentActivePokemon: updatedAttacker }; }
+        newState = {
+          ...newState,
+          events: [...newState.events, createGameEvent(`¡${attacker.pokemon.name} se protegió! El daño será prevenido durante el próximo turno del rival.`, "action")],
+        };
         console.log(`[coinFlip] Applied protection (${protType}${effect.amount ? `, threshold: ${effect.amount}` : ""})`);
       }
     }
@@ -246,6 +281,10 @@ function applyCoinFlipEffects(
         const updatedDefender = { ...defender, retreatPrevented: true, retreatPreventedOnTurn: newState.turnNumber };
         if (isPlayer1) { newState = { ...newState, opponentActivePokemon: updatedDefender }; }
         else { newState = { ...newState, playerActivePokemon: updatedDefender }; }
+        newState = {
+          ...newState,
+          events: [...newState.events, createGameEvent(`¡${defender.pokemon.name} no puede retirarse durante el próximo turno!`, "action")],
+        };
         console.log(`[coinFlip] Applied preventRetreat to defender`);
       }
     }
