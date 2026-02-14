@@ -1,5 +1,7 @@
 import { prisma } from "../../lib/prisma.js";
 import * as usersService from "../users/users.service.js";
+import * as boosterService from "../boosters/boosters.service.js";
+import type { PackOpeningResult } from "../boosters/boosters.types.js";
 
 const SPIN_COST = 100; // coins
 
@@ -38,7 +40,12 @@ export async function payWheelSpin(userId: string) {
 // Claim a wheel prize — persist to user's collection
 // ---------------------------------------------------------------------------
 
-export async function claimWheelPrize(userId: string, prize: ResolvedPrize) {
+export interface ClaimResult {
+  success: boolean;
+  packResult?: PackOpeningResult;
+}
+
+export async function claimWheelPrize(userId: string, prize: ResolvedPrize): Promise<ClaimResult> {
   switch (prize.type) {
     case "coins": {
       if (!prize.amount) break;
@@ -112,14 +119,24 @@ export async function claimWheelPrize(userId: string, prize: ResolvedPrize) {
     }
 
     case "free_pack": {
-      // Grant equivalent coins for now
-      await usersService.addCoins(
-        userId,
-        200,
-        "wheel_spin",
-        "Ruleta: Sobre gratis (equivalente)",
-      );
-      break;
+      // Pick a random booster pack (50/50 Base Set or Jungle)
+      const packId = Math.random() < 0.5 ? "base-set-booster" : "jungle-booster";
+
+      // Generate cards from the pack
+      const packResult = boosterService.openPack(packId);
+
+      // Persist cards to the user's collection
+      await prisma.$transaction(async (tx) => {
+        for (const pulled of packResult.cards) {
+          await tx.userCard.upsert({
+            where: { userId_cardDefId: { userId, cardDefId: pulled.card.id } },
+            update: { quantity: { increment: 1 } },
+            create: { userId, cardDefId: pulled.card.id, quantity: 1 },
+          });
+        }
+      });
+
+      return { success: true, packResult };
     }
 
     case "jackpot": {
@@ -127,8 +144,15 @@ export async function claimWheelPrize(userId: string, prize: ResolvedPrize) {
       // Jackpot: 1 rare candy + 100 coupons + sub-prizes
       await usersService.addRareCandy(userId, 1, "wheel_spin", "Ruleta: Jackpot — Rare Candy");
       await usersService.addCoupons(userId, 100, "wheel_spin", "Ruleta: Jackpot — 100 cupones");
+      let jackpotPackResult: PackOpeningResult | undefined;
       for (const subPrize of prize.prizes) {
-        await claimWheelPrize(userId, subPrize);
+        const subResult = await claimWheelPrize(userId, subPrize);
+        if (subResult.packResult) {
+          jackpotPackResult = subResult.packResult;
+        }
+      }
+      if (jackpotPackResult) {
+        return { success: true, packResult: jackpotPackResult };
       }
       break;
     }

@@ -50,7 +50,7 @@ function initializeDefaultPacks(): void {
     cardCount: 11,
     slots: [
       { rarity: "rare", count: 1, holoChance: 0.33 },
-      { rarity: "uncommon", count: 3, upgradeChance: 0.05 },
+      { rarity: "uncommon", count: 3, upgradeChance: 0.01 },
       { rarity: "common", count: 5 },
       // 2 energy cards handled separately
     ],
@@ -84,7 +84,7 @@ function initializeDefaultPacks(): void {
     cardCount: 11,
     slots: [
       { rarity: "rare", count: 1, holoChance: 0.33 },
-      { rarity: "uncommon", count: 3, upgradeChance: 0.05 },
+      { rarity: "uncommon", count: 3, upgradeChance: 0.01 },
       { rarity: "common", count: 5 },
     ],
     price: 200,

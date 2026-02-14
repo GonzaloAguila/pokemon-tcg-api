@@ -64,9 +64,15 @@ router.post(
         );
       }
 
-      await wheelService.claimWheelPrize(req.user!.userId, parsed.data.prize);
+      const result = await wheelService.claimWheelPrize(
+        req.user!.userId,
+        parsed.data.prize,
+      );
 
-      res.json({ success: true });
+      res.json({
+        success: true,
+        ...(result.packResult && { packResult: result.packResult }),
+      });
     } catch (err) {
       next(err);
     }
