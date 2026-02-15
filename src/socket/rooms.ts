@@ -760,7 +760,7 @@ export class GameRoomManager {
 
     // Validate turn - player1 plays when isPlayerTurn is true
     // During MULLIGAN/SETUP, both players can place Pokemon regardless of turn
-    const turnFreeActions = ["ready", "mulligan", "playerReady", "takePrize", "promote", "deckSearch", "forceSwitch", "selfSwitch", "skipSwitch", "benchDamage", "clearPeek"];
+    const turnFreeActions = ["ready", "mulligan", "playerReady", "takePrize", "promote", "deckSearch", "forceSwitch", "selfSwitch", "skipSwitch", "benchDamage", "clearPeek", "surrender"];
     const setupActions = ["playBasicToActive", "playBasicToBench"];
     const isSetupPhase = room.gameState.gamePhase === "MULLIGAN" || room.gameState.gamePhase === "SETUP";
     const isMyTurn = isPlayer1 ? room.gameState.isPlayerTurn : !room.gameState.isPlayerTurn;
@@ -1634,6 +1634,23 @@ export class GameRoomManager {
 
           usedExecuteForPlayer = true;
           newState = executeForPlayer(executeTrainer);
+          break;
+        }
+
+        case "surrender": {
+          // Player surrenders — opponent wins
+          const surrendererName = isPlayer1
+            ? (room.creator.username || "Jugador 1")
+            : (room.joiner.username || "Jugador 2");
+          newState = {
+            ...room.gameState!,
+            gamePhase: GamePhase.GameOver,
+            gameResult: isPlayer1 ? "defeat" : "victory", // From player1 perspective
+            events: [
+              ...room.gameState!.events,
+              createGameEvent(`${surrendererName} se ha rendido`, "system"),
+            ],
+          };
           break;
         }
 
