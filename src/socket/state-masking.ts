@@ -25,6 +25,16 @@ export function getGameStateForPlayer(
   }
 
   // Player 2 sees swapped perspective
+  // Swap event names so "Jugador 1" always means "self" from the receiver's POV
+  const events = state.events as Array<{ message: string; type: string; timestamp: number }> | undefined;
+  const swappedEvents = events?.map(e => ({
+    ...e,
+    message: e.message
+      .replace(/Jugador 1/g, "@@P1@@")
+      .replace(/Jugador 2/g, "Jugador 1")
+      .replace(/@@P1@@/g, "Jugador 2"),
+  }));
+
   return {
     ...state,
     // Swap player/opponent fields
@@ -47,6 +57,9 @@ export function getGameStateForPlayer(
     opponentReady: state.playerReady,
     opponentCanTakePrize: state.playerCanTakePrize,
     opponentNeedsToPromote: state.playerNeedsToPromote,
+
+    // Swap events with swapped names
+    ...(swappedEvents ? { events: swappedEvents } : {}),
 
     // Swap turn perspective
     isPlayerTurn: !state.isPlayerTurn,
