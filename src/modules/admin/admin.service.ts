@@ -1,3 +1,4 @@
+import { type UserRole } from "@prisma/client";
 import { prisma } from "../../lib/prisma.js";
 import { Errors } from "../../middleware/error-handler.js";
 import { ALL_PERMISSIONS } from "./permissions.js";
@@ -10,7 +11,23 @@ import { ALL_PERMISSIONS } from "./permissions.js";
 // Search users by username, email, or id
 // ---------------------------------------------------------------------------
 
-export async function searchUsers(query: string, limit = 20, cursor?: string) {
+const SEARCH_USERS_SORT_ALLOWLIST = ["username", "email", "level", "coins", "createdAt"] as const;
+
+export async function searchUsers(
+  query: string,
+  page: number,
+  limit: number,
+  roleFilter?: string,
+  sortBy?: string,
+  sortDir?: "asc" | "desc",
+) {
+  const skip = (page - 1) * limit;
+
+  const validSort = SEARCH_USERS_SORT_ALLOWLIST.includes(sortBy as typeof SEARCH_USERS_SORT_ALLOWLIST[number])
+    ? (sortBy as string)
+    : "createdAt";
+  const direction = sortDir === "asc" ? "asc" : "desc";
+
   const where = {
     ...(query
       ? {
@@ -21,37 +38,62 @@ export async function searchUsers(query: string, limit = 20, cursor?: string) {
           ],
         }
       : {}),
-    ...(cursor ? { createdAt: { lt: new Date(cursor) } } : {}),
+    ...(roleFilter ? { role: roleFilter as UserRole } : {}),
   };
 
-  return prisma.user.findMany({
-    where,
-    orderBy: { createdAt: "desc" },
-    take: limit,
-    select: {
-      id: true,
-      username: true,
-      email: true,
-      role: true,
-      coins: true,
-      coupons: true,
-      rareCandy: true,
-      level: true,
-      createdAt: true,
-      lastLoginAt: true,
-      stats: {
-        select: {
-          normalWins: true,
-          normalLosses: true,
-          rankedWins: true,
-          rankedLosses: true,
-          draftWins: true,
-          draftLosses: true,
-          currentStreak: true,
-          bestStreak: true,
+  const [users, total] = await Promise.all([
+    prisma.user.findMany({
+      where,
+      orderBy: { [validSort]: direction },
+      skip,
+      take: limit,
+      select: {
+        id: true,
+        username: true,
+        email: true,
+        role: true,
+        coins: true,
+        coupons: true,
+        rareCandy: true,
+        level: true,
+        createdAt: true,
+        lastLoginAt: true,
+        stats: {
+          select: {
+            normalWins: true,
+            normalLosses: true,
+            rankedWins: true,
+            rankedLosses: true,
+            draftWins: true,
+            draftLosses: true,
+            currentStreak: true,
+            bestStreak: true,
+          },
         },
       },
+    }),
+    prisma.user.count({ where }),
+  ]);
+
+  return { data: users, total, page, limit };
+}
+
+// ---------------------------------------------------------------------------
+// Brief user search (for autocomplete / recipient picker)
+// ---------------------------------------------------------------------------
+
+export async function searchUsersBrief(query: string, limit = 10) {
+  if (!query.trim()) return [];
+  return prisma.user.findMany({
+    where: {
+      OR: [
+        { username: { contains: query, mode: "insensitive" } },
+        { email: { contains: query, mode: "insensitive" } },
+      ],
     },
+    take: limit,
+    orderBy: { username: "asc" },
+    select: { id: true, username: true, email: true, role: true },
   });
 }
 
@@ -213,22 +255,43 @@ export async function setPermissions(userId: string, permissions: string[]) {
 // Get all admins
 // ---------------------------------------------------------------------------
 
-export async function getAdmins() {
-  return prisma.user.findMany({
-    where: {
-      role: { in: ["admin", "superadmin"] },
-    },
-    select: {
-      id: true,
-      username: true,
-      email: true,
-      role: true,
-      permissions: true,
-      createdAt: true,
-      lastLoginAt: true,
-    },
-    orderBy: { createdAt: "asc" },
-  });
+const ADMINS_SORT_ALLOWLIST = ["username", "email", "createdAt"] as const;
+
+export async function getAdmins(
+  page: number,
+  limit: number,
+  sortBy?: string,
+  sortDir?: "asc" | "desc",
+) {
+  const skip = (page - 1) * limit;
+
+  const validSort = ADMINS_SORT_ALLOWLIST.includes(sortBy as typeof ADMINS_SORT_ALLOWLIST[number])
+    ? (sortBy as string)
+    : "createdAt";
+  const direction = sortDir === "asc" ? "asc" : "desc";
+
+  const where = { role: { in: ["admin", "superadmin"] as UserRole[] } };
+
+  const [admins, total] = await Promise.all([
+    prisma.user.findMany({
+      where,
+      orderBy: { [validSort]: direction },
+      skip,
+      take: limit,
+      select: {
+        id: true,
+        username: true,
+        email: true,
+        role: true,
+        permissions: true,
+        createdAt: true,
+        lastLoginAt: true,
+      },
+    }),
+    prisma.user.count({ where }),
+  ]);
+
+  return { data: admins, total, page, limit };
 }
 
 // =============================================================================
@@ -271,6 +334,18 @@ export async function adjustCoins(userId: string, amount: number, reason: string
         description: `[Admin: ${adminId}] Coins: ${amount > 0 ? "+" : ""}${amount}. Razon: ${reason.trim()}`,
         amount,
         balanceAfter: updated.coins,
+      },
+    });
+
+    // Auto-send system notification to user
+    await tx.systemMessage.create({
+      data: {
+        type: "personal",
+        title: `Monedas: ${amount > 0 ? "+" : "-"}${Math.abs(amount)}`,
+        content: `Se te ha ${amount > 0 ? "acreditado" : "descontado"} **${Math.abs(amount)}** monedas desde el panel de administracion.\n\nRazon: *${reason.trim()}*`,
+        category: amount > 0 ? "reward" : "penalty",
+        senderId: adminId,
+        recipientId: userId,
       },
     });
 
@@ -317,6 +392,18 @@ export async function adjustCoupons(userId: string, amount: number, reason: stri
       },
     });
 
+    // Auto-send system notification to user
+    await tx.systemMessage.create({
+      data: {
+        type: "personal",
+        title: `Cupones: ${amount > 0 ? "+" : "-"}${Math.abs(amount)}`,
+        content: `Se te ha ${amount > 0 ? "acreditado" : "descontado"} **${Math.abs(amount)}** cupones desde el panel de administracion.\n\nRazon: *${reason.trim()}*`,
+        category: amount > 0 ? "reward" : "penalty",
+        senderId: adminId,
+        recipientId: userId,
+      },
+    });
+
     return { coupons: updated.coupons };
   });
 }
@@ -357,6 +444,18 @@ export async function adjustRareCandy(userId: string, amount: number, reason: st
         description: `[Admin: ${adminId}] RareCandy: ${amount > 0 ? "+" : ""}${amount}. Razon: ${reason.trim()}`,
         amount,
         balanceAfter: updated.rareCandy,
+      },
+    });
+
+    // Auto-send system notification to user
+    await tx.systemMessage.create({
+      data: {
+        type: "personal",
+        title: `Caramelo Raro: ${amount > 0 ? "+" : "-"}${Math.abs(amount)}`,
+        content: `Se te ha ${amount > 0 ? "acreditado" : "descontado"} **${Math.abs(amount)}** caramelo raro desde el panel de administracion.\n\nRazon: *${reason.trim()}*`,
+        category: amount > 0 ? "reward" : "penalty",
+        senderId: adminId,
+        recipientId: userId,
       },
     });
 
@@ -458,6 +557,38 @@ export async function adjustCards(
 
     return { results };
   });
+}
+
+// ---------------------------------------------------------------------------
+// Get paginated transactions for a user
+// ---------------------------------------------------------------------------
+
+export async function getUserTransactions(
+  userId: string,
+  page: number,
+  limit: number,
+) {
+  const skip = (page - 1) * limit;
+
+  const [transactions, total] = await Promise.all([
+    prisma.transaction.findMany({
+      where: { userId },
+      orderBy: { createdAt: "desc" },
+      skip,
+      take: limit,
+      select: {
+        id: true,
+        type: true,
+        description: true,
+        amount: true,
+        balanceAfter: true,
+        createdAt: true,
+      },
+    }),
+    prisma.transaction.count({ where: { userId } }),
+  ]);
+
+  return { data: transactions, total, page, limit };
 }
 
 // =============================================================================

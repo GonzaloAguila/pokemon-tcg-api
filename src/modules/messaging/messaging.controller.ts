@@ -147,10 +147,13 @@ router.get(
   requirePermission("messages:view"),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const limit = Math.min(Number(req.query.limit) || 50, 100);
-      const cursor = req.query.cursor as string | undefined;
-      const messages = await messagingService.getAdminMessages(limit, cursor);
-      res.json({ messages });
+      const page = Math.max(Number(req.query.page) || 1, 1);
+      const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 100);
+      const sortBy = (req.query.sortBy as string) || undefined;
+      const sortDir = (req.query.sortDir as string) === "asc" ? "asc" as const : "desc" as const;
+
+      const result = await messagingService.getAdminMessages(page, limit, sortBy, sortDir);
+      res.json(result);
     } catch (err) {
       next(err);
     }

@@ -207,35 +207,50 @@ export async function getUnreadCount(userId: string) {
 // Admin: list all system messages with read counts
 // ---------------------------------------------------------------------------
 
-export async function getAdminMessages(limit = 50, cursor?: string) {
-  const where = cursor ? { createdAt: { lt: new Date(cursor) } } : {};
+const ADMIN_MESSAGES_SORT_ALLOWLIST = ["createdAt", "type", "category", "title"] as const;
 
-  const messages = await prisma.systemMessage.findMany({
-    where,
-    orderBy: { createdAt: "desc" },
-    take: limit,
-    select: {
-      id: true,
-      type: true,
-      title: true,
-      content: true,
-      category: true,
-      metadata: true,
-      recipientId: true,
-      createdAt: true,
-      sender: {
-        select: {
-          id: true,
-          username: true,
+export async function getAdminMessages(
+  page: number,
+  limit: number,
+  sortBy?: string,
+  sortDir?: "asc" | "desc",
+) {
+  const skip = (page - 1) * limit;
+
+  const validSort = ADMIN_MESSAGES_SORT_ALLOWLIST.includes(sortBy as typeof ADMIN_MESSAGES_SORT_ALLOWLIST[number])
+    ? (sortBy as string)
+    : "createdAt";
+  const direction = sortDir === "asc" ? "asc" : "desc";
+
+  const [messages, total] = await Promise.all([
+    prisma.systemMessage.findMany({
+      orderBy: { [validSort]: direction },
+      skip,
+      take: limit,
+      select: {
+        id: true,
+        type: true,
+        title: true,
+        content: true,
+        category: true,
+        metadata: true,
+        recipientId: true,
+        createdAt: true,
+        sender: {
+          select: {
+            id: true,
+            username: true,
+          },
+        },
+        _count: {
+          select: { reads: true },
         },
       },
-      _count: {
-        select: { reads: true },
-      },
-    },
-  });
+    }),
+    prisma.systemMessage.count(),
+  ]);
 
-  return messages.map((msg) => ({
+  const data = messages.map((msg) => ({
     id: msg.id,
     type: msg.type,
     title: msg.title,
@@ -246,4 +261,6 @@ export async function getAdminMessages(limit = 50, cursor?: string) {
     senderUsername: msg.sender.username,
     readCount: msg._count.reads,
   }));
+
+  return { data, total, page, limit };
 }

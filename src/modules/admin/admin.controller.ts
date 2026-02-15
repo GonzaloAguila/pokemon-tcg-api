@@ -8,6 +8,21 @@ import { io } from "../../index.js";
 const router = Router();
 
 // =============================================================================
+// Helpers
+// =============================================================================
+
+/**
+ * Middleware that prevents an admin from performing actions on their own account.
+ * Must be placed AFTER requireAuth so that req.user is populated.
+ */
+function preventSelfAction(req: Request, _res: Response, next: NextFunction) {
+  if (req.user?.userId === req.params.userId) {
+    throw Errors.Forbidden("No puedes realizar esta accion sobre tu propia cuenta");
+  }
+  next();
+}
+
+// =============================================================================
 // Dashboard
 // =============================================================================
 
@@ -41,7 +56,7 @@ router.get(
 // =============================================================================
 
 // ---------------------------------------------------------------------------
-// GET /admin/users — Search users
+// GET /admin/users — Search users (offset pagination + sort + role filter)
 // ---------------------------------------------------------------------------
 
 router.get(
@@ -51,9 +66,34 @@ router.get(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const query = (req.query.q as string) || "";
-      const limit = Math.min(Number(req.query.limit) || 20, 50);
-      const cursor = req.query.cursor as string | undefined;
-      const users = await adminService.searchUsers(query, limit, cursor);
+      const page = Math.max(Number(req.query.page) || 1, 1);
+      const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 50);
+      const role = (req.query.role as string) || undefined;
+      const sortBy = (req.query.sortBy as string) || undefined;
+      const sortDir = (req.query.sortDir as string) === "asc" ? "asc" as const : "desc" as const;
+
+      const result = await adminService.searchUsers(query, page, limit, role, sortBy, sortDir);
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// GET /admin/users/search-brief — Brief user search for autocomplete
+// IMPORTANT: Must be BEFORE /admin/users/:userId to avoid matching "search-brief" as a userId
+// ---------------------------------------------------------------------------
+
+router.get(
+  "/admin/users/search-brief",
+  requireAuth,
+  requirePermission("messages:send"),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const query = (req.query.q as string) || "";
+      const limit = Math.min(Number(req.query.limit) || 10, 20);
+      const users = await adminService.searchUsersBrief(query, limit);
       res.json({ users });
     } catch (err) {
       next(err);
@@ -80,6 +120,26 @@ router.get(
 );
 
 // ---------------------------------------------------------------------------
+// GET /admin/users/:userId/transactions — Paginated transactions
+// ---------------------------------------------------------------------------
+
+router.get(
+  "/admin/users/:userId/transactions",
+  requireAuth,
+  requirePermission("users:view"),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const page = Math.max(Number(req.query.page) || 1, 1);
+      const limit = Math.min(Math.max(Number(req.query.limit) || 10, 1), 50);
+      const result = await adminService.getUserTransactions(req.params.userId, page, limit);
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
 // DELETE /admin/users/:userId — Delete user
 // ---------------------------------------------------------------------------
 
@@ -87,6 +147,7 @@ router.delete(
   "/admin/users/:userId",
   requireAuth,
   requirePermission("users:delete"),
+  preventSelfAction,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const result = await adminService.deleteUser(req.params.userId);
@@ -109,6 +170,7 @@ router.post(
   "/admin/users/:userId/adjust-coins",
   requireAuth,
   requirePermission("users:economy"),
+  preventSelfAction,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { amount, reason } = req.body;
@@ -136,6 +198,7 @@ router.post(
   "/admin/users/:userId/adjust-coupons",
   requireAuth,
   requirePermission("users:economy"),
+  preventSelfAction,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { amount, reason } = req.body;
@@ -163,6 +226,7 @@ router.post(
   "/admin/users/:userId/adjust-rare-candy",
   requireAuth,
   requirePermission("users:economy"),
+  preventSelfAction,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { amount, reason } = req.body;
@@ -194,6 +258,7 @@ router.post(
   "/admin/users/:userId/adjust-cards",
   requireAuth,
   requirePermission("users:cards"),
+  preventSelfAction,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { cards } = req.body;
@@ -224,6 +289,7 @@ router.post(
   "/admin/users/:userId/adjust-stats",
   requireAuth,
   requirePermission("users:stats"),
+  preventSelfAction,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { field, amount } = req.body;
@@ -333,6 +399,7 @@ router.patch(
   "/admin/users/:userId/role",
   requireAuth,
   requireRole("superadmin"),
+  preventSelfAction,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { role } = req.body;
@@ -355,6 +422,7 @@ router.patch(
   "/admin/users/:userId/permissions",
   requireAuth,
   requireRole("superadmin"),
+  preventSelfAction,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { permissions } = req.body;
@@ -373,17 +441,22 @@ router.patch(
 );
 
 // ---------------------------------------------------------------------------
-// GET /admin/admins — List all admins (superadmin only)
+// GET /admin/admins — List all admins (superadmin only, offset pagination + sort)
 // ---------------------------------------------------------------------------
 
 router.get(
   "/admin/admins",
   requireAuth,
   requireRole("superadmin"),
-  async (_req: Request, res: Response, next: NextFunction) => {
+  async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const admins = await adminService.getAdmins();
-      res.json({ admins });
+      const page = Math.max(Number(req.query.page) || 1, 1);
+      const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 50);
+      const sortBy = (req.query.sortBy as string) || undefined;
+      const sortDir = (req.query.sortDir as string) === "asc" ? "asc" as const : "desc" as const;
+
+      const result = await adminService.getAdmins(page, limit, sortBy, sortDir);
+      res.json(result);
     } catch (err) {
       next(err);
     }
