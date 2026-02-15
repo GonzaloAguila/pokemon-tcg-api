@@ -525,24 +525,61 @@ export async function adjustStats(userId: string, field: string, amount: number,
 // Get admin dashboard stats
 // ---------------------------------------------------------------------------
 
-export async function getAdminStats() {
-  const todayStart = new Date();
-  todayStart.setUTCHours(0, 0, 0, 0);
+export type StatsPeriod = "day" | "week" | "month";
 
-  const [totalUsers, activeToday, totalGamesPlayed, totalMessages] = await Promise.all([
+function getPeriodStart(period: StatsPeriod): Date {
+  const now = new Date();
+  switch (period) {
+    case "day": {
+      const start = new Date(now);
+      start.setUTCHours(0, 0, 0, 0);
+      return start;
+    }
+    case "week": {
+      return new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    }
+    case "month": {
+      return new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    }
+  }
+}
+
+export async function getAdminStats(period?: StatsPeriod) {
+  // When no period: active today + all-time games/messages (original behavior)
+  // When period provided: filter active users, games, and messages by that date range
+  const periodStart = period ? getPeriodStart(period) : undefined;
+  const activityStart = periodStart ?? (() => {
+    const todayStart = new Date();
+    todayStart.setUTCHours(0, 0, 0, 0);
+    return todayStart;
+  })();
+
+  const [totalUsers, activeUsers, totalGamesPlayed, totalMessages] = await Promise.all([
+    // Total users is always unfiltered
     prisma.user.count(),
+
+    // Active users: filtered by period (defaults to today)
     prisma.user.count({
-      where: { lastLoginAt: { gte: todayStart } },
+      where: { lastLoginAt: { gte: activityStart } },
     }),
+
+    // Games played: filtered by period when provided, all-time otherwise
     prisma.match.count({
-      where: { status: "finished" },
+      where: {
+        status: "finished",
+        ...(periodStart ? { updatedAt: { gte: periodStart } } : {}),
+      },
     }),
-    prisma.systemMessage.count(),
+
+    // Messages: filtered by period when provided, all-time otherwise
+    prisma.systemMessage.count({
+      ...(periodStart ? { where: { createdAt: { gte: periodStart } } } : {}),
+    }),
   ]);
 
   return {
     totalUsers,
-    activeToday,
+    activeUsers,
     totalGamesPlayed,
     totalMessages,
   };

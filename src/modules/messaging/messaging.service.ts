@@ -87,6 +87,7 @@ export async function getUserMessages(userId: string, limit = 50, cursor?: strin
       content: true,
       category: true,
       metadata: true,
+      recipientId: true,
       createdAt: true,
       sender: {
         select: {
@@ -108,8 +109,9 @@ export async function getUserMessages(userId: string, limit = 50, cursor?: strin
     content: msg.content,
     category: msg.category,
     metadata: msg.metadata,
+    recipientId: msg.recipientId,
     createdAt: msg.createdAt,
-    sender: msg.sender,
+    senderUsername: msg.sender.username,
     isRead: msg.reads.length > 0,
   }));
 }
@@ -198,7 +200,7 @@ export async function getUnreadCount(userId: string) {
     },
   });
 
-  return { unreadCount: count };
+  return { count };
 }
 
 // ---------------------------------------------------------------------------
@@ -208,7 +210,7 @@ export async function getUnreadCount(userId: string) {
 export async function getAdminMessages(limit = 50, cursor?: string) {
   const where = cursor ? { createdAt: { lt: new Date(cursor) } } : {};
 
-  return prisma.systemMessage.findMany({
+  const messages = await prisma.systemMessage.findMany({
     where,
     orderBy: { createdAt: "desc" },
     take: limit,
@@ -232,4 +234,16 @@ export async function getAdminMessages(limit = 50, cursor?: string) {
       },
     },
   });
+
+  return messages.map((msg) => ({
+    id: msg.id,
+    type: msg.type,
+    title: msg.title,
+    content: msg.content,
+    category: msg.category,
+    recipientId: msg.recipientId,
+    createdAt: msg.createdAt,
+    senderUsername: msg.sender.username,
+    readCount: msg._count.reads,
+  }));
 }

@@ -19,9 +19,16 @@ router.get(
   "/admin/stats",
   requireAuth,
   requirePermission("dashboard:view"),
-  async (_req: Request, res: Response, next: NextFunction) => {
+  async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const stats = await adminService.getAdminStats();
+      const periodParam = req.query.period as string | undefined;
+      const validPeriods = ["day", "week", "month"];
+      const period =
+        periodParam && validPeriods.includes(periodParam)
+          ? (periodParam as adminService.StatsPeriod)
+          : undefined;
+
+      const stats = await adminService.getAdminStats(period);
       res.json(stats);
     } catch (err) {
       next(err);
