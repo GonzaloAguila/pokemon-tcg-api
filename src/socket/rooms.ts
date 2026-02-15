@@ -116,6 +116,13 @@ interface GameRoom {
   // Game state
   gameState: GameState | null;
 
+  // Turn timer (server-side)
+  turnStartedAt: number | null;       // Date.now() when current turn started
+  turnTimerDuration: number;          // seconds, default 180
+
+  // Spectators
+  spectators: Set<string>;            // socket IDs watching the game
+
   // Room config
   config: RoomConfig;
   creator: CreatorInfo;
@@ -409,6 +416,7 @@ export class GameRoomManager {
   private rooms: Map<string, GameRoom> = new Map();
   private socketToRoom: Map<string, string> = new Map();
   private forfeitTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
+  private cleanupTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private onForfeitCallback: ForfeitCallback | null = null;
 
   /**
@@ -436,6 +444,9 @@ export class GameRoomManager {
       player2Ready: false,
       player2DeckId: null,
       gameState: null,
+      turnStartedAt: null,
+      turnTimerDuration: 180,
+      spectators: new Set(),
       config: {
         prizeCount: prizeCount >= 4 && prizeCount <= 6 ? prizeCount : 6,
         betAmount: config?.betAmount ?? 0,
@@ -481,12 +492,14 @@ export class GameRoomManager {
         room.player1SocketId = socketId;
         this.socketToRoom.set(socketId, roomId);
         this.cancelForfeitTimer(roomId, "player1");
+        this.cancelCleanupTimer(roomId);
         return room;
       }
       if (room.player2Id === userId) {
         room.player2SocketId = socketId;
         this.socketToRoom.set(socketId, roomId);
         this.cancelForfeitTimer(roomId, "player2");
+        this.cancelCleanupTimer(roomId);
         return room;
       }
       throw new Error("Room is full");
@@ -536,6 +549,12 @@ export class GameRoomManager {
 
     // Remove room if empty
     if (!room.player1Id && !room.player2Id) {
+      this.rooms.delete(roomId);
+    }
+
+    // Clean up playing rooms where both players have left
+    if (room.status === "playing" && !room.player1Id && !room.player2Id) {
+      room.status = "finished";
       this.rooms.delete(roomId);
     }
   }
@@ -652,6 +671,7 @@ export class GameRoomManager {
     };
 
     room.gameState = gameState;
+    room.turnStartedAt = Date.now();
     return room.gameState;
   }
 
@@ -712,6 +732,7 @@ export class GameRoomManager {
     };
 
     room.gameState = gameState;
+    room.turnStartedAt = Date.now();
     return room.gameState;
   }
 
@@ -1592,6 +1613,9 @@ export class GameRoomManager {
 
       room.gameState = newState;
 
+      // Update turn timer when turn changes
+      room.turnStartedAt = Date.now();
+
       // Check for game over
       const gameOver = newState.gamePhase === "GAME_OVER";
       let winner: "player1" | "player2" | undefined;
@@ -1623,6 +1647,13 @@ export class GameRoomManager {
    * Handle player disconnect
    */
   async handleDisconnect(socketId: string): Promise<string | null> {
+    // Remove from spectators if applicable
+    for (const [, r] of this.rooms.entries()) {
+      if (r.spectators.has(socketId)) {
+        r.spectators.delete(socketId);
+      }
+    }
+
     const roomId = this.socketToRoom.get(socketId);
     if (!roomId) return null;
 
@@ -1644,6 +1675,11 @@ export class GameRoomManager {
     // Start forfeit timer if game is in progress
     if (disconnectedSide && room.status === "playing" && room.gameState) {
       this.startForfeitTimer(roomId, disconnectedSide);
+    }
+
+    // If both players are disconnected from a playing room, start cleanup timer
+    if (room.status === "playing" && !room.player1SocketId && !room.player2SocketId) {
+      this.startCleanupTimer(roomId);
     }
 
     return roomId;
@@ -1724,6 +1760,60 @@ export class GameRoomManager {
   }
 
   /**
+   * Start a cleanup timer for rooms where both players disconnected.
+   */
+  private startCleanupTimer(roomId: string): void {
+    if (this.cleanupTimers.has(roomId)) return;
+
+    console.log(`🧹 Cleanup timer started for room ${roomId} (5 min)`);
+    const timer = setTimeout(() => {
+      this.cleanupTimers.delete(roomId);
+      const room = this.rooms.get(roomId);
+      if (!room) return;
+      // Only clean up if still both disconnected
+      if (!room.player1SocketId && !room.player2SocketId) {
+        console.log(`🧹 Cleaning up abandoned room ${roomId}`);
+        room.status = "finished";
+        this.rooms.delete(roomId);
+      }
+    }, 300_000); // 5 minutes
+
+    this.cleanupTimers.set(roomId, timer);
+  }
+
+  /**
+   * Cancel cleanup timer (a player reconnected).
+   */
+  private cancelCleanupTimer(roomId: string): void {
+    const timer = this.cleanupTimers.get(roomId);
+    if (timer) {
+      clearTimeout(timer);
+      this.cleanupTimers.delete(roomId);
+      console.log(`🧹 Cleanup timer cancelled for room ${roomId} (player reconnected)`);
+    }
+  }
+
+  /**
+   * Start periodic cleanup of stale rooms (call once at server start).
+   */
+  startPeriodicCleanup(): void {
+    setInterval(() => {
+      const now = Date.now();
+      for (const [id, room] of this.rooms.entries()) {
+        // Delete finished rooms older than 5 minutes
+        if (room.status === "finished" && now - room.createdAt.getTime() > 300_000) {
+          this.rooms.delete(id);
+        }
+        // Delete waiting rooms older than 30 minutes with no player 2
+        if (room.status === "waiting" && !room.player2Id && now - room.createdAt.getTime() > 1_800_000) {
+          this.rooms.delete(id);
+          console.log(`🧹 Deleted stale waiting room ${id}`);
+        }
+      }
+    }, 60_000); // Run every minute
+  }
+
+  /**
    * Get a room by ID
    */
   getRoom(roomId: string): GameRoom | undefined {
@@ -1776,6 +1866,112 @@ export class GameRoomManager {
     this.rooms.delete(roomId);
     this.socketToRoom.delete(socketId);
     return true;
+  }
+
+  /**
+   * Force-delete a room (used by system for auto-cleanup, bypasses creator check).
+   */
+  forceDeleteRoom(roomId: string): boolean {
+    const room = this.rooms.get(roomId);
+    if (!room) return false;
+    // Clean up socket mappings
+    if (room.player1SocketId) this.socketToRoom.delete(room.player1SocketId);
+    if (room.player2SocketId) this.socketToRoom.delete(room.player2SocketId);
+    this.rooms.delete(roomId);
+    return true;
+  }
+
+  /**
+   * Request to kick a player whose turn has timed out.
+   * Returns the winner side if successful.
+   */
+  requestKick(roomId: string, socketId: string): { success: boolean; winner?: "player1" | "player2"; error?: string } {
+    const room = this.rooms.get(roomId);
+    if (!room) return { success: false, error: "Room not found" };
+    if (room.status !== "playing" || !room.gameState) {
+      return { success: false, error: "Game is not in progress" };
+    }
+
+    // Determine which player is requesting the kick
+    const isPlayer1 = room.player1SocketId === socketId;
+    const isPlayer2 = room.player2SocketId === socketId;
+    if (!isPlayer1 && !isPlayer2) {
+      return { success: false, error: "Not a player in this room" };
+    }
+
+    // Check that it's the OPPONENT's turn (you can only kick when opponent's time is up)
+    const isOpponentsTurn = isPlayer1 ? !room.gameState.isPlayerTurn : room.gameState.isPlayerTurn;
+    if (!isOpponentsTurn) {
+      return { success: false, error: "Solo puedes expulsar cuando es el turno del rival" };
+    }
+
+    // Check if turn timer has expired
+    if (!room.turnStartedAt) {
+      return { success: false, error: "Timer not initialized" };
+    }
+    const elapsed = (Date.now() - room.turnStartedAt) / 1000;
+    if (elapsed < room.turnTimerDuration) {
+      return { success: false, error: "El rival aún tiene tiempo" };
+    }
+
+    // Kick is valid — the requesting player wins
+    room.status = "finished";
+    const winner: "player1" | "player2" = isPlayer1 ? "player1" : "player2";
+    console.log(`⏱️ Kick: ${winner} wins in room ${roomId} (opponent turn timed out after ${Math.floor(elapsed)}s)`);
+
+    return { success: true, winner };
+  }
+
+  /**
+   * Add a spectator to a room
+   */
+  addSpectator(roomId: string, socketId: string): GameRoom | null {
+    const room = this.rooms.get(roomId);
+    if (!room || room.status !== "playing") return null;
+    room.spectators.add(socketId);
+    return room;
+  }
+
+  /**
+   * Remove a spectator from a room
+   */
+  removeSpectator(roomId: string, socketId: string): void {
+    const room = this.rooms.get(roomId);
+    if (room) {
+      room.spectators.delete(socketId);
+    }
+  }
+
+  /**
+   * Check if a socket is a spectator in a room
+   */
+  isSpectator(roomId: string, socketId: string): boolean {
+    const room = this.rooms.get(roomId);
+    return room?.spectators.has(socketId) ?? false;
+  }
+
+  /**
+   * Find an active ("playing") room where the given user is a player.
+   */
+  getActiveRoomForUser(userId: string): GameRoom | null {
+    for (const room of this.rooms.values()) {
+      if (room.status === "playing" && (room.player1Id === userId || room.player2Id === userId)) {
+        return room;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Find a "waiting" room created by the given user (as player1).
+   */
+  findWaitingRoomByUser(userId: string): GameRoom | null {
+    for (const room of this.rooms.values()) {
+      if (room.status === "waiting" && room.player1Id === userId) {
+        return room;
+      }
+    }
+    return null;
   }
 
   /**

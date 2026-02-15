@@ -198,6 +198,7 @@ interface ChatMessage {
 
 // Room manager instance
 const roomManager = new GameRoomManager();
+roomManager.startPeriodicCleanup();
 
 /** Serialize a room for the lobby room list */
 function serializeRoom(r: ReturnType<typeof roomManager.getRoom>) {
@@ -323,6 +324,16 @@ export function setupSocketHandlers(io: Server): void {
       console.log(`[joinRoom] Received:`, payload);
       try {
         const { roomId, userId, deckId, username, avatarId, titleId } = payload;
+
+        // Auto-close any waiting room the user owns before joining another
+        const existingWaitingRoom = roomManager.findWaitingRoomByUser(userId);
+        if (existingWaitingRoom && existingWaitingRoom.id !== roomId) {
+          // Force-close waiting room since user is joining another
+          roomManager.forceDeleteRoom(existingWaitingRoom.id);
+          broadcastRoomList(io);
+          console.log(`🗑️ Auto-deleted waiting room ${existingWaitingRoom.id} (user ${userId} joining ${roomId})`);
+        }
+
         console.log(`[joinRoom] Attempting to join room ${roomId} as ${userId}`);
         const room = await roomManager.joinRoom(roomId, userId, socket.id, {
           username: username || null,
@@ -377,6 +388,8 @@ export function setupSocketHandlers(io: Server): void {
             opponentInfo: isPlayer1 ? room.joiner : room.creator,
             playerVariantMap: isPlayer1 ? p1Variants : p2Variants,
             opponentVariantMap: isPlayer1 ? p2Variants : p1Variants,
+            turnStartedAt: room.turnStartedAt,
+            turnTimerDuration: room.turnTimerDuration,
           });
           return;
         }
@@ -405,6 +418,8 @@ export function setupSocketHandlers(io: Server): void {
             opponentInfo: room.joiner,
             playerVariantMap: p1Variants,
             opponentVariantMap: p2Variants,
+            turnStartedAt: room.turnStartedAt,
+            turnTimerDuration: room.turnTimerDuration,
           });
           io.to(room.player2SocketId!).emit("gameStart", {
             roomId,
@@ -413,6 +428,8 @@ export function setupSocketHandlers(io: Server): void {
             opponentInfo: room.creator,
             playerVariantMap: p2Variants,
             opponentVariantMap: p1Variants,
+            turnStartedAt: room.turnStartedAt,
+            turnTimerDuration: room.turnTimerDuration,
           });
 
           console.log(`🎮 Game auto-started in room ${roomId}`);
@@ -463,12 +480,16 @@ export function setupSocketHandlers(io: Server): void {
             opponentInfo: room.joiner,
             playerVariantMap: p1Variants,
             opponentVariantMap: p2Variants,
+            turnStartedAt: room.turnStartedAt,
+            turnTimerDuration: room.turnTimerDuration,
           });
           io.to(room.player2SocketId!).emit("gameStart", {
             gameState: maskGameStateForPlayer(gameState, "player2"),
             opponentInfo: room.creator,
             playerVariantMap: p2Variants,
             opponentVariantMap: p1Variants,
+            turnStartedAt: room.turnStartedAt,
+            turnTimerDuration: room.turnTimerDuration,
           });
 
           console.log(`🎮 Game started in room ${roomId}`);
@@ -522,12 +543,28 @@ export function setupSocketHandlers(io: Server): void {
           if (room.player1SocketId) {
             io.to(room.player1SocketId).emit("gameState", {
               gameState: maskGameStateForPlayer(result.gameState, "player1"),
+              turnStartedAt: room.turnStartedAt,
+              turnTimerDuration: room.turnTimerDuration,
             });
           }
           if (room.player2SocketId) {
             io.to(room.player2SocketId).emit("gameState", {
               gameState: maskGameStateForPlayer(result.gameState, "player2"),
+              turnStartedAt: room.turnStartedAt,
+              turnTimerDuration: room.turnTimerDuration,
             });
+          }
+
+          // Send state to spectators (player1 perspective)
+          if (room.spectators && room.spectators.size > 0) {
+            const spectatorState = maskGameStateForPlayer(result.gameState, "player1");
+            for (const specSocketId of room.spectators) {
+              io.to(specSocketId).emit("gameState", {
+                gameState: spectatorState,
+                turnStartedAt: room.turnStartedAt,
+                turnTimerDuration: room.turnTimerDuration,
+              });
+            }
           }
         }
 
@@ -688,6 +725,131 @@ export function setupSocketHandlers(io: Server): void {
     });
 
     // ==========================================================================
+    // Kick (Turn Timer Expiry)
+    // ==========================================================================
+
+    socket.on("requestKick", async (payload: { roomId: string }) => {
+      try {
+        const { roomId } = payload;
+        const result = roomManager.requestKick(roomId, socket.id);
+
+        if (!result.success) {
+          socket.emit("error", { message: result.error || "Cannot kick" });
+          return;
+        }
+
+        // Emit game over to room
+        io.to(roomId).emit("gameOver", {
+          winner: result.winner,
+          reason: "Tiempo agotado",
+        });
+
+        // Persist win/loss stats to database
+        const room = roomManager.getRoom(roomId);
+        const draftInfo = draftRoomManager.getDraftInfoForGameRoom(roomId);
+        if (room?.player1Id && room?.player2Id && result.winner) {
+          const mode = draftInfo ? "draft" as const : "normal" as const;
+          const winnerId = result.winner === "player1" ? room.player1Id : room.player2Id;
+          const loserId = result.winner === "player1" ? room.player2Id : room.player1Id;
+          recordMatchResult(winnerId, mode, true).then(() => checkAndUpdateProgress(winnerId)).catch(console.error);
+          recordMatchResult(loserId, mode, false).then(() => checkAndUpdateProgress(loserId)).catch(console.error);
+        }
+
+        // Report to draft system if applicable
+        if (draftInfo && result.winner) {
+          const winnerId = result.winner === "player1" ? draftInfo.player1Id : draftInfo.player2Id;
+          const loserId = result.winner === "player1" ? draftInfo.player2Id : draftInfo.player1Id;
+
+          const { newRoundStarted } = draftRoomManager.reportMatchResult(
+            draftInfo.draftRoomId,
+            draftInfo.roundNumber,
+            draftInfo.matchNumber,
+            winnerId,
+            loserId,
+            roomId,
+          );
+
+          draftRoomManager.clearPendingMatchInfo(draftInfo.draftRoomId, winnerId);
+          draftRoomManager.clearPendingMatchInfo(draftInfo.draftRoomId, loserId);
+
+          const draftRoom = draftRoomManager.getRoom(draftInfo.draftRoomId);
+
+          if (draftRoom) {
+            for (const p of draftRoom.players) {
+              if (p.socketId) {
+                io.to(p.socketId).emit("draft:matchEnded", {
+                  draftRoomId: draftInfo.draftRoomId,
+                  winnerId,
+                  loserId,
+                  forfeit: true,
+                  tournamentFinished: draftRoom.phase === "finished",
+                });
+              }
+            }
+          }
+
+          if (newRoundStarted && draftRoom?.tournament) {
+            createMatchGames(io, draftInfo.draftRoomId, draftRoom.tournament.currentRoundNumber, roomManager).catch(console.error);
+          }
+        }
+
+        broadcastRoomList(io);
+        console.log(`⏱️ Player kicked from room ${roomId} — winner: ${result.winner}`);
+      } catch (error) {
+        socket.emit("error", { message: (error as Error).message });
+      }
+    });
+
+    // ==========================================================================
+    // Spectator Mode
+    // ==========================================================================
+
+    socket.on("spectateRoom", async (payload: { roomId: string }) => {
+      try {
+        const { roomId } = payload;
+        const room = roomManager.addSpectator(roomId, socket.id);
+
+        if (!room) {
+          socket.emit("error", { message: "Room not found or not playing" });
+          return;
+        }
+
+        socket.join(roomId);
+
+        // Send current game state from player1 perspective (neutral view)
+        if (room.gameState) {
+          socket.emit("gameStart", {
+            roomId,
+            gameState: maskGameStateForPlayer(room.gameState, "player1"),
+            isPlayer1: true, // spectator sees from P1 perspective
+            isSpectator: true,
+            opponentInfo: room.joiner,
+            creatorInfo: room.creator,
+            turnStartedAt: room.turnStartedAt,
+            turnTimerDuration: room.turnTimerDuration,
+          });
+        }
+
+        // Notify room about spectator
+        io.to(roomId).emit("spectatorUpdate", { count: room.spectators.size });
+
+        console.log(`👁️ Spectator ${socket.id} joined room ${roomId} (total: ${room.spectators.size})`);
+      } catch (error) {
+        socket.emit("error", { message: (error as Error).message });
+      }
+    });
+
+    // ==========================================================================
+    // Active Game Check (for reconnection)
+    // ==========================================================================
+
+    socket.on("checkActiveGame", (payload: { userId: string }) => {
+      const { userId } = payload;
+      const room = roomManager.getActiveRoomForUser(userId);
+      socket.emit("activeGame", { roomId: room?.id ?? null });
+    });
+
+    // ==========================================================================
     // Disconnect
     // ==========================================================================
 
@@ -700,6 +862,9 @@ export function setupSocketHandlers(io: Server): void {
         socket.to(roomId).emit("playerDisconnected", {
           socketId: socket.id,
         });
+
+        // Broadcast updated room list (room may have been cleaned up)
+        broadcastRoomList(io);
       }
     });
 
