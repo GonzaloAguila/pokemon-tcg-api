@@ -4,6 +4,7 @@ export const ADMIN_PERMISSIONS = {
   USERS_EDIT_CARDS: "users:cards",
   USERS_EDIT_STATS: "users:stats",
   USERS_DELETE: "users:delete",
+  USERS_MODERATE: "users:moderate",
   ROOMS_VIEW: "rooms:view",
   ROOMS_CLOSE: "rooms:close",
   MESSAGES_SEND: "messages:send",

@@ -57,6 +57,7 @@ export async function searchUsers(
         rareCandy: true,
         level: true,
         createdAt: true,
+        status: true,
         lastLoginAt: true,
         stats: {
           select: {
@@ -117,6 +118,11 @@ export async function getUserDetail(userId: string) {
       experience: true,
       avatarPresetId: true,
       createdAt: true,
+      status: true,
+      bannedAt: true,
+      bannedReason: true,
+      suspendedUntil: true,
+      suspendedReason: true,
       lastLoginAt: true,
       stats: {
         select: {
@@ -183,6 +189,47 @@ export async function deleteUser(userId: string) {
 
   await prisma.user.delete({ where: { id: userId } });
   return { success: true };
+}
+
+// ---------------------------------------------------------------------------
+// Toggle user ban
+// ---------------------------------------------------------------------------
+
+export async function toggleUserBan(userId: string, banned: boolean, reason?: string) {
+  const user = await prisma.user.update({
+    where: { id: userId },
+    data: {
+      status: banned ? "banned" : "active",
+      bannedAt: banned ? new Date() : null,
+      bannedReason: banned ? (reason || null) : null,
+      // Clear suspension if unbanning
+      ...(banned ? {} : { suspendedUntil: null, suspendedReason: null }),
+      // Increment tokenVersion to invalidate all existing sessions
+      ...(banned ? { tokenVersion: { increment: 1 }, refreshToken: null } : {}),
+    },
+    select: { status: true },
+  });
+  return user;
+}
+
+// ---------------------------------------------------------------------------
+// Suspend user for a duration
+// ---------------------------------------------------------------------------
+
+export async function suspendUser(userId: string, hours: number, reason?: string) {
+  const suspendedUntil = new Date(Date.now() + hours * 60 * 60 * 1000);
+  const user = await prisma.user.update({
+    where: { id: userId },
+    data: {
+      status: "suspended",
+      suspendedUntil,
+      suspendedReason: reason || null,
+      tokenVersion: { increment: 1 },
+      refreshToken: null,
+    },
+    select: { status: true, suspendedUntil: true },
+  });
+  return user;
 }
 
 // ---------------------------------------------------------------------------

@@ -51,6 +51,13 @@ model User {
   verificationToken      String?   @unique
   verificationTokenExpiry DateTime?
 
+  // Account status
+  status          String    @default("active") // "active" | "banned" | "suspended"
+  bannedAt        DateTime?
+  bannedReason    String?
+  suspendedUntil  DateTime?
+  suspendedReason String?
+
   // Security
   failedLoginAttempts Int       @default(0)
   lockedUntil         DateTime?

@@ -2,7 +2,7 @@ import { Router, type Request, type Response, type NextFunction } from "express"
 import { z } from "zod";
 import * as usersService from "./users.service.js";
 import * as rewardsService from "./rewards.service.js";
-import { requireAuth, requireRole } from "../../middleware/auth.js";
+import { requireAuth, requireRole, checkUserStatus } from "../../middleware/auth.js";
 import { Errors } from "../../middleware/error-handler.js";
 
 const router = Router();
@@ -61,6 +61,7 @@ router.get(
 router.get(
   "/me",
   requireAuth,
+  checkUserStatus(),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const profile = await usersService.getUserProfile(req.user!.userId);

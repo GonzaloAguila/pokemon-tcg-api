@@ -89,6 +89,45 @@ export function requirePermission(...permissions: string[]): RequestHandler {
 }
 
 /**
+ * Check user account status (banned / suspended).
+ * Must be used after requireAuth. Queries DB on each request.
+ */
+export function checkUserStatus(): RequestHandler {
+  return async (req: Request, _res: Response, next: NextFunction) => {
+    try {
+      if (!req.user) return next();
+
+      const user = await prisma.user.findUnique({
+        where: { id: req.user.userId },
+        select: { status: true, suspendedUntil: true },
+      });
+
+      if (!user) throw Errors.Unauthorized("Usuario no encontrado");
+
+      if (user.status === "banned") {
+        throw Errors.Forbidden("Tu cuenta ha sido deshabilitada. Contacta soporte.");
+      }
+
+      if (user.status === "suspended") {
+        if (user.suspendedUntil && user.suspendedUntil > new Date()) {
+          const until = user.suspendedUntil.toISOString();
+          throw Errors.Forbidden(`Tu cuenta esta suspendida hasta ${until}`);
+        }
+        // Suspension expired — auto-reactivate
+        await prisma.user.update({
+          where: { id: req.user.userId },
+          data: { status: "active", suspendedUntil: null, suspendedReason: null },
+        });
+      }
+
+      next();
+    } catch (err) {
+      next(err);
+    }
+  };
+}
+
+/**
  * Optional auth — attach user if token present, but don't fail otherwise.
  */
 export function optionalAuth(

@@ -6,6 +6,7 @@ import {
   getDiscordUserFromCode,
   type OAuthUser,
 } from "../../lib/oauth.js";
+import { Errors } from "../../middleware/error-handler.js";
 import {
   generateAccessToken,
   generateRefreshToken,
@@ -63,6 +64,14 @@ async function handleOAuthCallback(
       });
       user = (await prisma.user.findUnique({ where: { id: user.id } }))!;
     }
+
+    // Check account status for existing users
+    if (user.status === "banned") {
+      throw Errors.Forbidden("Tu cuenta ha sido deshabilitada. Contacta soporte.");
+    }
+    if (user.status === "suspended" && user.suspendedUntil && user.suspendedUntil > new Date()) {
+      throw Errors.Forbidden(`Tu cuenta esta suspendida hasta ${user.suspendedUntil.toISOString()}`);
+    }
   } else {
     // Create new user
     const username = await generateUniqueUsername(oauthUser.name);
@@ -79,12 +88,40 @@ async function handleOAuthCallback(
         providerId: oauthUser.id,
         role,
         emailVerified: true,
-        coins: 1000,
-        coupons: 1,
+        coins: 2000,
+        coupons: 100,
         stats: { create: {} },
       },
     });
     isNewUser = true;
+
+    // Send welcome system message (non-blocking)
+    try {
+      await prisma.systemMessage.create({
+        data: {
+          type: "personal",
+          title: "Bienvenido a Nostalgic TCG!",
+          category: "info",
+          senderId: user.id,
+          recipientId: user.id,
+          content: [
+            "**Bienvenido, Entrenador!**",
+            "",
+            "Nos alegra que te unas a **Nostalgic TCG**, la plataforma donde revives la era dorada del Juego de Cartas Coleccionables de Pokemon.",
+            "",
+            "La plataforma se encuentra actualmente en fase **Alpha**, lo que significa que todavia estamos trabajando en muchas funcionalidades y puede que encuentres errores. Tu feedback es muy valioso para nosotros!",
+            "",
+            "Para que puedas empezar tu aventura, te hemos otorgado:",
+            "",
+            "**2.000 PokeCoins** y **100 Cupones** para que explores el mercado, abras sobres y armes tus mazos.",
+            "",
+            "Buena suerte en tus batallas!",
+          ].join("\n"),
+        },
+      });
+    } catch {
+      // Welcome message failure should not block registration
+    }
   }
 
   // Generate tokens

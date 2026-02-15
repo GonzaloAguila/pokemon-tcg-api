@@ -310,6 +310,57 @@ router.post(
 );
 
 // =============================================================================
+// Moderation (Ban / Suspend)
+// =============================================================================
+
+// ---------------------------------------------------------------------------
+// PATCH /admin/users/:userId/ban — Toggle user ban
+// ---------------------------------------------------------------------------
+
+router.patch(
+  "/admin/users/:userId/ban",
+  requireAuth,
+  requirePermission("users:moderate"),
+  preventSelfAction,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { banned, reason } = req.body;
+      if (typeof banned !== "boolean") {
+        throw Errors.ValidationError("El campo 'banned' es requerido (true/false)");
+      }
+      const result = await adminService.toggleUserBan(req.params.userId, banned, reason);
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// POST /admin/users/:userId/suspend — Suspend user for a duration
+// ---------------------------------------------------------------------------
+
+router.post(
+  "/admin/users/:userId/suspend",
+  requireAuth,
+  requirePermission("users:moderate"),
+  preventSelfAction,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { hours, reason } = req.body;
+      const h = Number(hours);
+      if (!h || h < 1 || h > 8760) {
+        throw Errors.ValidationError("Las horas deben estar entre 1 y 8760 (1 anio)");
+      }
+      const result = await adminService.suspendUser(req.params.userId, h, reason);
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// =============================================================================
 // Room Management
 // =============================================================================
 
