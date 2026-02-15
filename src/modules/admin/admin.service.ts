@@ -567,7 +567,7 @@ export async function getAdminStats(period?: StatsPeriod) {
     prisma.match.count({
       where: {
         status: "finished",
-        ...(periodStart ? { updatedAt: { gte: periodStart } } : {}),
+        ...(periodStart ? { finishedAt: { gte: periodStart } } : {}),
       },
     }),
 
