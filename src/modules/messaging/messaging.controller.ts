@@ -20,12 +20,12 @@ router.get(
     try {
       const limit = Math.min(Number(req.query.limit) || 50, 100);
       const cursor = req.query.cursor as string | undefined;
-      const messages = await messagingService.getUserMessages(
+      const result = await messagingService.getUserMessages(
         req.user!.userId,
         limit,
         cursor,
       );
-      res.json({ messages });
+      res.json({ messages: result.messages, nextCursor: result.nextCursor });
     } catch (err) {
       next(err);
     }

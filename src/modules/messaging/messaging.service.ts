@@ -79,7 +79,7 @@ export async function getUserMessages(userId: string, limit = 50, cursor?: strin
   const messages = await prisma.systemMessage.findMany({
     where,
     orderBy: { createdAt: "desc" },
-    take: limit,
+    take: limit + 1,
     select: {
       id: true,
       type: true,
@@ -102,7 +102,10 @@ export async function getUserMessages(userId: string, limit = 50, cursor?: strin
     },
   });
 
-  return messages.map((msg) => ({
+  const hasMore = messages.length > limit;
+  if (hasMore) messages.pop();
+
+  const mapped = messages.map((msg) => ({
     id: msg.id,
     type: msg.type,
     title: msg.title,
@@ -114,6 +117,11 @@ export async function getUserMessages(userId: string, limit = 50, cursor?: strin
     senderUsername: msg.sender.username,
     isRead: msg.reads.length > 0,
   }));
+
+  return {
+    messages: mapped,
+    nextCursor: hasMore ? messages[messages.length - 1].createdAt.toISOString() : null,
+  };
 }
 
 // ---------------------------------------------------------------------------
