@@ -561,6 +561,14 @@ export function setupSocketHandlers(io: Server): void {
             });
           }
 
+          // Broadcast setup timer start to both players if present
+          if (result.setupTimerStarted) {
+            io.to(roomId).emit("setupTimer", {
+              startedAt: result.setupTimerStarted,
+              duration: 90, // seconds
+            });
+          }
+
           if (room.player1SocketId) {
             io.to(room.player1SocketId).emit("gameState", {
               gameState: maskGameStateForPlayer(result.gameState, "player1"),
@@ -894,10 +902,10 @@ export function setupSocketHandlers(io: Server): void {
   });
 
   // Set up forfeit callback for disconnect timeout
-  roomManager.setOnForfeit((roomId, winner, gameState) => {
+  roomManager.setOnForfeit((roomId, winner, gameState, reason) => {
     io.to(roomId).emit("gameOver", {
       winner,
-      reason: "Oponente desconectado (tiempo de espera agotado)",
+      reason: reason || "Oponente desconectado (tiempo de espera agotado)",
     });
 
     // Persist win/loss stats to database (skip for friendly matches)

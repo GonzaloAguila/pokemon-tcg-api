@@ -142,6 +142,7 @@ interface ActionResult {
   winner?: "player1" | "player2";
   coinFlipInfo?: { attackName: string; results: Array<"heads" | "tails"> };
   winReason?: string;
+  setupTimerStarted?: number; // timestamp when setup timer started (ms)
 }
 
 /**
@@ -406,11 +407,13 @@ function neutralizeEvents(
 }
 
 const FORFEIT_TIMEOUT_MS = 120_000; // 2 minutes
+const SETUP_TIMEOUT_MS = 90_000; // 90 seconds for opponent to finish setup
 
 type ForfeitCallback = (
   roomId: string,
   winner: "player1" | "player2",
   gameState: GameState,
+  reason?: string,
 ) => void;
 
 export class GameRoomManager {
@@ -418,6 +421,8 @@ export class GameRoomManager {
   private socketToRoom: Map<string, string> = new Map();
   private forfeitTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private cleanupTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
+  private setupTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
+  private setupTimerStartTimes: Map<string, number> = new Map(); // roomId → Date.now()
   private onForfeitCallback: ForfeitCallback | null = null;
 
   /**
@@ -1424,11 +1429,15 @@ export class GameRoomManager {
           console.log(`[playerReady] Check: p1Ready=${p1Ready}, p2Ready=${p2Ready}, phase=${newState.gamePhase}`);
 
           if (p1Ready && p2Ready && newState.gamePhase === "MULLIGAN") {
-            // Both players ready - do coin flip and start playing phase
+            // Both players ready - cancel setup timer and start game
+            this.cancelSetupTimer(roomId);
             const coinFlipResult = Math.random() < 0.5 ? "heads" : "tails";
             console.log(`[playerReady] Both players ready! Coin flip: ${coinFlipResult}`);
             newState = startPlayingPhase(newState, coinFlipResult);
             console.log(`[playerReady] Game started! New phase: ${newState.gamePhase}`);
+          } else if ((p1Ready || p2Ready) && !(p1Ready && p2Ready)) {
+            // Only one player is ready — start setup timer for the opponent
+            this.startSetupTimer(roomId, isPlayer1 ? "player1" : "player2");
           }
           break;
         }
@@ -1691,12 +1700,16 @@ export class GameRoomManager {
           : "Player 2 wins!";
       }
 
+      // Include setup timer info if timer is active
+      const setupTimerStarted = this.setupTimerStartTimes.get(roomId);
+
       return {
         success: true,
         gameState: room.gameState,
         gameOver,
         winner,
         winReason,
+        ...(setupTimerStarted ? { setupTimerStarted } : {}),
       };
     } catch (error) {
       console.error(`[Room ${roomId}] Action error:`, error);
@@ -1817,6 +1830,76 @@ export class GameRoomManager {
 
     if (this.onForfeitCallback) {
       this.onForfeitCallback(roomId, winner, room.gameState);
+    }
+  }
+
+  /**
+   * Start a setup timer when the first player clicks ready.
+   * If the opponent doesn't click ready within SETUP_TIMEOUT_MS, the ready player wins.
+   */
+  startSetupTimer(roomId: string, readySide: "player1" | "player2"): void {
+    // Don't start if already running
+    if (this.setupTimers.has(roomId)) return;
+
+    const startTime = Date.now();
+    console.log(
+      `⏱️ Setup timer started in room ${roomId} — ${readySide} is ready (${SETUP_TIMEOUT_MS / 1000}s)`,
+    );
+
+    const timer = setTimeout(() => {
+      this.handleSetupTimeout(roomId, readySide);
+    }, SETUP_TIMEOUT_MS);
+
+    this.setupTimers.set(roomId, timer);
+    this.setupTimerStartTimes.set(roomId, startTime);
+  }
+
+  /**
+   * Get the setup timer start time for a room (if active).
+   */
+  getSetupTimerStart(roomId: string): number | null {
+    return this.setupTimerStartTimes.get(roomId) ?? null;
+  }
+
+  /**
+   * Cancel the setup timer (both players are ready).
+   */
+  private cancelSetupTimer(roomId: string): void {
+    const timer = this.setupTimers.get(roomId);
+    if (timer) {
+      clearTimeout(timer);
+      this.setupTimers.delete(roomId);
+      this.setupTimerStartTimes.delete(roomId);
+      console.log(`⏱️ Setup timer cancelled for room ${roomId} (both ready)`);
+    }
+  }
+
+  /**
+   * Handle setup timeout — opponent didn't click ready in time.
+   */
+  private handleSetupTimeout(
+    roomId: string,
+    readySide: "player1" | "player2",
+  ): void {
+    this.setupTimers.delete(roomId);
+
+    const room = this.rooms.get(roomId);
+    if (!room || !room.gameState || room.status !== "playing") return;
+
+    // Check that only one player is ready (the other isn't)
+    const p1Ready = room.gameState.playerReady;
+    const p2Ready = room.gameState.opponentReady;
+    if (p1Ready && p2Ready) return; // Both ready, game should have started
+
+    console.log(
+      `⏱️ Setup timeout in room ${roomId} — ${readySide} wins (opponent not ready)`,
+    );
+
+    room.status = "finished";
+    const winner = readySide;
+
+    if (this.onForfeitCallback) {
+      this.onForfeitCallback(roomId, winner, room.gameState, "Rival no completó la preparación a tiempo");
     }
   }
 
@@ -1942,7 +2025,8 @@ export class GameRoomManager {
   forceDeleteRoom(roomId: string): boolean {
     const room = this.rooms.get(roomId);
     if (!room) return false;
-    // Clean up socket mappings
+    // Clean up timers and socket mappings
+    this.cancelSetupTimer(roomId);
     if (room.player1SocketId) this.socketToRoom.delete(room.player1SocketId);
     if (room.player2SocketId) this.socketToRoom.delete(room.player2SocketId);
     this.rooms.delete(roomId);
