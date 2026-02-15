@@ -7,6 +7,7 @@
 import {
   baseSetCards,
   jungleCards,
+  isBasicEnergy,
   type Card,
 } from "@gonzaloaguila/game-core";
 
@@ -186,12 +187,13 @@ function getCardsByRarity(setId: string, rarity: string): Card[] {
 }
 
 /**
- * Get energy cards from a set (Jungle has no energy, falls back to Base Set)
+ * Get basic energy cards from a set (excludes special energies like Double Colorless).
+ * Jungle has no energy, falls back to Base Set.
  */
 function getEnergyCards(setId: string): Card[] {
   const cards = setCardMap[setId] ?? baseSetCards;
-  const energy = cards.filter((card) => card.kind === "energy");
-  return energy.length > 0 ? energy : baseSetCards.filter((card) => card.kind === "energy");
+  const energy = cards.filter(isBasicEnergy);
+  return energy.length > 0 ? energy : baseSetCards.filter(isBasicEnergy);
 }
 
 /**
