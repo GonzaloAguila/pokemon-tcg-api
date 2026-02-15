@@ -2,6 +2,7 @@ import type { Request, Response, NextFunction, RequestHandler } from "express";
 import type { UserRole } from "@prisma/client";
 import { verifyAccessToken, type TokenPayload } from "../lib/jwt.js";
 import { Errors } from "./error-handler.js";
+import { prisma } from "../lib/prisma.js";
 
 // Augment Express Request
 declare global {
@@ -47,6 +48,43 @@ export function requireRole(...roles: UserRole[]): RequestHandler {
       throw Errors.Forbidden("No tienes permisos para esta accion");
     }
     next();
+  };
+}
+
+/**
+ * Require specific admin permissions. Must be used after requireAuth.
+ * SuperAdmin bypasses all permission checks.
+ * Admins must have the required permissions stored on their user record.
+ */
+export function requirePermission(...permissions: string[]): RequestHandler {
+  return async (req: Request, _res: Response, next: NextFunction) => {
+    try {
+      if (!req.user) throw Errors.Unauthorized("Token de acceso requerido");
+
+      // SuperAdmin bypasses all permission checks
+      if (req.user.role === "superadmin") return next();
+
+      // Must be at least admin
+      if (req.user.role !== "admin") {
+        throw Errors.Forbidden("No tienes permisos para esta accion");
+      }
+
+      // Check user's permissions from DB (allows real-time revocation)
+      const user = await prisma.user.findUnique({
+        where: { id: req.user.userId },
+        select: { permissions: true },
+      });
+
+      const userPerms = (user?.permissions as string[]) || [];
+      const hasAll = permissions.every((p) => userPerms.includes(p));
+      if (!hasAll) {
+        throw Errors.Forbidden("No tienes permisos para esta accion");
+      }
+
+      next();
+    } catch (err) {
+      next(err);
+    }
   };
 }
 

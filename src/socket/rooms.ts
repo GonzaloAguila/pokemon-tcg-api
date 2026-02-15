@@ -90,6 +90,7 @@ interface RoomConfig {
   prizeCount: number;           // 4, 5, or 6
   betAmount: number;            // 0 = no bet
   reservedUserId: string | null; // null = open to all
+  friendly: boolean;            // true = no stats recorded
 }
 
 interface CreatorInfo {
@@ -451,6 +452,7 @@ export class GameRoomManager {
         prizeCount: prizeCount >= 4 && prizeCount <= 6 ? prizeCount : 6,
         betAmount: config?.betAmount ?? 0,
         reservedUserId: config?.reservedUserId ?? null,
+        friendly: config?.friendly ?? false,
       },
       creator: {
         username: creator?.username ?? null,
@@ -917,8 +919,10 @@ export class GameRoomManager {
             }
 
             // Execute Metronome via game-core
+            // If the copied attack has coin flip effects, skip endTurn so we can apply them first
+            const metronomeHasCoinEffects = coinFlipInfo && coinFlipEffects.length > 0;
             usedExecuteForPlayer = true;
-            newState = executeForPlayer((state) => executeMetronome(state, copiedAttack, false, true));
+            newState = executeForPlayer((state) => executeMetronome(state, copiedAttack, !!metronomeHasCoinEffects, true));
           } else {
             // ── Normal attack ──
             if (activePokemon && isPokemonCard(activePokemon.pokemon)) {
@@ -947,14 +951,30 @@ export class GameRoomManager {
               };
             }
 
+            // If there are coin flip effects, skip endTurn so we can apply effects first
+            // (e.g., Venomoth's Venom Powder applies Poisoned via coin flip — poison damage
+            //  must be dealt during endTurn AFTER the status is applied)
+            const hasCoinEffects = coinFlipInfo && coinFlipEffects.length > 0;
             usedExecuteForPlayer = true;
-            newState = executeForPlayer((state) => executeAttack(state, attackIndex, false, true));
+            newState = executeForPlayer((state) => executeAttack(state, attackIndex, !!hasCoinEffects, true));
           }
 
           // Apply coin flip effects (status, extra damage, protection) — skip re-logging coin result
           if (coinFlipInfo && coinFlipEffects.length > 0) {
             newState = applyCoinFlipEffects(newState, coinFlipInfo.results, coinFlipEffects, isPlayer1, true);
             console.log(`[attack] Applied coin flip effects for ${coinFlipInfo.attackName}`);
+
+            // Now call endTurn since we skipped it during executeAttack.
+            // Only if the game isn't already over (e.g., the attack KO'd the last opponent Pokemon).
+            // NOTE: We can't use executeForPlayer() here because it reads from room.gameState
+            // which hasn't been updated yet. We swap perspective manually using newState.
+            if (newState.gamePhase !== "GAME_OVER") {
+              if (isPlayer1) {
+                newState = endTurn(newState);
+              } else {
+                newState = swapPerspective(endTurn(swapPerspective(newState)));
+              }
+            }
           }
 
           // Return coin flip info for handlers to broadcast to both players
@@ -1314,6 +1334,30 @@ export class GameRoomManager {
           }
           usedExecuteForPlayer = true;
           newState = executeForPlayer((state) => promoteActivePokemon(state, benchIndex));
+
+          // After opponent promotes their new active Pokemon, end the attacker's turn.
+          // The attacker is the OTHER player (the one who KO'd the defender).
+          // endTurn was skipped inside executeAttack because opponentNeedsToPromote was set,
+          // so we must call it now that the promotion is complete.
+          // Only proceed if both actives are present and game can continue.
+          if (
+            newState.gamePhase !== "GAME_OVER" &&
+            newState.playerActivePokemon !== null &&
+            newState.opponentActivePokemon !== null &&
+            !newState.playerCanTakePrize &&
+            !newState.opponentCanTakePrize
+          ) {
+            // The promoter is `isPlayer1`. The attacker is the opposite player.
+            // We need endTurn from the ATTACKER's perspective.
+            const attackerIsPlayer1 = !isPlayer1;
+            if (attackerIsPlayer1) {
+              // Attacker is player1: state is already in player1 perspective
+              newState = endTurn(newState);
+            } else {
+              // Attacker is player2: swap → endTurn → swap back
+              newState = swapPerspective(endTurn(swapPerspective(newState)));
+            }
+          }
           break;
         }
 
@@ -1811,6 +1855,13 @@ export class GameRoomManager {
         }
       }
     }, 60_000); // Run every minute
+  }
+
+  /**
+   * Get all rooms (for admin panel).
+   */
+  getAllRooms(): Map<string, GameRoom> {
+    return this.rooms;
   }
 
   /**

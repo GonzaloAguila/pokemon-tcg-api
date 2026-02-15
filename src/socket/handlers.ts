@@ -196,8 +196,8 @@ interface ChatMessage {
   content: string;
 }
 
-// Room manager instance
-const roomManager = new GameRoomManager();
+// Room manager instance (exported for admin panel access)
+export const roomManager = new GameRoomManager();
 roomManager.startPeriodicCleanup();
 
 /** Serialize a room for the lobby room list */
@@ -211,6 +211,7 @@ function serializeRoom(r: ReturnType<typeof roomManager.getRoom>) {
     prizeCount: r.config.prizeCount,
     betAmount: r.config.betAmount,
     reservedUserId: r.config.reservedUserId,
+    friendly: r.config.friendly,
     creatorUsername: r.creator.username,
     creatorAvatarId: r.creator.avatarId,
     creatorTitleId: r.creator.titleId,
@@ -224,6 +225,20 @@ function broadcastRoomList(io: Server) {
   io.emit("roomList", {
     rooms: roomManager.getActiveRooms().map(serializeRoom).filter(Boolean),
   });
+}
+
+/**
+ * Send a broadcast system message to all connected users.
+ */
+export function notifyBroadcast(io: Server, message: { id: string; title: string; content: string; category: string }) {
+  io.emit("systemMessage", message);
+}
+
+/**
+ * Send a personal system message to a specific user.
+ */
+export function notifyUser(io: Server, userId: string, message: { id: string; title: string; content: string; category: string }) {
+  io.to(`user:${userId}`).emit("systemMessage", message);
 }
 
 export function setupSocketHandlers(io: Server): void {
@@ -242,6 +257,11 @@ export function setupSocketHandlers(io: Server): void {
   io.on("connection", (socket: Socket) => {
     console.log(`🔌 Client connected: ${socket.id}`);
 
+    // Join user-specific room for targeted notifications
+    if (socket.data.user?.userId) {
+      socket.join(`user:${socket.data.user.userId}`);
+    }
+
     // ==========================================================================
     // Lobby - Room Listing
     // ==========================================================================
@@ -258,15 +278,16 @@ export function setupSocketHandlers(io: Server): void {
       prizeCount?: number;
       betAmount?: number;
       reservedUserId?: string;
+      friendly?: boolean;
       username?: string;
       avatarId?: string;
       titleId?: string;
     }) => {
       try {
-        const { userId, deckId, prizeCount, betAmount, reservedUserId, username, avatarId, titleId } = payload;
+        const { userId, deckId, prizeCount, betAmount, reservedUserId, friendly, username, avatarId, titleId } = payload;
         const room = roomManager.createRoom(
           undefined,
-          { prizeCount, betAmount, reservedUserId: reservedUserId || null },
+          { prizeCount, betAmount, reservedUserId: reservedUserId || null, friendly: friendly ?? false },
           { username: username || null, avatarId: avatarId || null, titleId: titleId || null },
         );
         await roomManager.joinRoom(room.id, userId, socket.id);
@@ -575,11 +596,11 @@ export function setupSocketHandlers(io: Server): void {
             reason: result.winReason,
           });
 
-          // Persist win/loss stats to database
+          // Persist win/loss stats to database (skip for friendly matches)
           const draftInfo =
             draftRoomManager.getDraftInfoForGameRoom(roomId);
           const room = roomManager.getRoom(roomId);
-          if (room?.player1Id && room?.player2Id && result.winner) {
+          if (room?.player1Id && room?.player2Id && result.winner && !room.config.friendly) {
             const mode = draftInfo ? "draft" as const : "normal" as const;
             const winnerId = result.winner === "player1" ? room.player1Id : room.player2Id;
             const loserId = result.winner === "player1" ? room.player2Id : room.player1Id;
@@ -744,10 +765,10 @@ export function setupSocketHandlers(io: Server): void {
           reason: "Tiempo agotado",
         });
 
-        // Persist win/loss stats to database
+        // Persist win/loss stats to database (skip for friendly matches)
         const room = roomManager.getRoom(roomId);
         const draftInfo = draftRoomManager.getDraftInfoForGameRoom(roomId);
-        if (room?.player1Id && room?.player2Id && result.winner) {
+        if (room?.player1Id && room?.player2Id && result.winner && !room.config.friendly) {
           const mode = draftInfo ? "draft" as const : "normal" as const;
           const winnerId = result.winner === "player1" ? room.player1Id : room.player2Id;
           const loserId = result.winner === "player1" ? room.player2Id : room.player1Id;
@@ -879,10 +900,10 @@ export function setupSocketHandlers(io: Server): void {
       reason: "Oponente desconectado (tiempo de espera agotado)",
     });
 
-    // Persist win/loss stats to database
+    // Persist win/loss stats to database (skip for friendly matches)
     const room = roomManager.getRoom(roomId);
     const draftInfo = draftRoomManager.getDraftInfoForGameRoom(roomId);
-    if (room?.player1Id && room?.player2Id) {
+    if (room?.player1Id && room?.player2Id && !room.config.friendly) {
       const mode = draftInfo ? "draft" as const : "normal" as const;
       const winnerId = winner === "player1" ? room.player1Id : room.player2Id;
       const loserId = winner === "player1" ? room.player2Id : room.player1Id;

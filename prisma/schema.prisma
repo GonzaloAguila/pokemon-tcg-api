@@ -113,6 +113,9 @@ model User {
   battlePasses     UserBattlePass[]
   dailyPurchases   DailyPurchase[]
   chatMessages     ChatMessage[]
+  sentMessages     SystemMessage[] @relation("SentMessages")
+  receivedMessages SystemMessage[] @relation("ReceivedMessages")
+  messageReads     MessageRead[]
 
   @@index([providerId, provider])
   @@map("users")
@@ -423,6 +426,43 @@ model UserAchievement {
 
   @@unique([userId, achievementId])
   @@map("user_achievements")
+}
+
+// =============================================================================
+// System Messages
+// =============================================================================
+
+model SystemMessage {
+  id          String   @id @default(uuid())
+  type        String   // "broadcast" | "personal"
+  title       String   @db.VarChar(200)
+  content     String   @db.VarChar(2000)
+  category    String   @default("info") // "info" | "reward" | "penalty" | "news" | "maintenance"
+  senderId    String
+  sender      User     @relation("SentMessages", fields: [senderId], references: [id])
+  recipientId String?  // null = broadcast, specific userId = personal
+  recipient   User?    @relation("ReceivedMessages", fields: [recipientId], references: [id])
+  metadata    Json?    // optional payload: { coins: 500, reason: "..." }
+  createdAt   DateTime @default(now())
+
+  reads MessageRead[]
+
+  @@index([recipientId, createdAt])
+  @@index([type, createdAt])
+  @@map("system_messages")
+}
+
+model MessageRead {
+  id        String        @id @default(uuid())
+  messageId String
+  message   SystemMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  readAt    DateTime      @default(now())
+
+  @@unique([messageId, userId])
+  @@index([userId])
+  @@map("message_reads")
 }
 
 // =============================================================================

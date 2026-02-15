@@ -17,6 +17,8 @@ import { marketRouter } from "./modules/market/index.js";
 import { wheelRouter } from "./modules/wheel/index.js";
 import { achievementsRouter } from "./modules/achievements/index.js";
 import { chatRouter } from "./modules/chat/index.js";
+import { messagingRouter } from "./modules/messaging/index.js";
+import { adminRouter } from "./modules/admin/index.js";
 import { cleanupOldMessages } from "./modules/chat/chat.service.js";
 
 // Load environment variables
@@ -58,6 +60,8 @@ app.use("/api", marketRouter);
 app.use("/api", wheelRouter);
 app.use("/api", achievementsRouter);
 app.use("/api", chatRouter);
+app.use("/api", messagingRouter);
+app.use("/api", adminRouter);
 // app.use("/api/matchmaking", matchmakingRouter);
 
 // Error handler
