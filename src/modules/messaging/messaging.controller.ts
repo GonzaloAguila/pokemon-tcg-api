@@ -160,4 +160,45 @@ router.get(
   },
 );
 
+// ---------------------------------------------------------------------------
+// PATCH /admin/messages/:id — Update a system message
+// ---------------------------------------------------------------------------
+
+router.patch(
+  "/admin/messages/:id",
+  requireAuth,
+  requirePermission("messages:send"),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { title, content, category } = req.body;
+      const result = await messagingService.updateMessage(req.params.id, {
+        title,
+        content,
+        category,
+      });
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// DELETE /admin/messages/:id — Delete a system message
+// ---------------------------------------------------------------------------
+
+router.delete(
+  "/admin/messages/:id",
+  requireAuth,
+  requirePermission("messages:send"),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const result = await messagingService.deleteMessage(req.params.id);
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
 export { router as messagingRouter };

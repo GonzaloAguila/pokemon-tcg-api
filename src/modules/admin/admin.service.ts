@@ -1,4 +1,4 @@
-import { type UserRole } from "@prisma/client";
+import { type UserRole, Prisma } from "@prisma/client";
 import { prisma } from "../../lib/prisma.js";
 import { Errors } from "../../middleware/error-handler.js";
 import { ALL_PERMISSIONS } from "./permissions.js";
@@ -99,6 +99,28 @@ export async function searchUsersBrief(query: string, limit = 10) {
 }
 
 // ---------------------------------------------------------------------------
+// Get user owned cosmetics
+// ---------------------------------------------------------------------------
+
+export async function getUserOwnedCosmetics(userId: string) {
+  const [coins, cardBacks, avatars, skins, playmats] = await Promise.all([
+    prisma.userCoin.findMany({ where: { userId }, select: { coinId: true } }),
+    prisma.userCardBack.findMany({ where: { userId }, select: { cardBackId: true } }),
+    prisma.userAvatar.findMany({ where: { userId }, select: { avatarId: true } }),
+    prisma.userCardSkin.findMany({ where: { userId }, select: { skinId: true } }),
+    prisma.userPlaymat.findMany({ where: { userId }, select: { playmatId: true } }),
+  ]);
+
+  return {
+    coinIds: coins.map((c) => c.coinId),
+    cardBackIds: cardBacks.map((c) => c.cardBackId),
+    avatarIds: avatars.map((a) => a.avatarId),
+    skinIds: skins.map((s) => s.skinId),
+    playmatIds: playmats.map((p) => p.playmatId),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Get full user detail (for admin inspection)
 // ---------------------------------------------------------------------------
 
@@ -162,12 +184,15 @@ export async function getUserDetail(userId: string) {
     },
   });
 
+  const ownedCosmetics = await getUserOwnedCosmetics(userId);
+
   return {
     ...user,
     avatarId: user.avatarPresetId,
     collectionCount: user._count.cards,
     deckCount: user._count.decks,
     recentTransactions,
+    ownedCosmetics,
   };
 }
 
@@ -604,6 +629,73 @@ export async function adjustCards(
 
     return { results };
   });
+}
+
+// ---------------------------------------------------------------------------
+// Grant cosmetic to user
+// ---------------------------------------------------------------------------
+
+const COSMETIC_TYPE_LABELS: Record<string, string> = {
+  coin: "Moneda",
+  cardBack: "Dorso de carta",
+  avatar: "Avatar",
+  skin: "Skin de carta",
+  playmat: "Tapete",
+};
+
+export async function grantCosmetic(
+  adminId: string,
+  userId: string,
+  type: "coin" | "cardBack" | "avatar" | "skin" | "playmat",
+  itemId: string,
+) {
+  // Verify user exists
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { id: true },
+  });
+  if (!user) throw Errors.NotFound("Usuario");
+
+  try {
+    switch (type) {
+      case "coin":
+        await prisma.userCoin.create({ data: { userId, coinId: itemId } });
+        break;
+      case "cardBack":
+        await prisma.userCardBack.create({ data: { userId, cardBackId: itemId } });
+        break;
+      case "avatar":
+        await prisma.userAvatar.create({ data: { userId, avatarId: itemId } });
+        break;
+      case "skin":
+        await prisma.userCardSkin.create({ data: { userId, skinId: itemId } });
+        break;
+      case "playmat":
+        await prisma.userPlaymat.create({ data: { userId, playmatId: itemId } });
+        break;
+    }
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      throw Errors.BadRequest("El usuario ya posee este cosmético");
+    }
+    throw err;
+  }
+
+  const typeLabel = COSMETIC_TYPE_LABELS[type] || type;
+
+  // Auto-send system notification to user
+  await prisma.systemMessage.create({
+    data: {
+      type: "personal",
+      title: "Nuevo cosmético concedido",
+      content: `Se te ha concedido un nuevo cosmético desde el panel de administración.\n\nTipo: **${typeLabel}**\nItem: **${itemId}**`,
+      category: "reward",
+      senderId: adminId,
+      recipientId: userId,
+    },
+  });
+
+  return { success: true };
 }
 
 // ---------------------------------------------------------------------------

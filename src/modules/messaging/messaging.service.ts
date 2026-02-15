@@ -272,3 +272,81 @@ export async function getAdminMessages(
 
   return { data, total, page, limit };
 }
+
+// ---------------------------------------------------------------------------
+// Admin: update a system message
+// ---------------------------------------------------------------------------
+
+export async function updateMessage(
+  messageId: string,
+  updates: { title?: string; content?: string; category?: string },
+) {
+  const existing = await prisma.systemMessage.findUnique({
+    where: { id: messageId },
+    select: { id: true },
+  });
+  if (!existing) throw Errors.NotFound("Mensaje");
+
+  if (updates.title !== undefined && updates.title.trim().length === 0) {
+    throw Errors.BadRequest("El titulo no puede estar vacio");
+  }
+  if (updates.content !== undefined && updates.content.trim().length === 0) {
+    throw Errors.BadRequest("El contenido no puede estar vacio");
+  }
+
+  const data: Record<string, string> = {};
+  if (updates.title !== undefined) data.title = updates.title.trim();
+  if (updates.content !== undefined) data.content = updates.content.trim();
+  if (updates.category !== undefined) data.category = updates.category;
+
+  const updated = await prisma.systemMessage.update({
+    where: { id: messageId },
+    data,
+    select: {
+      id: true,
+      type: true,
+      title: true,
+      content: true,
+      category: true,
+      recipientId: true,
+      createdAt: true,
+      sender: {
+        select: {
+          id: true,
+          username: true,
+        },
+      },
+      _count: {
+        select: { reads: true },
+      },
+    },
+  });
+
+  return {
+    id: updated.id,
+    type: updated.type,
+    title: updated.title,
+    content: updated.content,
+    category: updated.category,
+    recipientId: updated.recipientId,
+    createdAt: updated.createdAt,
+    senderUsername: updated.sender.username,
+    readCount: updated._count.reads,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Admin: delete a system message
+// ---------------------------------------------------------------------------
+
+export async function deleteMessage(messageId: string) {
+  const existing = await prisma.systemMessage.findUnique({
+    where: { id: messageId },
+    select: { id: true },
+  });
+  if (!existing) throw Errors.NotFound("Mensaje");
+
+  await prisma.systemMessage.delete({ where: { id: messageId } });
+
+  return { success: true };
+}

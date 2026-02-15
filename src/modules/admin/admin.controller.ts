@@ -310,6 +310,42 @@ router.post(
 );
 
 // =============================================================================
+// Cosmetic Grants
+// =============================================================================
+
+// ---------------------------------------------------------------------------
+// POST /admin/users/:userId/grant-cosmetic
+// ---------------------------------------------------------------------------
+
+router.post(
+  "/admin/users/:userId/grant-cosmetic",
+  requireAuth,
+  requirePermission("users:economy"),
+  preventSelfAction,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { type, itemId } = req.body;
+      if (!type || !itemId) {
+        throw Errors.BadRequest("type y itemId son requeridos");
+      }
+      const validTypes = ["coin", "cardBack", "avatar", "skin", "playmat"];
+      if (!validTypes.includes(type)) {
+        throw Errors.BadRequest(`type debe ser uno de: ${validTypes.join(", ")}`);
+      }
+      const result = await adminService.grantCosmetic(
+        req.user!.userId,
+        req.params.userId,
+        type,
+        String(itemId),
+      );
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// =============================================================================
 // Moderation (Ban / Suspend)
 // =============================================================================
 
