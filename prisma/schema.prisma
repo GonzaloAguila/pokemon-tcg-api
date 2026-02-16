@@ -63,6 +63,9 @@ model User {
   lockedUntil         DateTime?
   lastLoginAt         DateTime?
 
+  // Legal
+  termsAcceptedAt DateTime?
+
   // Profile
   avatarUrl      String?
   avatarPresetId String?

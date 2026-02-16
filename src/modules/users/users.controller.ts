@@ -23,6 +23,7 @@ const updateProfileSchema = z.object({
     .optional(),
   avatarUrl: z.string().url().optional(),
   avatarPresetId: z.string().optional(),
+  acceptedTerms: z.literal(true).optional(),
 });
 
 const updateCosmeticsSchema = z.object({

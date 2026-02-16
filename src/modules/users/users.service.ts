@@ -81,7 +81,7 @@ export async function getUserProfile(userId: string) {
 
 export async function updateUserProfile(
   userId: string,
-  data: { username?: string; avatarUrl?: string; avatarPresetId?: string },
+  data: { username?: string; avatarUrl?: string; avatarPresetId?: string; acceptedTerms?: true },
 ) {
   if (data.username) {
     const existing = await prisma.user.findFirst({
@@ -92,9 +92,14 @@ export async function updateUserProfile(
     }
   }
 
+  const { acceptedTerms, ...profileData } = data;
+
   const user = await prisma.user.update({
     where: { id: userId },
-    data,
+    data: {
+      ...profileData,
+      ...(acceptedTerms ? { termsAcceptedAt: new Date() } : {}),
+    },
     select: fullProfileSelect,
   });
 

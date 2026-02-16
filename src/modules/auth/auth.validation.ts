@@ -16,6 +16,11 @@ export const registerSchema = z.object({
   starterColor: z
     .enum(["fire", "water", "grass", "electric", "psychic", "fighting"])
     .optional(),
+  acceptedTerms: z.literal(true, {
+    errorMap: () => ({
+      message: "Debes aceptar los terminos y condiciones",
+    }),
+  }),
 });
 
 export const loginSchema = z.object({

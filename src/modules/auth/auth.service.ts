@@ -126,6 +126,7 @@ export async function registerUser(data: RegisterRequest) {
       starterColor: data.starterColor ?? null,
       coins: 2000,
       coupons: 100,
+      termsAcceptedAt: new Date(),
       stats: { create: {} },
     },
   });
