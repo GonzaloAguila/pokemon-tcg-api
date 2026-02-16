@@ -19,6 +19,7 @@ import { achievementsRouter } from "./modules/achievements/index.js";
 import { chatRouter } from "./modules/chat/index.js";
 import { messagingRouter } from "./modules/messaging/index.js";
 import { adminRouter } from "./modules/admin/index.js";
+import { bugReportRouter } from "./modules/bug-report/index.js";
 import { cleanupOldMessages } from "./modules/chat/chat.service.js";
 
 // Load environment variables
@@ -41,7 +42,7 @@ app.use(cors({
   origin: process.env.CORS_ORIGIN || "http://localhost:3000",
   credentials: true,
 }));
-app.use(express.json());
+app.use(express.json({ limit: "10mb" }));
 app.use(cookieParser());
 
 // Health check endpoint
@@ -62,6 +63,7 @@ app.use("/api", achievementsRouter);
 app.use("/api", chatRouter);
 app.use("/api", messagingRouter);
 app.use("/api", adminRouter);
+app.use("/api", bugReportRouter);
 // app.use("/api/matchmaking", matchmakingRouter);
 
 // Error handler

@@ -62,6 +62,68 @@ export async function sendPasswordResetEmail(
   });
 }
 
+export interface BugReportAttachment {
+  data: string; // base64-encoded image data (without data:... prefix)
+  filename: string;
+  contentType?: string;
+}
+
+export async function sendBugReportEmail(
+  username: string,
+  userId: string,
+  title: string,
+  description: string,
+  attachments?: BugReportAttachment[],
+): Promise<void> {
+  const client = getResend();
+  const adminEmail = process.env.ADMIN_EMAIL || FROM_EMAIL;
+
+  if (!client) {
+    console.warn("[email] RESEND_API_KEY not configured — skipping bug report email");
+    console.log(`[email] Bug report from ${username}: ${title}`);
+    return;
+  }
+
+  const resendAttachments = attachments?.map((att) => ({
+    content: Buffer.from(att.data, "base64"),
+    filename: att.filename,
+    content_type: att.contentType,
+  }));
+
+  const descriptionHtml = description.replace(/\n/g, "<br />");
+
+  await client.emails.send({
+    from: FROM_EMAIL,
+    to: adminEmail,
+    subject: `[Bug Report] ${title}`,
+    html: `
+      <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 32px; background: #faf5e4; border-radius: 12px;">
+        <h1 style="color: #451a03; text-align: center; margin-bottom: 8px;">Nostalgic TCG</h1>
+        <p style="color: #92400e; text-align: center; margin-bottom: 24px;">Bug Report</p>
+
+        <table style="width: 100%; margin-bottom: 16px; font-size: 14px;">
+          <tr><td style="color: #92400e; padding: 4px 8px; font-weight: bold;">Usuario:</td><td style="color: #451a03;">${username}</td></tr>
+          <tr><td style="color: #92400e; padding: 4px 8px; font-weight: bold;">User ID:</td><td style="color: #78350f; font-size: 12px;">${userId}</td></tr>
+          <tr><td style="color: #92400e; padding: 4px 8px; font-weight: bold;">Fecha:</td><td style="color: #451a03;">${new Date().toLocaleString("es-ES", { timeZone: "America/Argentina/Buenos_Aires" })}</td></tr>
+        </table>
+
+        <div style="background: #fff; border: 1px solid #d6d3d1; border-radius: 8px; padding: 16px; margin-bottom: 16px;">
+          <h2 style="color: #451a03; margin: 0 0 8px 0; font-size: 18px;">${title}</h2>
+          <p style="color: #78350f; line-height: 1.6; margin: 0;">${descriptionHtml}</p>
+        </div>
+
+        ${attachments && attachments.length > 0 ? `<p style="color: #92400e; font-size: 13px;">${attachments.length} imagen(es) adjunta(s)</p>` : ""}
+
+        <hr style="border: none; border-top: 1px solid #d6d3d1; margin: 24px 0;" />
+        <p style="color: #a8a29e; font-size: 12px; text-align: center;">Nostalgic TCG - Bug Report System</p>
+      </div>
+    `,
+    ...(resendAttachments && resendAttachments.length > 0
+      ? { attachments: resendAttachments }
+      : {}),
+  });
+}
+
 export async function sendVerificationEmail(
   to: string,
   username: string,
