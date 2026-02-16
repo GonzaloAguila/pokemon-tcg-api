@@ -174,7 +174,7 @@ async function resolveAndStartGame(roomManager: GameRoomManager, roomId: string)
 // Types for Socket.io events
 interface JoinRoomPayload {
   roomId: string;
-  userId: string;
+  userId?: string; // deprecated — ignored, using token
   deckId?: string;
   username?: string;
   avatarId?: string;
@@ -241,8 +241,14 @@ export function notifyUser(io: Server, userId: string, message: { id: string; ti
   io.to(`user:${userId}`).emit("systemMessage", message);
 }
 
+/** Returns the authenticated userId from socket, or null if not authenticated. */
+function getAuthUserId(socket: Socket): string | null {
+  return socket.data.user?.userId ?? null;
+}
+
 export function setupSocketHandlers(io: Server): void {
-  // Optional auth — attach user data if token present, but always allow connection
+  // Attach user data if token present, but always allow connection
+  // (unauthenticated sockets can only view room list)
   io.use((socket, next) => {
     const token = socket.handshake.auth?.token as string | undefined;
     if (token) {
@@ -273,7 +279,7 @@ export function setupSocketHandlers(io: Server): void {
     });
 
     socket.on("createRoom", async (payload: {
-      userId: string;
+      userId?: string; // deprecated — ignored, using token
       deckId?: string;
       prizeCount?: number;
       betAmount?: number;
@@ -284,7 +290,9 @@ export function setupSocketHandlers(io: Server): void {
       titleId?: string;
     }) => {
       try {
-        const { userId, deckId, prizeCount, betAmount, reservedUserId, friendly, username, avatarId, titleId } = payload;
+        const userId = getAuthUserId(socket);
+        if (!userId) { socket.emit("error", { message: "Autenticacion requerida" }); return; }
+        const { deckId, prizeCount, betAmount, reservedUserId, friendly, username, avatarId, titleId } = payload;
         const room = roomManager.createRoom(
           undefined,
           { prizeCount, betAmount, reservedUserId: reservedUserId || null, friendly: friendly ?? false },
@@ -316,6 +324,7 @@ export function setupSocketHandlers(io: Server): void {
     socket.on("deleteRoom", async (payload: { roomId: string }) => {
       console.log(`[deleteRoom] Received:`, payload, `from socket ${socket.id}`);
       try {
+        if (!getAuthUserId(socket)) { socket.emit("error", { message: "Autenticacion requerida" }); return; }
         const { roomId } = payload;
         const room = roomManager.getRoom(roomId);
         console.log(`[deleteRoom] Room state:`, room ? { player1SocketId: room.player1SocketId, status: room.status } : 'not found');
@@ -344,7 +353,9 @@ export function setupSocketHandlers(io: Server): void {
     socket.on("joinRoom", async (payload: JoinRoomPayload) => {
       console.log(`[joinRoom] Received:`, payload);
       try {
-        const { roomId, userId, deckId, username, avatarId, titleId } = payload;
+        const userId = getAuthUserId(socket);
+        if (!userId) { socket.emit("error", { message: "Autenticacion requerida" }); return; }
+        const { roomId, deckId, username, avatarId, titleId } = payload;
 
         // Auto-close any waiting room the user owns before joining another
         const existingWaitingRoom = roomManager.findWaitingRoomByUser(userId);
@@ -462,6 +473,7 @@ export function setupSocketHandlers(io: Server): void {
 
     socket.on("leaveRoom", async (payload: { roomId: string }) => {
       try {
+        if (!getAuthUserId(socket)) { socket.emit("error", { message: "Autenticacion requerida" }); return; }
         const { roomId } = payload;
         await roomManager.leaveRoom(roomId, socket.id);
 
@@ -480,6 +492,7 @@ export function setupSocketHandlers(io: Server): void {
 
     socket.on("ready", async (payload: { roomId: string }) => {
       try {
+        if (!getAuthUserId(socket)) { socket.emit("error", { message: "Autenticacion requerida" }); return; }
         const { roomId } = payload;
         const room = await roomManager.setPlayerReady(roomId, socket.id);
 
@@ -526,6 +539,7 @@ export function setupSocketHandlers(io: Server): void {
 
     socket.on("action", async (payload: { roomId: string; action: PlayerAction }) => {
       try {
+        if (!getAuthUserId(socket)) { socket.emit("error", { message: "Autenticacion requerida" }); return; }
         const { roomId, action } = payload;
 
         // Get room and state before action
@@ -872,8 +886,9 @@ export function setupSocketHandlers(io: Server): void {
     // Active Game Check (for reconnection)
     // ==========================================================================
 
-    socket.on("checkActiveGame", (payload: { userId: string }) => {
-      const { userId } = payload;
+    socket.on("checkActiveGame", (payload: { userId?: string }) => {
+      const userId = getAuthUserId(socket);
+      if (!userId) { socket.emit("activeGame", { roomId: null }); return; }
       const room = roomManager.getActiveRoomForUser(userId);
       socket.emit("activeGame", { roomId: room?.id ?? null });
     });

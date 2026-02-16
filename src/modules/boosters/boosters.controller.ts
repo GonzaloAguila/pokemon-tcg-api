@@ -6,7 +6,7 @@
 
 import { Router, type Request, type Response, type NextFunction } from "express";
 import { AppError } from "../../middleware/error-handler.js";
-import { requireAuth } from "../../middleware/auth.js";
+import { requireAuth, requireRole } from "../../middleware/auth.js";
 import { prisma } from "../../lib/prisma.js";
 import * as boosterService from "./boosters.service.js";
 import * as usersService from "../users/users.service.js";
@@ -50,7 +50,7 @@ router.get("/packs/:packId", (req: Request, res: Response) => {
  * POST /api/packs
  * Create a new pack type
  */
-router.post("/packs", (req: Request, res: Response) => {
+router.post("/packs", requireAuth, requireRole("admin", "superadmin"), (req: Request, res: Response) => {
   const packData = req.body as BoosterPackType;
 
   if (!packData.id || !packData.name || !packData.setId || !packData.slots) {
@@ -69,7 +69,7 @@ router.post("/packs", (req: Request, res: Response) => {
  * PUT /api/packs/:packId
  * Update an existing pack type
  */
-router.put("/packs/:packId", (req: Request, res: Response) => {
+router.put("/packs/:packId", requireAuth, requireRole("admin", "superadmin"), (req: Request, res: Response) => {
   const { packId } = req.params;
   const updates = req.body as Partial<BoosterPackType>;
 
@@ -85,7 +85,7 @@ router.put("/packs/:packId", (req: Request, res: Response) => {
  * DELETE /api/packs/:packId
  * Delete a pack type
  */
-router.delete("/packs/:packId", (req: Request, res: Response) => {
+router.delete("/packs/:packId", requireAuth, requireRole("admin", "superadmin"), (req: Request, res: Response) => {
   const { packId } = req.params;
   const deleted = boosterService.deletePack(packId);
 

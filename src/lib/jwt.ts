@@ -9,6 +9,10 @@ export interface TokenPayload {
 }
 
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret-change-me";
+
+if (process.env.NODE_ENV === "production" && !process.env.JWT_SECRET) {
+  throw new Error("JWT_SECRET must be set in production");
+}
 const ACCESS_TOKEN_EXPIRES_IN =
   process.env.JWT_ACCESS_TOKEN_EXPIRES_IN || "15m";
 const REFRESH_TOKEN_EXPIRES_IN =

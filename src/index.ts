@@ -46,7 +46,7 @@ app.use(cors({
   origin: corsOrigin,
   credentials: true,
 }));
-app.use(express.json({ limit: "10mb" }));
+app.use(express.json({ limit: "1mb" }));
 app.use(cookieParser());
 
 // Health check endpoint
@@ -67,7 +67,7 @@ app.use("/api", achievementsRouter);
 app.use("/api", chatRouter);
 app.use("/api", messagingRouter);
 app.use("/api", adminRouter);
-app.use("/api", bugReportRouter);
+app.use("/api", express.json({ limit: "10mb" }), bugReportRouter);
 // app.use("/api/matchmaking", matchmakingRouter);
 
 // Error handler
