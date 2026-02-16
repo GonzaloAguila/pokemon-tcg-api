@@ -25,13 +25,17 @@ import { cleanupOldMessages } from "./modules/chat/chat.service.js";
 // Load environment variables
 dotenv.config();
 
+const corsOrigin = process.env.CORS_ORIGIN
+  ? process.env.CORS_ORIGIN.split(",").map((s) => s.trim())
+  : ["http://localhost:3000"];
+
 const app = express();
 const httpServer = createServer(app);
 
 // Socket.io setup with CORS
 const io = new Server(httpServer, {
   cors: {
-    origin: process.env.CORS_ORIGIN || "http://localhost:3000",
+    origin: corsOrigin,
     methods: ["GET", "POST"],
     credentials: true,
   },
@@ -39,7 +43,7 @@ const io = new Server(httpServer, {
 
 // Middleware
 app.use(cors({
-  origin: process.env.CORS_ORIGIN || "http://localhost:3000",
+  origin: corsOrigin,
   credentials: true,
 }));
 app.use(express.json({ limit: "10mb" }));
