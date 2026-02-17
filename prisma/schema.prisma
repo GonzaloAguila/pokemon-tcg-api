@@ -490,3 +490,15 @@ model ChatMessage {
   @@index([createdAt])
   @@map("chat_messages")
 }
+
+// =============================================================================
+// Waitlist (landing page email collection)
+// =============================================================================
+
+model WaitlistEntry {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  createdAt DateTime @default(now())
+
+  @@map("waitlist_entries")
+}

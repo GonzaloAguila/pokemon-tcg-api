@@ -20,6 +20,7 @@ import { chatRouter } from "./modules/chat/index.js";
 import { messagingRouter } from "./modules/messaging/index.js";
 import { adminRouter } from "./modules/admin/index.js";
 import { bugReportRouter } from "./modules/bug-report/index.js";
+import { waitlistRouter } from "./modules/waitlist/index.js";
 import { cleanupOldMessages } from "./modules/chat/chat.service.js";
 
 // Load environment variables
@@ -68,6 +69,7 @@ app.use("/api", chatRouter);
 app.use("/api", messagingRouter);
 app.use("/api", adminRouter);
 app.use("/api", express.json({ limit: "10mb" }), bugReportRouter);
+app.use("/api", waitlistRouter);
 // app.use("/api/matchmaking", matchmakingRouter);
 
 // Error handler
