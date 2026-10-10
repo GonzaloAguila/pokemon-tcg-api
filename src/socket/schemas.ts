@@ -205,6 +205,11 @@ export const gameActionSchema = z.discriminatedUnion("type", [
   action("skipSwitch", noPayload),
   action("benchDamage", z.object({ selectedPokemonIds: idList(2 * BENCH_SIZE) })),
   action("clearPeek", noPayload),
+  // Answer to state.pendingAttackChoice.step (option ids; Prophecy's order "0".."n-1").
+  // Only the step's chooser may send it; game-core checks it against the step's options.
+  action("resolveAttackChoice", z.object({ selection: z.array(z.string().min(1).max(200)).max(MAX_ZONE_CARDS) })),
+  // Discard a Mysterious Fossil / Clefairy Doll in play (game-core canDiscardFromPlay)
+  action("discardFromPlay", z.object({ pokemonId: instanceId })),
   action("mulligan", noPayload),
   action("playerReady", noPayload),
   action("usePower", powerPayload),

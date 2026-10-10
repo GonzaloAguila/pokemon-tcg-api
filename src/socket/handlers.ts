@@ -627,10 +627,12 @@ export function setupSocketHandlers(io: Server): void {
           // Broadcast coin flip results to both players if present
           if (result.coinFlipInfo) {
             console.log(`[action] Broadcasting coin flip results: ${result.coinFlipInfo.attackName} - ${result.coinFlipInfo.results.join(", ")}`);
+            // results: the attacker's coins; defenderResults: Haunter's Transparency coin(s)
             io.to(roomId).emit("showCoinFlip", {
               attackName: result.coinFlipInfo.attackName,
               results: result.coinFlipInfo.results,
               count: result.coinFlipInfo.results.length,
+              ...(result.coinFlipInfo.defenderResults ? { defenderResults: result.coinFlipInfo.defenderResults } : {}),
             });
           }
 

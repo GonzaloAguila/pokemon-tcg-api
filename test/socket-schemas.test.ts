@@ -171,6 +171,11 @@ describe("game action schemas (every executeAction case)", () => {
     ["skipSwitch", {}],
     ["benchDamage", { selectedPokemonIds: ["p2", "p3"] }],
     ["clearPeek", {}],
+    ["resolveAttackChoice", { selection: ["bench-1"] }], // Terror Strike / Hyper Beam
+    ["resolveAttackChoice", { selection: ["opponent"] }], // Prophecy, deck
+    ["resolveAttackChoice", { selection: ["2", "0", "1"] }], // Prophecy, order
+    ["resolveAttackChoice", { selection: [] }], // Wildfire: none
+    ["discardFromPlay", { pokemonId: "fossil-1" }],
     ["mulligan", {}],
     ["playerReady", {}],
     ["surrender", {}],
@@ -248,6 +253,12 @@ describe("game action schemas (every executeAction case)", () => {
     ["selections not nested", { type: "playTrainer", payload: { cardId: "c", trainerName: "Potion", selections: ["p1"] } }],
     ["selections huge", { type: "playTrainer", payload: { cardId: "c", trainerName: "Maintenance", selections: [Array(5000).fill("x")] } }],
     ["selections too many steps", { type: "playTrainer", payload: { cardId: "c", trainerName: "Maintenance", selections: Array(100).fill(["x"]) } }],
+    ["attack choice without selection", { type: "resolveAttackChoice", payload: {} }],
+    ["attack choice not an array", { type: "resolveAttackChoice", payload: { selection: "bench-1" } }],
+    ["attack choice huge", { type: "resolveAttackChoice", payload: { selection: Array(61).fill("x") } }],
+    ["attack choice id too long", { type: "resolveAttackChoice", payload: { selection: ["x".repeat(201)] } }],
+    ["attack choice empty id", { type: "resolveAttackChoice", payload: { selection: [""] } }],
+    ["discard from play without id", { type: "discardFromPlay", payload: {} }],
     ["coinResult bogus", { type: "playTrainer", payload: { cardId: "c", trainerName: "Poké Ball", coinResult: "edge" } }],
   ];
 

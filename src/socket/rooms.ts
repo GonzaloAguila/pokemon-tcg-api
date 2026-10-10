@@ -22,7 +22,10 @@ import {
   executeMetronome,
   canExecuteAttack,
   canExecuteMetronome,
-  getAttackCoinFlipCount,
+  getAttackCoinPlan,
+  flipAttackCoins,
+  resolveAttackChoice,
+  getEffectivePokemonCard,
   endTurn,
   executeRetreat,
   doMulligan,
@@ -41,6 +44,7 @@ import {
   playBasicPokemon,
   attachEnergyCard,
   evolvePokemonCard,
+  discardFromPlay,
   // Pending state handlers
   executeDeckSearch,
   executeBenchDamage,
@@ -114,7 +118,10 @@ type PlayerKey = "player1" | "player2";
 type Coin = "heads" | "tails";
 interface CoinFlipInfo {
   attackName: string;
+  /** The attacker's coins: Smokescreen / Sand-attack coin first, then the attack's own */
   results: Coin[];
+  /** Coins flipped by the defending side (Haunter's Transparency), after the attacker's */
+  defenderResults?: Coin[];
 }
 
 /** What a client asks coins for before choosing (requestCoinFlip). */
@@ -729,7 +736,19 @@ export class GameRoomManager {
     // Pending attack choices (deckSearch, forceSwitch, selfSwitch, skipSwitch, benchDamage) are NOT here:
     // they belong to the attacker, and endTurn() doesn't advance while one is pending, so they
     // require it to be the acting player's turn. Otherwise the opponent could resolve your choice.
-    const turnFreeActions = ["ready", "mulligan", "playerReady", "takePrize", "promote", "surrender"];
+    // resolveAttackChoice: only the chooser of the pending attack choice — the attacker, or the
+    // other player when the step's chooser is "opponent" (Terror Strike), off-turn included.
+    if (action.type === "resolveAttackChoice") {
+      const pendingChoice = room.gameState.pendingAttackChoice;
+      if (!pendingChoice) return { success: false, error: "No hay ninguna elección de ataque pendiente" };
+      const attackerIsPlayer1 = room.gameState.isPlayerTurn;
+      const chooserIsPlayer1 = pendingChoice.step.chooser === "opponent" ? !attackerIsPlayer1 : attackerIsPlayer1;
+      if (chooserIsPlayer1 !== isPlayer1) return { success: false, error: "No te corresponde elegir" };
+    } else if (room.gameState.pendingAttackChoice && !["surrender", "promote", "takePrize"].includes(action.type)) {
+      // game-core blocks everything else until the choice is answered (endTurn would be a no-op)
+      return { success: false, error: "Primero hay que resolver la elección del ataque" };
+    }
+    const turnFreeActions = ["ready", "mulligan", "playerReady", "takePrize", "promote", "surrender", "resolveAttackChoice"];
     const setupActions = ["playBasicToActive", "playBasicToBench"];
     const isSetupPhase = room.gameState.gamePhase === "MULLIGAN" || room.gameState.gamePhase === "SETUP";
     const isMyTurn = isPlayer1 ? room.gameState.isPlayerTurn : !room.gameState.isPlayerTurn;
@@ -779,7 +798,9 @@ export class GameRoomManager {
           const conversionType = action.payload.conversionType;
           const conversionEffect = action.payload.conversionEffect;
           const attacker = actorView.playerActivePokemon;
-          const ownAttack = attacker && isPokemonCard(attacker.pokemon) ? attacker.pokemon.attacks[attackIndex] : undefined;
+          // A transformed Ditto uses the copied card's attacks (game-core's effective card)
+          const attackerCard = attacker ? getEffectivePokemonCard(actorView, attacker) : undefined;
+          const ownAttack = attackerCard?.attacks[attackIndex];
 
           // ── Which attack, and is it legal? Checked BEFORE any coin (confusion included):
           // energy cost, Asleep/Paralyzed, Leer, one attack per turn, nothing pending...
@@ -790,8 +811,8 @@ export class GameRoomManager {
               return { success: false, error: "Ese ataque no puede copiar ataques" };
             }
             const opponentActive = actorView.opponentActivePokemon;
-            const copiedAttack = opponentActive && isPokemonCard(opponentActive.pokemon)
-              ? opponentActive.pokemon.attacks[metronomePayload.index]
+            const copiedAttack = opponentActive
+              ? getEffectivePokemonCard(actorView, opponentActive)?.attacks[metronomePayload.index]
               : undefined;
             if (!copiedAttack) return { success: false, error: "El Pokémon defensor no tiene ese ataque" };
             const reason = canExecuteMetronome(actorView, copiedAttack);
@@ -848,11 +869,14 @@ export class GameRoomManager {
           }
 
           // ── Attack (or Metronome copying the Defending Pokémon's attack) ──
-          // The server flips exactly the coins the engine asks for (getAttackCoinFlipCount,
-          // Sand-attack's coin included) and passes them in; the engine resolves every coin
-          // effect, the KO/prize flow and the end of the turn. skipDefenderPromotion: the
-          // defender picks its new active (`promote`), which then ends the attacker's turn.
-          const coinResults = rollCoins(getAttackCoinFlipCount(toActor(beforeAttack), attackToUse), this.flipCoin);
+          // The server flips exactly the coins of game-core's plan (getAttackCoinPlan:
+          // Smokescreen/Sand-attack coin, the attack's own — Stone Barrage until tails —, then
+          // the Defending Haunter's Transparency coin) and passes them in; the engine resolves
+          // every coin effect, the KO/prize flow, attack choices and the end of the turn.
+          // skipDefenderPromotion: the defender picks its new active (`promote`), which then
+          // ends the attacker's turn.
+          const coinPlan = getAttackCoinPlan(toActor(beforeAttack), attackToUse);
+          const coinResults = flipAttackCoins(coinPlan, this.flipCoin);
           const attackOptions = { coinResults, skipDefenderPromotion: true };
           newState = executeForPlayer((state) =>
             typeof attackToUse === "number"
@@ -860,9 +884,15 @@ export class GameRoomManager {
               : executeMetronome(state, attackToUse, attackOptions),
           beforeAttack);
 
-          // Both clients animate the real coins (showCoinFlip)
+          // Both clients animate the real coins (showCoinFlip); the defender's coins apart
           if (coinResults.length > 0) {
-            actionCoinFlipInfo = { attackName, results: coinResults };
+            const attackerCoinCount = coinResults.length - coinPlan.defender;
+            const defenderResults = coinResults.slice(attackerCoinCount);
+            actionCoinFlipInfo = {
+              attackName,
+              results: coinResults.slice(0, attackerCoinCount),
+              ...(defenderResults.length > 0 ? { defenderResults } : {}),
+            };
           }
           break;
         }
@@ -911,38 +941,51 @@ export class GameRoomManager {
           if (!actorView.playerCanTakePrize) {
             return { success: false, error: "Cannot take a prize now" };
           }
-          newState = executeForPlayer((state) => takePrize(state, prizeIndex, true));
+          newState = executeForPlayer((state) => takePrize(state, prizeIndex, true, false));
+          // Taking the last thing the paused turn waited for ends it (finishPausedTurn)
+          ({ state: newState, eventsNeutralizedTo } = this.finishTurnAfter(newState, eventsNeutralizedTo, actorKey));
           break;
         }
 
         case "promote": {
+          // Whoever must promote (playerNeedsToPromote in their view) may, on either turn: the
+          // defender after a Knock Out, or mid-turn after a Curse Knock Out (opponent), a
+          // discarded Active Mysterious Fossil or Cowardice (the side whose turn it is).
           const benchIndex = action.payload.benchIndex;
           if (!actorView.playerNeedsToPromote) {
             return { success: false, error: "No promotion needed" };
           }
           newState = executeForPlayer((state) => promoteActivePokemon(state, benchIndex));
+          // After an attack (or the between-turns checkup) the turn ends once both Actives are
+          // back; a promotion in the middle of a turn leaves that turn going.
+          ({ state: newState, eventsNeutralizedTo } = this.finishTurnAfter(newState, eventsNeutralizedTo, actorKey));
+          break;
+        }
 
-          // After the defender promotes its new active Pokémon, end the attacker's turn.
-          // The attacker is the OTHER player (the one who KO'd the defender): endTurn was
-          // skipped inside executeAttack because the promotion was pending.
-          // Only proceed if both actives are present and game can continue.
-          if (
-            newState.gamePhase !== "GAME_OVER" &&
-            newState.playerActivePokemon !== null &&
-            newState.opponentActivePokemon !== null &&
-            !newState.playerCanTakePrize &&
-            !newState.opponentCanTakePrize
-          ) {
-            // The promotion's events speak for the promoter; endTurn's for the attacker
-            const promoter = isPlayer1 ? "Jugador 1" : "Jugador 2";
-            const attackerName = isPlayer1 ? "Jugador 2" : "Jugador 1";
-            newState = { ...newState, events: neutralizeEvents(newState.events, eventsNeutralizedTo, promoter, attackerName) };
-            eventsNeutralizedTo = newState.events.length;
-            const attackerIsPlayer1 = !isPlayer1;
-            newState = attackerIsPlayer1 ? endTurn(newState) : swapSides(endTurn(swapSides(newState)));
-            newState = { ...newState, events: neutralizeEvents(newState.events, eventsNeutralizedTo, attackerName, promoter) };
-            eventsNeutralizedTo = newState.events.length;
-          }
+        case "discardFromPlay": {
+          // Mysterious Fossil / Clefairy Doll: the engine checks it (own turn, before attacking,
+          // not the last Pokémon). An Active one leaves the player promoting (`promote`) mid-turn.
+          const { pokemonId } = action.payload;
+          newState = executeForPlayer((state) => discardFromPlay(state, pokemonId));
+          break;
+        }
+
+        case "resolveAttackChoice": {
+          // Answered by the chooser (checked above) but always applied on the ATTACKING side's
+          // view, as game-core requires; the turn then ends unless another choice follows or a
+          // promotion / Prize is pending (finished by promote / takePrize).
+          const { selection } = action.payload;
+          const attackerIsPlayer1 = room.gameState.isPlayerTurn;
+          const asAttacker = (state: GameState): GameState => (attackerIsPlayer1 ? state : swapSides(state));
+          newState = asAttacker((() => {
+            const resolved = resolveAttackChoice(asAttacker(room.gameState!), selection, { skipEndTurn: true });
+            return resolved.pendingAttackChoice || resolved.gameResult !== null ? resolved : endTurn(resolved, true);
+          })());
+          // Events speak for the attacker ("tu" = attacker), whoever answered
+          const attackerName = attackerIsPlayer1 ? "Jugador 1" : "Jugador 2";
+          const defenderName = attackerIsPlayer1 ? "Jugador 2" : "Jugador 1";
+          newState = { ...newState, events: neutralizeEvents(newState.events, eventsNeutralizedTo, attackerName, defenderName) };
+          eventsNeutralizedTo = newState.events.length;
           break;
         }
 
@@ -1130,6 +1173,31 @@ export class GameRoomManager {
       console.error(`[Room ${roomId}] Action error:`, error);
       return { success: false, error: (error as Error).message };
     }
+  }
+
+  /**
+   * After a promotion or a Prize: if the side whose turn it is was only waiting for it (it
+   * already attacked, or endTurn paused after the between-turns checkup), both Actives are
+   * back and nothing else is pending, end that turn. Mid-turn promotions (Curse, Cowardice,
+   * a discarded Mysterious Fossil) leave the turn going. Events so far speak for `actor`;
+   * endTurn's speak for the side whose turn it is. `state` is in player 1's perspective.
+   */
+  private finishTurnAfter(state: GameState, neutralizedTo: number, actor: PlayerKey): { state: GameState; eventsNeutralizedTo: number } {
+    const turnDone = state.attackedThisTurn === true || state.checkupDoneOnTurn === state.turnNumber;
+    const waiting = state.playerCanTakePrize || state.opponentCanTakePrize || state.playerNeedsToPromote || state.opponentNeedsToPromote;
+    if (!turnDone || waiting || state.gamePhase === "GAME_OVER" || !state.playerActivePokemon || !state.opponentActivePokemon) {
+      return { state, eventsNeutralizedTo: neutralizedTo };
+    }
+    const actorName = actor === "player1" ? "Jugador 1" : "Jugador 2";
+    const otherName = actor === "player1" ? "Jugador 2" : "Jugador 1";
+    let next: GameState = { ...state, events: neutralizeEvents(state.events, neutralizedTo, actorName, otherName) };
+    const from = next.events.length;
+    const turnIsPlayer1 = next.isPlayerTurn;
+    next = turnIsPlayer1 ? endTurn(next, true) : swapSides(endTurn(swapSides(next), true));
+    const turnName = turnIsPlayer1 ? "Jugador 1" : "Jugador 2";
+    const waitingName = turnIsPlayer1 ? "Jugador 2" : "Jugador 1";
+    next = { ...next, events: neutralizeEvents(next.events, from, turnName, waitingName) };
+    return { state: next, eventsNeutralizedTo: next.events.length };
   }
 
   /**
