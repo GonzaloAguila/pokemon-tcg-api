@@ -3,6 +3,7 @@ import type { UserRole } from "@prisma/client";
 import { verifyAccessToken, type TokenPayload } from "../lib/jwt.js";
 import { Errors } from "./error-handler.js";
 import { prisma } from "../lib/prisma.js";
+import { accountBlockReason, getAccountState, invalidateAccountState } from "../lib/account-state.js";
 
 // Augment Express Request
 declare global {
@@ -13,27 +14,49 @@ declare global {
   }
 }
 
+function bearerToken(req: Request): string | null {
+  const header = req.headers.authorization;
+  return header?.startsWith("Bearer ") ? header.slice(7) : null;
+}
+
 /**
- * Require a valid access token. Attaches decoded payload to req.user.
+ * Check a verified token against the account (cached a few seconds, see account-state.ts):
+ * the user must exist, the token's tokenVersion must be current (bans, suspensions and other
+ * forced logouts bump it) and the account must not be banned/suspended.
+ * Returns the payload with the role read from the DB, so role changes apply immediately.
+ */
+async function freshSession(payload: TokenPayload): Promise<TokenPayload> {
+  const state = await getAccountState(payload.userId);
+  if (!state) throw Errors.Unauthorized("Usuario no encontrado");
+  if (state.tokenVersion !== payload.tokenVersion) {
+    throw Errors.Unauthorized("Sesion invalidada. Inicia sesion de nuevo.");
+  }
+  const blocked = accountBlockReason(state);
+  if (blocked) throw Errors.Forbidden(blocked);
+  return { ...payload, role: state.role };
+}
+
+/**
+ * Require a valid, non-revoked access token. Attaches the payload to req.user.
  */
 export function requireAuth(
   req: Request,
   _res: Response,
   next: NextFunction,
 ): void {
-  const header = req.headers.authorization;
-  if (!header?.startsWith("Bearer ")) {
-    throw Errors.Unauthorized("Token de acceso requerido");
-  }
+  const token = bearerToken(req);
+  if (!token) return next(Errors.Unauthorized("Token de acceso requerido"));
 
-  const token = header.slice(7);
   const payload = verifyAccessToken(token);
-  if (!payload) {
-    throw Errors.Unauthorized("Token invalido o expirado");
-  }
+  if (!payload) return next(Errors.Unauthorized("Token invalido o expirado"));
 
-  req.user = payload;
-  next();
+  freshSession(payload).then(
+    (user) => {
+      req.user = user;
+      next();
+    },
+    next,
+  );
 }
 
 /**
@@ -118,6 +141,7 @@ export function checkUserStatus(): RequestHandler {
           where: { id: req.user.userId },
           data: { status: "active", suspendedUntil: null, suspendedReason: null },
         });
+        invalidateAccountState(req.user.userId);
       }
 
       next();
@@ -128,20 +152,23 @@ export function checkUserStatus(): RequestHandler {
 }
 
 /**
- * Optional auth — attach user if token present, but don't fail otherwise.
+ * Optional auth — attach user if a valid, non-revoked token is present; otherwise continue
+ * as anonymous.
  */
 export function optionalAuth(
   req: Request,
   _res: Response,
   next: NextFunction,
 ): void {
-  const header = req.headers.authorization;
-  if (header?.startsWith("Bearer ")) {
-    const token = header.slice(7);
-    const payload = verifyAccessToken(token);
-    if (payload) {
-      req.user = payload;
-    }
-  }
-  next();
+  const token = bearerToken(req);
+  const payload = token ? verifyAccessToken(token) : null;
+  if (!payload) return next();
+
+  freshSession(payload).then(
+    (user) => {
+      req.user = user;
+      next();
+    },
+    () => next(),
+  );
 }
