@@ -71,6 +71,8 @@ import {
   activateEnergyBurn,
   executeBuzzap,
   executeHealFlip,
+  canUseHealFlip,
+  canUsePower,
   initiateShift,
   executeShift,
   executePeek,
@@ -82,11 +84,7 @@ import {
   playDevolutionSpray,
   playPokedex,
 } from "@gonzaloaguila/game-core";
-
-interface PlayerAction {
-  type: string;
-  payload: Record<string, unknown>;
-}
+import { parseGameAction } from "./schemas.js";
 
 interface RoomConfig {
   prizeCount: number;           // 4, 5, or 6
@@ -800,13 +798,18 @@ export class GameRoomManager {
   }
 
   /**
-   * Execute a player action
+   * Execute a player action. `rawAction` comes straight from the client and is validated
+   * against gameActionSchema (schemas.ts) before anything else runs.
    */
   async executeAction(
     roomId: string,
     socketId: string,
-    action: PlayerAction
+    rawAction: unknown
   ): Promise<ActionResult> {
+    const parsed = parseGameAction(rawAction);
+    if (!parsed.ok) return { success: false, error: parsed.error };
+    const action = parsed.action;
+
     const room = this.rooms.get(roomId);
     if (!room) return { success: false, error: "Room not found" };
     if (!room.gameState) return { success: false, error: "Game not started" };
@@ -897,7 +900,7 @@ export class GameRoomManager {
 
       switch (action.type) {
         case "attack": {
-          const attackIndex = action.payload.attackIndex as number;
+          const attackIndex = action.payload.attackIndex;
 
           // ── Confusion: the server flips (never the client). Tails: the attack fails, the
           // engine applies the self-damage / KO / end of turn. Heads: the attack proceeds.
@@ -920,8 +923,8 @@ export class GameRoomManager {
           }
 
           // ── Porygon Conversion 1 / Conversion 2 ──
-          const conversionType = action.payload.conversionType as EnergyType | undefined;
-          const conversionEffect = action.payload.conversionEffect as "changeWeakness" | "changeResistance" | undefined;
+          const conversionType = action.payload.conversionType;
+          const conversionEffect = action.payload.conversionEffect;
 
           if (conversionType && conversionEffect) {
             usedExecuteForPlayer = true;
@@ -963,7 +966,7 @@ export class GameRoomManager {
             break;
           }
 
-          const metronomePayload = action.payload.metronomeAttack as { name: string; index: number } | undefined;
+          const metronomePayload = action.payload.metronomeAttack;
 
           // Determine which attack to check for coin flips
           const activePokemon = isPlayer1 ? room.gameState!.playerActivePokemon : room.gameState!.opponentActivePokemon;
@@ -1101,15 +1104,15 @@ export class GameRoomManager {
           break;
 
         case "retreat": {
-          const energyIds = action.payload.energyIdsToDiscard as string[];
-          const benchIdx = action.payload.benchIndex as number;
+          const energyIds = action.payload.energyIdsToDiscard;
+          const benchIdx = action.payload.benchIndex;
           usedExecuteForPlayer = true;
           newState = executeForPlayer((state) => executeRetreat(state, energyIds, benchIdx));
           break;
         }
 
         case "playBasicToActive": {
-          const cardId = action.payload.cardId as string;
+          const cardId = action.payload.cardId;
           const hand = getHand();
           const active = getActive();
           console.log(`[playBasicToActive] Looking for card ${cardId} in hand (${hand.length} cards)`);
@@ -1158,8 +1161,8 @@ export class GameRoomManager {
         }
 
         case "playBasicToBench": {
-          const cardId = action.payload.cardId as string;
-          const benchIndex = action.payload.benchIndex as number;
+          const cardId = action.payload.cardId;
+          const benchIndex = action.payload.benchIndex;
           if (benchIndex < 0 || benchIndex >= 5) {
             return { success: false, error: "Invalid bench index" };
           }
@@ -1208,10 +1211,10 @@ export class GameRoomManager {
         }
 
         case "attachEnergy": {
-          const cardId = action.payload.cardId as string;
-          const pokemonId = action.payload.pokemonId as string;
-          const isBench = action.payload.isBench as boolean;
-          const benchIndex = action.payload.benchIndex as number | undefined;
+          const cardId = action.payload.cardId;
+          const pokemonId = action.payload.pokemonId;
+          const isBench = action.payload.isBench;
+          const benchIndex = action.payload.benchIndex;
 
           if (room.gameState.gamePhase !== "PLAYING") {
             return { success: false, error: "Cannot attach energy during setup" };
@@ -1323,8 +1326,8 @@ export class GameRoomManager {
         }
 
         case "evolve": {
-          const cardId = action.payload.cardId as string;
-          const targetIndex = action.payload.targetIndex as number;
+          const cardId = action.payload.cardId;
+          const targetIndex = action.payload.targetIndex;
           const hand = getHand();
           const bench = getBench();
           const active = getActive();
@@ -1403,7 +1406,7 @@ export class GameRoomManager {
         }
 
         case "takePrize": {
-          const prizeIndex = action.payload.prizeIndex as number;
+          const prizeIndex = action.payload.prizeIndex;
           const canTake = isPlayer1 ? room.gameState.playerCanTakePrize : room.gameState.opponentCanTakePrize;
           if (!canTake) {
             return { success: false, error: "Cannot take a prize now" };
@@ -1414,7 +1417,7 @@ export class GameRoomManager {
         }
 
         case "promote": {
-          const benchIndex = action.payload.benchIndex as number;
+          const benchIndex = action.payload.benchIndex;
           const needsPromote = isPlayer1 ? room.gameState.playerNeedsToPromote : room.gameState.opponentNeedsToPromote;
           if (!needsPromote) {
             return { success: false, error: "No promotion needed" };
@@ -1449,21 +1452,21 @@ export class GameRoomManager {
         }
 
         case "deckSearch": {
-          const selectedCardId = action.payload.cardId as string | null;
+          const selectedCardId = action.payload.cardId;
           usedExecuteForPlayer = true;
           newState = executeForPlayer((state) => executeDeckSearch(state, selectedCardId));
           break;
         }
 
         case "forceSwitch": {
-          const benchIndex = action.payload.benchIndex as number;
+          const benchIndex = action.payload.benchIndex;
           usedExecuteForPlayer = true;
           newState = executeForPlayer((state) => applyForceSwitch(state, benchIndex));
           break;
         }
 
         case "selfSwitch": {
-          const benchIndex = action.payload.benchIndex as number;
+          const benchIndex = action.payload.benchIndex;
           usedExecuteForPlayer = true;
           newState = executeForPlayer((state) => applySelfSwitch(state, benchIndex));
           break;
@@ -1476,7 +1479,7 @@ export class GameRoomManager {
         }
 
         case "benchDamage": {
-          const selectedPokemonIds = action.payload.selectedPokemonIds as string[];
+          const selectedPokemonIds = action.payload.selectedPokemonIds;
           usedExecuteForPlayer = true;
           newState = executeForPlayer((state) => executeBenchDamage(state, selectedPokemonIds));
           break;
@@ -1525,75 +1528,59 @@ export class GameRoomManager {
         }
 
         case "usePower": {
-          const powerType = action.payload.powerType as string;
-          const pokemonId = action.payload.pokemonId as string;
+          const power = action.payload;
+          const pokemonId = "pokemonId" in power ? power.pokemonId : undefined;
 
-          console.log(`[usePower] ${isPlayer1 ? 'P1' : 'P2'} using ${powerType}`);
+          console.log(`[usePower] ${isPlayer1 ? 'P1' : 'P2'} using ${power.powerType}`);
+
+          // Heal: game-core's executeHealFlip trusts the source id it is given (it never checks the
+          // Pokémon has Heal or already used it), so verify with the engine's own predicates first.
+          if (power.powerType === "healFlip") {
+            const actorState = isPlayer1 ? room.gameState : swapPerspective(room.gameState);
+            const { pokemonWithPower } = canUseHealFlip(actorState, "player");
+            const source = pokemonWithPower.find((p) => p.pokemon.id === power.pokemonId);
+            const sourceError = source
+              ? canUsePower(source, source === actorState.playerActivePokemon, actorState.usedPowersThisTurn)
+              : "Este Pokémon no puede usar Curación";
+            if (sourceError) return { success: false, error: sourceError };
+          }
 
           const executePower = (state: GameState): GameState => {
             const side: "player" | "opponent" = "player";
 
-            switch (powerType) {
-              case "rainDance": {
-                const energyCardId = action.payload.energyCardId as string;
-                const targetPokemonId = action.payload.targetPokemonId as string;
-                return attachEnergyWithRainDance(state, side, energyCardId, targetPokemonId);
-              }
-              case "energyTrans": {
-                const sourcePokemonId = action.payload.sourcePokemonId as string;
-                const targetPokemonId = action.payload.targetPokemonId as string;
-                const energyCardId = action.payload.energyCardId as string;
-                return moveEnergyWithEnergyTrans(state, side, sourcePokemonId, targetPokemonId, energyCardId);
-              }
-              case "damageSwap": {
-                const sourcePokemonId = action.payload.sourcePokemonId as string;
-                const targetPokemonId = action.payload.targetPokemonId as string;
-                const amount = action.payload.amount as number;
-                return moveDamageWithDamageSwap(state, side, sourcePokemonId, targetPokemonId, amount);
-              }
-              case "energyBurn": {
-                const ebPokemonId = action.payload.pokemonId as string | undefined;
-                return activateEnergyBurn(state, side, ebPokemonId);
-              }
-              case "buzzap": {
-                const electrodePokemonId = action.payload.electrodePokemonId as string;
-                const chosenEnergyType = action.payload.chosenEnergyType as EnergyType;
-                const targetPokemonId = action.payload.targetPokemonId as string;
-                return executeBuzzap(state, side, electrodePokemonId, chosenEnergyType, targetPokemonId);
-              }
+            switch (power.powerType) {
+              case "rainDance":
+                return attachEnergyWithRainDance(state, side, power.energyCardId, power.targetPokemonId);
+              case "energyTrans":
+                return moveEnergyWithEnergyTrans(state, side, power.sourcePokemonId, power.targetPokemonId, power.energyCardId);
+              case "damageSwap":
+                return moveDamageWithDamageSwap(state, side, power.sourcePokemonId, power.targetPokemonId, power.amount);
+              case "energyBurn":
+                return activateEnergyBurn(state, side, power.pokemonId);
+              case "buzzap":
+                return executeBuzzap(state, side, power.electrodePokemonId, power.chosenEnergyType, power.targetPokemonId);
               case "healFlip": {
-                const targetPokemonId = action.payload.targetPokemonId as string;
                 // Server-rolled coin (requested via requestCoinFlip); the client's claim is ignored
                 const coinResult = this.consumeCoinFlip(room, isPlayer1 ? "player1" : "player2", "healFlip");
-                if (coinResult === "tails" || targetPokemonId === "__none__") {
+                if (coinResult === "tails" || power.targetPokemonId === "__none__") {
                   // Tails: mark power as used without healing
-                  const usedPowersThisTurn = [...(state.usedPowersThisTurn || []), pokemonId];
+                  const usedPowersThisTurn = [...(state.usedPowersThisTurn || []), power.pokemonId];
                   return {
                     ...state,
                     usedPowersThisTurn,
                     events: [...state.events, createGameEvent("Moneda: [coin:tails] — Heal falló", "info")],
                   };
                 }
-                return executeHealFlip(state, targetPokemonId, side, pokemonId);
+                return executeHealFlip(state, power.targetPokemonId, side, power.pokemonId);
               }
               case "typeShift": {
-                const chosenType = action.payload.chosenType as EnergyType;
-                const initiated = initiateShift(state, side, pokemonId);
-                return executeShift(initiated, side, chosenType);
+                const initiated = initiateShift(state, side, power.pokemonId);
+                return executeShift(initiated, side, power.chosenType);
               }
-              case "peek": {
-                const peekType = action.payload.peekType as "playerDeck" | "opponentDeck" | "opponentHand" | "playerPrize" | "opponentPrize";
-                return executePeek(state, side, pokemonId, peekType);
-              }
-              case "clearPeek": {
+              case "peek":
+                return executePeek(state, side, power.pokemonId, power.peekType);
+              case "clearPeek":
                 return clearPendingPeek(state);
-              }
-              default:
-                console.log(`[usePower] Unknown power type: ${powerType}`);
-                return {
-                  ...state,
-                  events: [...state.events, createGameEvent(`Poder ${powerType} no implementado`, "info")]
-                };
             }
           };
 
@@ -1603,9 +1590,19 @@ export class GameRoomManager {
         }
 
         case "playTrainer": {
-          const cardId = action.payload.cardId as string;
-          const trainerName = action.payload.trainerName as string;
-          const selections = action.payload.selections as string[][] || [];
+          const cardId = action.payload.cardId;
+          const selections = action.payload.selections;
+          // The effect that runs is the card's own name, never the client's trainerName: game-core's
+          // canPlayTrainer only checks the card is *a* trainer, so a Potion sent as "Computer Search"
+          // used to run Computer Search.
+          const trainerCard = getHand().find((c) => c.id === cardId);
+          if (!trainerCard || trainerCard.kind !== "trainer") {
+            return { success: false, error: "Carta de entrenador no encontrada en tu mano" };
+          }
+          if (trainerCard.name !== action.payload.trainerName) {
+            return { success: false, error: "La carta no coincide con el entrenador indicado" };
+          }
+          const trainerName = trainerCard.name;
           // Coin trainers (Poké Ball) use the server-rolled flip, never the client's claim
           const coinResult =
             action.payload.coinResult !== undefined || trainerName === "Poké Ball"
@@ -1750,8 +1747,11 @@ export class GameRoomManager {
           break;
         }
 
-        default:
-          return { success: false, error: `Unknown action type: ${action.type}` };
+        default: {
+          // Unreachable: parseGameAction only lets known action types through.
+          const unknownType: never = action;
+          return { success: false, error: `Unknown action type: ${(unknownType as { type: string }).type}` };
+        }
       }
 
       // Neutralize perspective-specific events for multiplayer
