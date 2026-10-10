@@ -9,8 +9,7 @@
  */
 
 import {
-  baseSetCards,
-  jungleCards,
+  ALL_CARDS,
   isBasicEnergy,
   isEnergyCard,
 } from "@gonzaloaguila/game-core";
@@ -188,7 +187,8 @@ export type BroadcastFn = (roomId: string) => void;
 // Pack Generation
 // ============================================================================
 
-const draftPool = [...baseSetCards, ...jungleCards].filter((card) => !isBasicEnergy(card));
+// Every set in game-core's registry
+const draftPool = ALL_CARDS.filter((card) => !isBasicEnergy(card));
 
 const poolByRarity = {
   common: draftPool.filter((c) => c.rarity === "common"),
@@ -819,9 +819,7 @@ export class DraftRoomManager {
       if (room.currentRound > room.config.packsPerPlayer) {
         // All rounds done → bonus-pick phase
         room.phase = "bonus-pick";
-        room.bonusPickPool = [...baseSetCards, ...jungleCards]
-          .filter((card) => !isBasicEnergy(card))
-          .map(toGameCard);
+        room.bonusPickPool = draftPool.map(toGameCard);
         for (const p of room.players) p.isReady = false;
         room.events.push(
           this.createEvent(
@@ -929,7 +927,7 @@ export class DraftRoomManager {
   }
 
   private createBasicEnergyCard(energyType: string): GameCard {
-    const template = baseSetCards.find(
+    const template = ALL_CARDS.find(
       (c) => isEnergyCard(c) && c.isBasic && c.energyType === energyType,
     );
     if (!template) throw new Error(`Energía no encontrada: ${energyType}`);

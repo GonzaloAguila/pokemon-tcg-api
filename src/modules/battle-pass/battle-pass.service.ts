@@ -423,8 +423,9 @@ async function grantReward(
     }
 
     case "pack": {
-      // Pick random booster (base set or jungle)
-      const packId = Math.random() > 0.5 ? "base-set-booster" : "jungle-booster";
+      // Pick a random standard booster (one per set)
+      const ids = boosterService.STANDARD_BOOSTER_IDS;
+      const packId = ids[Math.floor(Math.random() * ids.length)];
       const packResult = boosterService.openPack(packId);
 
       // Persist pulled cards to user's collection
@@ -461,8 +462,7 @@ async function grantReward(
 
     case "random_card": {
       // Pick a random card from the full catalog
-      const { baseSetCards, jungleCards } = await import("@gonzaloaguila/game-core");
-      const allCards = [...baseSetCards, ...jungleCards];
+      const { ALL_CARDS: allCards } = await import("@gonzaloaguila/game-core");
       const randomCard = allCards[Math.floor(Math.random() * allCards.length)];
       const cardDefId = randomCard.id;
 

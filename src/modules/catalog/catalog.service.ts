@@ -6,8 +6,10 @@
  */
 
 import {
-  baseSetCards,
-  jungleCards,
+  CARD_SETS,
+  ALL_CARDS,
+  findCardById,
+  getSetById as getCoreSet,
   getCardImageUrl as getCoreImageUrl,
   decks,
   getDeckById,
@@ -89,22 +91,17 @@ function getDeckFeaturedPokemon(deck: Deck, count: number = 3): PokemonCard[] {
 // Sets
 // =============================================================================
 
-const SETS: SetInfo[] = [
-  {
-    id: "base-set",
-    name: "Base Set",
-    code: "BS",
-    releaseDate: "1999-01-09",
-    totalCards: 102,
-  },
-  {
-    id: "jungle",
-    name: "Jungle",
-    code: "JU",
-    releaseDate: "1999-06-16",
-    totalCards: 48,
-  },
-];
+/**
+ * Every set in game-core's registry (CARD_SETS); a new set shows up here without API changes.
+ * `totalCards` is the number of catalog cards (non-holo duplicates excluded), as before.
+ */
+const SETS: SetInfo[] = CARD_SETS.map((set) => ({
+  id: set.id,
+  name: set.name,
+  code: set.code,
+  releaseDate: set.releaseDate,
+  totalCards: set.cards.length,
+}));
 
 /**
  * Get all available card sets
@@ -127,34 +124,22 @@ export function getSetById(setId: string): SetInfo | undefined {
 /**
  * Get all cards in a set
  */
-/** Map set IDs to their card arrays */
-const setCardMap: Record<string, Card[]> = {
-  "base-set": baseSetCards,
-  jungle: jungleCards,
-};
-
 export function getCardsBySet(setId: string): Card[] {
-  return setCardMap[setId] ?? [];
+  return getCoreSet(setId)?.cards ?? [];
 }
 
 /**
- * Get a single card by ID (format: "base-set-1-alakazam")
+ * Get a single card by ID (format: "base-set-001-alakazam")
  */
 export function getCardById(cardId: string): Card | undefined {
-  for (const cards of Object.values(setCardMap)) {
-    const found = cards.find((c) => c.id === cardId);
-    if (found) return found;
-  }
-  return undefined;
+  return findCardById(cardId);
 }
 
 /**
  * Get a card by set and number
  */
 export function getCardByNumber(setId: string, number: number): Card | undefined {
-  const cards = setCardMap[setId];
-  if (!cards) return undefined;
-  return cards.find((c) => c.number === number);
+  return getCoreSet(setId)?.cards.find((c) => c.number === number);
 }
 
 /**
@@ -171,7 +156,7 @@ export function searchCards(query: string, setId?: string): Card[] {
   const normalizedQuery = query.toLowerCase();
   const cards = setId
     ? getCardsBySet(setId)
-    : Object.values(setCardMap).flat();
+    : [...ALL_CARDS];
 
   return cards.filter((c) => c.name.toLowerCase().includes(normalizedQuery));
 }

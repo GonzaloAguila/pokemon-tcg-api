@@ -34,6 +34,8 @@ export interface BoosterPackType {
   price?: number;
   /** Is this pack available for opening? */
   available: boolean;
+  /** Basic Energy cards added after the rarity slots (standard boosters: 2) */
+  energyCount?: number;
 }
 
 /**

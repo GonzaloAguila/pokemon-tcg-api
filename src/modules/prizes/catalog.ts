@@ -4,15 +4,14 @@
  */
 
 import {
-  baseSetCards,
-  jungleCards,
+  ALL_CARDS,
   isPokemonCard,
   CardRarity,
   getCardImageUrl,
 } from "@gonzaloaguila/game-core";
 import type { Card } from "@gonzaloaguila/game-core";
 
-export const allCards: Card[] = [...baseSetCards, ...jungleCards];
+export const allCards: Card[] = [...ALL_CARDS];
 export const allPokemonCards = allCards.filter((c) => isPokemonCard(c));
 export const rareHoloCards = allCards.filter((c) => isPokemonCard(c) && c.rarity === CardRarity.RareHolo);
 

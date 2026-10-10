@@ -211,7 +211,8 @@ export async function grantPrize(
       return {};
 
     case "free_pack": {
-      const packId = random() < 0.5 ? "base-set-booster" : "jungle-booster";
+      const ids = boosterService.STANDARD_BOOSTER_IDS;
+      const packId = ids[Math.min(ids.length - 1, Math.floor(random() * ids.length))];
       const packResult = boosterService.openPack(packId);
       for (const pulled of packResult.cards) {
         await tx.userCard.upsert({

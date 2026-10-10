@@ -5,8 +5,8 @@
  */
 
 import {
-  baseSetCards,
-  jungleCards,
+  CARD_SETS,
+  getSetById,
   isBasicEnergy,
   type Card,
 } from "@gonzaloaguila/game-core";
@@ -40,61 +40,82 @@ const dailyLimits: Map<string, UserDailyLimit> = new Map();
 // Initialize Default Packs
 // =============================================================================
 
-function initializeDefaultPacks(): void {
-  // Base Set Booster Pack - 11 cards
-  const baseSetPack: BoosterPackType = {
+/**
+ * Standard 11-card booster: 1 rare (33% holo), 3 uncommons, 5 commons, 2 basic Energy.
+ * Every set listed here gets one; adding a set's booster = one entry (the cards come from
+ * game-core's set registry).
+ */
+const STANDARD_BOOSTER_SLOTS: BoosterPackType["slots"] = [
+  { rarity: "rare", count: 1, holoChance: 0.33 },
+  { rarity: "uncommon", count: 3, upgradeChance: 0.01 },
+  { rarity: "common", count: 5 },
+];
+
+interface SetBoosterDef {
+  id: string;
+  name: string;
+  description: string;
+  image: string;
+  price: number;
+  /** Other packs of the set, listed right after its booster */
+  extraPacks?: Omit<BoosterPackType, "setId">[];
+}
+
+/** Booster per set id (keys must be ids in game-core's CARD_SETS). */
+const SET_BOOSTERS: Record<string, SetBoosterDef> = {
+  "base-set": {
     id: "base-set-booster",
     name: "Booster Pack",
     description: "Contains 11 random cards from the original Base Set. Includes 1 guaranteed Rare!",
-    setId: "base-set",
     image: "/packs/booster_chari.png",
-    cardCount: 11,
-    slots: [
-      { rarity: "rare", count: 1, holoChance: 0.33 },
-      { rarity: "uncommon", count: 3, upgradeChance: 0.01 },
-      { rarity: "common", count: 5 },
-      // 2 energy cards handled separately
-    ],
     price: 200,
-    available: true,
-  };
-
-  // Base Set Theme Pack - 5 cards (smaller/cheaper option)
-  const baseSetThemePack: BoosterPackType = {
-    id: "base-set-theme-pack",
-    name: "Theme Pack",
-    description: "A smaller pack with 5 cards. Good for quick collection building!",
-    setId: "base-set",
-    image: "/packs/booster_venu.png",
-    cardCount: 5,
-    slots: [
-      { rarity: "uncommon", count: 1, holoChance: 0.1 },
-      { rarity: "common", count: 4 },
+    extraPacks: [
+      {
+        // Smaller/cheaper option
+        id: "base-set-theme-pack",
+        name: "Theme Pack",
+        description: "A smaller pack with 5 cards. Good for quick collection building!",
+        image: "/packs/booster_venu.png",
+        cardCount: 5,
+        slots: [
+          { rarity: "uncommon", count: 1, holoChance: 0.1 },
+          { rarity: "common", count: 4 },
+        ],
+        price: 100,
+        available: true,
+      },
     ],
-    price: 100,
-    available: true,
-  };
-
-  // Jungle Booster Pack - 11 cards
-  const junglePack: BoosterPackType = {
+  },
+  jungle: {
     id: "jungle-booster",
     name: "Jungle Booster",
     description: "Contains 11 random cards from the Jungle expansion. Includes 1 guaranteed Rare!",
-    setId: "jungle",
     image: "/packs/jungle/Jungle_Booster_Scyther.webp",
-    cardCount: 11,
-    slots: [
-      { rarity: "rare", count: 1, holoChance: 0.33 },
-      { rarity: "uncommon", count: 3, upgradeChance: 0.01 },
-      { rarity: "common", count: 5 },
-    ],
     price: 200,
-    available: true,
-  };
+  },
+};
 
-  packTypes.set(baseSetPack.id, baseSetPack);
-  packTypes.set(baseSetThemePack.id, baseSetThemePack);
-  packTypes.set(junglePack.id, junglePack);
+/** Ids of the standard boosters, in set-registry order (prizes pick one at random). */
+export const STANDARD_BOOSTER_IDS: string[] = CARD_SETS.flatMap((set) => {
+  const def = SET_BOOSTERS[set.id];
+  return def ? [def.id] : [];
+});
+
+function initializeDefaultPacks(): void {
+  for (const set of CARD_SETS) {
+    const def = SET_BOOSTERS[set.id];
+    if (!def) continue;
+    const { extraPacks = [], ...booster } = def;
+    packTypes.set(booster.id, {
+      ...booster,
+      setId: set.id,
+      cardCount: 11,
+      slots: STANDARD_BOOSTER_SLOTS,
+      energyCount: 2,
+      available: true,
+    });
+    for (const pack of extraPacks) packTypes.set(pack.id, { ...pack, setId: set.id });
+  }
 }
 
 // Initialize on module load
@@ -162,18 +183,17 @@ export function deletePack(packId: string): boolean {
 // Pack Opening Logic
 // =============================================================================
 
-/** Map set IDs to their card arrays */
-const setCardMap: Record<string, Card[]> = {
-  "base-set": baseSetCards,
-  jungle: jungleCards,
-};
+/** Cards of a set, from game-core's registry */
+function setCards(setId: string): Card[] {
+  return getSetById(setId)?.cards ?? [];
+}
 
 /**
  * Get cards by rarity from a set
  */
 function getCardsByRarity(setId: string, rarity: string): Card[] {
-  const cards = setCardMap[setId];
-  if (!cards) return [];
+  const cards = setCards(setId);
+  if (cards.length === 0) return [];
 
   return cards.filter((card) => {
     if (rarity === "rare-holo") {
@@ -188,12 +208,12 @@ function getCardsByRarity(setId: string, rarity: string): Card[] {
 
 /**
  * Get basic energy cards from a set (excludes special energies like Double Colorless).
- * Jungle has no energy, falls back to Base Set.
+ * Sets without basic Energy (Jungle) use the first registry set that has them (Base Set).
  */
 function getEnergyCards(setId: string): Card[] {
-  const cards = setCardMap[setId] ?? baseSetCards;
-  const energy = cards.filter(isBasicEnergy);
-  return energy.length > 0 ? energy : baseSetCards.filter(isBasicEnergy);
+  const energy = setCards(setId).filter(isBasicEnergy);
+  if (energy.length > 0) return energy;
+  return CARD_SETS.map((set) => set.cards.filter(isBasicEnergy)).find((cards) => cards.length > 0) ?? [];
 }
 
 /**
@@ -251,10 +271,10 @@ export function openPack(packId: string): PackOpeningResult {
     }
   }
 
-  // Add energy cards for standard booster packs (2 basic energy)
-  if (pack.id === "base-set-booster" || pack.id === "jungle-booster") {
+  // Basic energy cards of standard booster packs
+  if (pack.energyCount) {
     const energyCards = getEnergyCards(pack.setId);
-    const pickedEnergy = pickRandom(energyCards, 2);
+    const pickedEnergy = pickRandom(energyCards, pack.energyCount);
     for (const card of pickedEnergy) {
       pulledCards.push({
         card,

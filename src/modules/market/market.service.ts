@@ -1,6 +1,5 @@
 import {
-  baseSetCards,
-  jungleCards,
+  ALL_CARDS,
   isPokemonCard,
   isEnergyCard,
   isTrainerCard,
@@ -30,7 +29,7 @@ import type {
 // Catalog pools
 // ---------------------------------------------------------------------------
 
-const allCards: Card[] = [...baseSetCards, ...jungleCards];
+const allCards: Card[] = [...ALL_CARDS];
 
 const rareCards = allCards.filter(
   (c) => isPokemonCard(c) && c.rarity === CardRarity.RareHolo,

@@ -1,8 +1,8 @@
 import type { Server, Socket } from "socket.io";
 import {
   type GameCard,
-  baseSetCards,
-  jungleCards,
+  findCardById,
+  findCardDefinition,
   isPokemonCard,
   getDeckById as getThemeDeckById,
   decks as themeDeckList,
@@ -25,9 +25,6 @@ import * as chatService from "../modules/chat/chat.service.js";
 import { prisma } from "../lib/prisma.js";
 import type { DeckCardEntry } from "../modules/decks/decks.service.js";
 
-// Card catalog for variant map lookups and deck resolution
-const allCards = [...baseSetCards, ...jungleCards];
-const cardById = new Map(allCards.map((c) => [c.id, c]));
 
 /** UUID pattern used to distinguish user DB deck IDs from theme deck IDs */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -60,7 +57,7 @@ async function resolveDeckCards(deckId: string | null): Promise<GameCard[] | nul
     const cards: GameCard[] = [];
 
     for (const entry of entries) {
-      const template = cardById.get(entry.cardDefId);
+      const template = findCardById(entry.cardDefId);
       if (!template) {
         console.warn(`[resolveDeckCards] Card definition not found: ${entry.cardDefId}`);
         continue;
@@ -80,14 +77,12 @@ async function resolveDeckCards(deckId: string | null): Promise<GameCard[] | nul
   const themeDeck = getThemeDeckById(deckId);
   if (!themeDeck) return null;
 
-  // Build card instances the same way game-core's buildDeckFromEntries does,
-  // but search the full catalog (Base Set + Jungle) instead of only Base Set.
+  // Build card instances the same way game-core's buildDeckFromEntries does (set registry
+  // lookup by set + number; no set = Base Set).
   const cards: GameCard[] = [];
   for (const entry of themeDeck.cards) {
     // Theme deck entries use {cardNumber, quantity, set?}
-    const template = allCards.find(
-      (c) => c.number === entry.cardNumber && (!entry.set || c.set === entry.set),
-    );
+    const template = findCardDefinition(entry.set, entry.cardNumber);
     if (!template) {
       console.warn(`[resolveDeckCards] Theme deck card #${entry.cardNumber} not found`);
       continue;
@@ -110,7 +105,7 @@ function buildVariantMap(entries: DeckCardEntry[]): Record<string, string> {
   const map: Record<string, string> = {};
   for (const entry of entries) {
     if (!entry.variantId) continue;
-    const card = cardById.get(entry.cardDefId);
+    const card = findCardById(entry.cardDefId);
     if (!card) continue;
     const name = isPokemonCard(card) ? card.name : card.name;
     map[name] = entry.variantId;
