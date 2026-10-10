@@ -18,7 +18,9 @@ import {
 } from "./draft-handlers.js";
 import { recordMatchResult } from "../modules/users/users.service.js";
 import { checkAndUpdateProgress } from "../modules/achievements/achievements.service.js";
-import { verifyAccessToken } from "../lib/jwt.js";
+import { socketSchemas, parsePayload } from "./schemas.js";
+import { setIo, userRoom } from "./io-registry.js";
+import { authenticateHandshake, checkSocketSession, kickBlockedUser, requireSocketUser } from "./session-guard.js";
 import * as chatService from "../modules/chat/chat.service.js";
 import { prisma } from "../lib/prisma.js";
 import type { DeckCardEntry } from "../modules/decks/decks.service.js";
@@ -173,30 +175,7 @@ async function resolveAndStartGame(roomManager: GameRoomManager, roomId: string)
   return roomManager.startGame(roomId);
 }
 
-// Types for Socket.io events
-interface JoinRoomPayload {
-  roomId: string;
-  userId?: string; // deprecated — ignored, using token
-  deckId?: string;
-  username?: string;
-  avatarId?: string;
-  titleId?: string;
-}
-
-interface PlayerAction {
-  type: "attack" | "playTrainer" | "playEnergy" | "retreat" | "usePower" | "endTurn" | "playBasic" | "evolve";
-  payload: {
-    cardId?: string;
-    targetId?: string;
-    attackIndex?: number;
-    benchIndex?: number;
-    selections?: string[][];
-  };
-}
-
-interface ChatMessage {
-  content: string;
-}
+// Socket payloads are validated with the zod schemas in ./schemas.ts.
 
 // Room manager instance (exported for admin panel access)
 export const roomManager = new GameRoomManager();
@@ -307,17 +286,16 @@ function allowChatMessage(userId: string): boolean {
 
 
 export function setupSocketHandlers(io: Server): void {
-  // Attach user data if token present, but always allow connection
-  // (unauthenticated sockets can only view room list)
+  setIo(io);
+
+  // Attach user data if the token is valid, not revoked (tokenVersion) and the account can play,
+  // but always allow the connection (unauthenticated sockets can only view rooms / spectate).
   io.use((socket, next) => {
-    const token = socket.handshake.auth?.token as string | undefined;
-    if (token) {
-      const payload = verifyAccessToken(token);
-      if (payload) {
-        socket.data.user = payload;
-      }
-    }
-    next();
+    authenticateHandshake(socket.handshake.auth?.token)
+      .then((payload) => {
+        if (payload) socket.data.user = payload;
+      })
+      .finally(() => next());
   });
 
   io.on("connection", (socket: Socket) => {
@@ -325,7 +303,7 @@ export function setupSocketHandlers(io: Server): void {
 
     // Join user-specific room for targeted notifications
     if (socket.data.user?.userId) {
-      socket.join(`user:${socket.data.user.userId}`);
+      socket.join(userRoom(socket.data.user.userId));
     }
 
     // ==========================================================================
@@ -338,21 +316,13 @@ export function setupSocketHandlers(io: Server): void {
       });
     });
 
-    socket.on("createRoom", async (payload: {
-      userId?: string; // deprecated — ignored, using token
-      deckId?: string;
-      prizeCount?: number;
-      betAmount?: number;
-      reservedUserId?: string;
-      friendly?: boolean;
-      username?: string;
-      avatarId?: string;
-      titleId?: string;
-    }) => {
+    socket.on("createRoom", async (payload: unknown) => {
       try {
-        const userId = getAuthUserId(socket);
-        if (!userId) { socket.emit("error", { message: "Autenticacion requerida" }); return; }
-        const { deckId, prizeCount, betAmount, reservedUserId, friendly } = payload;
+        const userId = await requireSocketUser(socket, "error");
+        if (!userId) return;
+        const parsed = parsePayload(socketSchemas.createRoom, payload);
+        if (!parsed.ok) { socket.emit("error", { message: parsed.error }); return; }
+        const { deckId, prizeCount, betAmount, reservedUserId, friendly } = parsed.data;
         const identity = await getPlayableIdentity(userId);
         if ("error" in identity) { socket.emit("error", { message: identity.error }); return; }
         const deckError = await checkDeckPlayable(userId, deckId);
@@ -385,11 +355,12 @@ export function setupSocketHandlers(io: Server): void {
       }
     });
 
-    socket.on("deleteRoom", async (payload: { roomId: string }) => {
-      console.log(`[deleteRoom] Received:`, payload, `from socket ${socket.id}`);
+    socket.on("deleteRoom", async (payload: unknown) => {
       try {
         if (!getAuthUserId(socket)) { socket.emit("error", { message: "Autenticacion requerida" }); return; }
-        const { roomId } = payload;
+        const parsed = parsePayload(socketSchemas.roomRef, payload);
+        if (!parsed.ok) { socket.emit("error", { message: parsed.error }); return; }
+        const { roomId } = parsed.data;
         const room = roomManager.getRoom(roomId);
         console.log(`[deleteRoom] Room state:`, room ? { player1SocketId: room.player1SocketId, status: room.status } : 'not found');
         const deleted = roomManager.deleteRoom(roomId, socket.id);
@@ -414,12 +385,13 @@ export function setupSocketHandlers(io: Server): void {
     // Room Management
     // ==========================================================================
 
-    socket.on("joinRoom", async (payload: JoinRoomPayload) => {
-      console.log(`[joinRoom] Received:`, payload);
+    socket.on("joinRoom", async (payload: unknown) => {
       try {
-        const userId = getAuthUserId(socket);
-        if (!userId) { socket.emit("error", { message: "Autenticacion requerida" }); return; }
-        const { roomId, deckId } = payload;
+        const userId = await requireSocketUser(socket, "error");
+        if (!userId) return;
+        const parsed = parsePayload(socketSchemas.joinRoom, payload);
+        if (!parsed.ok) { socket.emit("error", { message: parsed.error }); return; }
+        const { roomId, deckId } = parsed.data;
         const identity = await getPlayableIdentity(userId);
         if ("error" in identity) { socket.emit("error", { message: identity.error }); return; }
         const deckError = await checkDeckPlayable(userId, deckId);
@@ -535,10 +507,12 @@ export function setupSocketHandlers(io: Server): void {
       }
     });
 
-    socket.on("leaveRoom", async (payload: { roomId: string }) => {
+    socket.on("leaveRoom", async (payload: unknown) => {
       try {
         if (!getAuthUserId(socket)) { socket.emit("error", { message: "Autenticacion requerida" }); return; }
-        const { roomId } = payload;
+        const parsed = parsePayload(socketSchemas.roomRef, payload);
+        if (!parsed.ok) { socket.emit("error", { message: parsed.error }); return; }
+        const { roomId } = parsed.data;
         await roomManager.leaveRoom(roomId, socket.id);
 
         socket.leave(roomId);
@@ -554,10 +528,12 @@ export function setupSocketHandlers(io: Server): void {
     // Game Ready
     // ==========================================================================
 
-    socket.on("ready", async (payload: { roomId: string }) => {
+    socket.on("ready", async (payload: unknown) => {
       try {
-        if (!getAuthUserId(socket)) { socket.emit("error", { message: "Autenticacion requerida" }); return; }
-        const { roomId } = payload;
+        if (!(await requireSocketUser(socket, "error"))) return;
+        const parsed = parsePayload(socketSchemas.roomRef, payload);
+        if (!parsed.ok) { socket.emit("error", { message: parsed.error }); return; }
+        const { roomId } = parsed.data;
         const room = await roomManager.setPlayerReady(roomId, socket.id);
 
         socket.to(roomId).emit("playerReady", { socketId: socket.id });
@@ -603,18 +579,31 @@ export function setupSocketHandlers(io: Server): void {
 
     // Coin a client must show before acting (Poké Ball, Heal). Rolled and stored server-side;
     // the subsequent action uses the stored result.
-    socket.on("requestCoinFlip", (payload: { roomId: string; purpose: string }, ack?: (res: unknown) => void) => {
+    socket.on("requestCoinFlip", async (payload: unknown, ack?: (res: unknown) => void) => {
       if (typeof ack !== "function") return;
-      if (!getAuthUserId(socket)) return ack({ success: false, error: "Autenticacion requerida" });
-      const purpose = payload?.purpose;
-      if (purpose !== "trainer" && purpose !== "healFlip") return ack({ success: false, error: "Invalid purpose" });
-      ack(roomManager.requestCoinFlip(String(payload?.roomId ?? ""), socket.id, purpose));
+      const session = await checkSocketSession(socket);
+      if (!session.ok) {
+        ack({ success: false, error: session.error });
+        if (session.blocked) kickBlockedUser(socket);
+        return;
+      }
+      const parsed = parsePayload(socketSchemas.requestCoinFlip, payload);
+      if (!parsed.ok) return ack({ success: false, error: parsed.error });
+      ack(roomManager.requestCoinFlip(parsed.data.roomId, socket.id, parsed.data.purpose));
     });
 
-    socket.on("action", async (payload: { roomId: string; action: PlayerAction }) => {
+    socket.on("action", async (payload: unknown) => {
       try {
-        if (!getAuthUserId(socket)) { socket.emit("error", { message: "Autenticacion requerida" }); return; }
-        const { roomId, action } = payload;
+        const session = await checkSocketSession(socket);
+        if (!session.ok) {
+          socket.emit("actionResult", { success: false, error: session.error });
+          if (session.blocked) kickBlockedUser(socket);
+          return;
+        }
+        const parsed = parsePayload(socketSchemas.actionEnvelope, payload);
+        if (!parsed.ok) { socket.emit("actionResult", { success: false, error: parsed.error }); return; }
+        // The action body is validated by executeAction (parseGameAction)
+        const { roomId, action } = parsed.data;
 
         // Get room and state before action
         const roomBefore = roomManager.getRoom(roomId);
@@ -781,18 +770,19 @@ export function setupSocketHandlers(io: Server): void {
     // Chat
     // ==========================================================================
 
-    socket.on("chatMessage", async (payload: { roomId: string; message: ChatMessage }) => {
-      const { roomId, message } = payload ?? {};
+    socket.on("chatMessage", async (payload: unknown) => {
       const tokenUser = socket.data.user;
       if (!tokenUser) return;
+      if (!(await requireSocketUser(socket, "error"))) return;
+      const parsed = parsePayload(socketSchemas.chatMessage, payload);
+      if (!parsed.ok) { socket.emit("error", { message: parsed.error }); return; }
+      const { roomId } = parsed.data;
+      const content = parsed.data.message.content;
 
       // Only game rooms this socket is actually in (as player or spectator); otherwise a client
       // could emit into any socket.io room, e.g. another user's private "user:<id>" room.
-      if (typeof roomId !== "string" || !socket.rooms.has(roomId) || !roomManager.getRoom(roomId)) return;
+      if (!socket.rooms.has(roomId) || !roomManager.getRoom(roomId)) return;
       if (!allowChatMessage(tokenUser.userId)) return;
-
-      const content = typeof message?.content === "string" ? message.content.trim() : "";
-      if (!content || content.length > 500) return;
 
       // Fetch username from DB (not in JWT)
       const dbUser = await prisma.user.findUnique({
@@ -822,27 +812,17 @@ export function setupSocketHandlers(io: Server): void {
       socket.leave("global-chat");
     });
 
-    socket.on("globalChat:message", async (payload: { content: string; type?: string }) => {
+    socket.on("globalChat:message", async (payload: unknown) => {
       const user = socket.data.user;
       if (!user) return;
-
-      const { content, type = "text" } = payload ?? {};
-      if (typeof content !== "string") return;
-      if (type !== "text" && type !== "sticker") return;
+      if (!(await requireSocketUser(socket, "error"))) return;
+      const parsed = parsePayload(socketSchemas.globalChatMessage, payload);
+      if (!parsed.ok) { socket.emit("error", { message: parsed.error }); return; }
+      const { content, type } = parsed.data;
       if (!allowChatMessage(user.userId)) return;
 
-      // Validate text messages
-      if (type === "text") {
-        if (content.trim().length === 0 || content.length > 500) return;
-      }
-
-      // Validate sticker messages
-      if (type === "sticker") {
-        if (content.length === 0 || content.length > 100) return;
-      }
-
       try {
-        const saved = await chatService.saveMessage(user.userId, content.trim(), type);
+        const saved = await chatService.saveMessage(user.userId, content, type);
         io.to("global-chat").emit("globalChat:message", saved);
       } catch (err) {
         console.error("Error saving chat message:", err);
@@ -853,9 +833,12 @@ export function setupSocketHandlers(io: Server): void {
     // Kick (Turn Timer Expiry)
     // ==========================================================================
 
-    socket.on("requestKick", async (payload: { roomId: string }) => {
+    socket.on("requestKick", async (payload: unknown) => {
       try {
-        const { roomId } = payload;
+        if (!(await requireSocketUser(socket, "error"))) return;
+        const parsed = parsePayload(socketSchemas.roomRef, payload);
+        if (!parsed.ok) { socket.emit("error", { message: parsed.error }); return; }
+        const { roomId } = parsed.data;
         const result = roomManager.requestKick(roomId, socket.id);
 
         if (!result.success) {
@@ -929,9 +912,11 @@ export function setupSocketHandlers(io: Server): void {
     // Spectator Mode
     // ==========================================================================
 
-    socket.on("spectateRoom", async (payload: { roomId: string }) => {
+    socket.on("spectateRoom", async (payload: unknown) => {
       try {
-        const { roomId } = payload;
+        const parsed = parsePayload(socketSchemas.roomRef, payload);
+        if (!parsed.ok) { socket.emit("error", { message: parsed.error }); return; }
+        const { roomId } = parsed.data;
         const room = roomManager.addSpectator(roomId, socket.id);
 
         if (!room) {
@@ -968,7 +953,8 @@ export function setupSocketHandlers(io: Server): void {
     // Active Game Check (for reconnection)
     // ==========================================================================
 
-    socket.on("checkActiveGame", (payload: { userId?: string }) => {
+    // Payload ({ userId }) is ignored: identity comes from the handshake token.
+    socket.on("checkActiveGame", () => {
       const userId = getAuthUserId(socket);
       if (!userId) { socket.emit("activeGame", { roomId: null }); return; }
       const room = roomManager.getActiveRoomForUser(userId);

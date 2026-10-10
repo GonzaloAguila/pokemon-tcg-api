@@ -6,12 +6,14 @@
  */
 
 import type { Server, Socket } from "socket.io";
+import type { z } from "zod";
 import { DraftRoomManager } from "./draft-rooms.js";
 import { GameRoomManager } from "./rooms.js";
 import { maskGameStateForPlayer } from "./state-masking.js";
-import type { DraftConfig } from "./draft-rooms.js";
 import { prisma } from "../lib/prisma.js";
 import * as usersService from "../modules/users/users.service.js";
+import { draftSchemas, parsePayload } from "./schemas.js";
+import { requireSocketUser } from "./session-guard.js";
 
 // Singleton draft room manager (exported for game-over reporting)
 export const draftRoomManager = new DraftRoomManager();
@@ -143,10 +145,6 @@ export async function createMatchGames(
   }
 }
 
-/**
- * Register draft socket events on a connected socket.
- */
-/** Authenticated userId from the socket handshake (set by the io.use auth middleware), or null. */
 /** Rooms whose start (and entry-fee charging) is in flight, to ignore duplicate start requests. */
 const startingRooms = new Set<string>();
 
@@ -158,10 +156,27 @@ async function refundDraftEntry(playerIds: string[], entryFee: number) {
   }
 }
 
-function getSocketUserId(socket: Socket): string | null {
-  return (socket.data.user?.userId as string | undefined) ?? null;
+/**
+ * Authenticated, active (not banned/suspended/deleted) user for a draft event, or null after
+ * emitting draft:error (blocked users are disconnected).
+ */
+function requireDraftUser(socket: Socket): Promise<string | null> {
+  return requireSocketUser(socket, "draft:error");
 }
 
+/** Validate a draft payload; emits draft:error and returns null when invalid. */
+function parseDraft<S extends z.ZodTypeAny>(socket: Socket, schema: S, payload: unknown): z.output<S> | null {
+  const parsed = parsePayload(schema, payload);
+  if (!parsed.ok) {
+    socket.emit("draft:error", { message: parsed.error });
+    return null;
+  }
+  return parsed.data;
+}
+
+/**
+ * Register draft socket events on a connected socket.
+ */
 export function registerDraftEvents(
   io: Server,
   socket: Socket,
@@ -180,15 +195,14 @@ export function registerDraftEvents(
 
   socket.on(
     "draft:create",
-    async (payload: { config?: Partial<DraftConfig> }) => {
+    async (payload: unknown) => {
       try {
         // Identity comes from the verified handshake JWT, never from the payload
-        const userId = getSocketUserId(socket);
-        if (!userId) {
-          socket.emit("draft:error", { message: "Autenticacion requerida" });
-          return;
-        }
-        const config = payload?.config;
+        const userId = await requireDraftUser(socket);
+        if (!userId) return;
+        const data = parseDraft(socket, draftSchemas.create, payload);
+        if (!data) return;
+        const config = data.config;
 
         // Only admins and superadmins can create draft rooms
         const user = await prisma.user.findUnique({
@@ -224,19 +238,18 @@ export function registerDraftEvents(
 
   socket.on(
     "draft:join",
-    async (payload: { roomId: string }) => {
+    async (payload: unknown) => {
       try {
-        const userId = getSocketUserId(socket);
-        if (!userId) {
-          socket.emit("draft:error", { message: "Autenticacion requerida" });
-          return;
-        }
-        const roomId = payload?.roomId;
+        const userId = await requireDraftUser(socket);
+        if (!userId) return;
+        const data = parseDraft(socket, draftSchemas.roomRef, payload);
+        if (!data) return;
+        const roomId = data.roomId;
         const account = await prisma.user.findUnique({
           where: { id: userId },
           select: { username: true },
         });
-        if (!account || typeof roomId !== "string") {
+        if (!account) {
           socket.emit("draft:error", { message: "Solicitud invalida" });
           return;
         }
@@ -295,9 +308,12 @@ export function registerDraftEvents(
     },
   );
 
-  socket.on("draft:leave", (payload: { roomId: string }) => {
+  socket.on("draft:leave", async (payload: unknown) => {
     try {
-      const { roomId } = payload;
+      if (!(await requireDraftUser(socket))) return;
+      const data = parseDraft(socket, draftSchemas.roomRef, payload);
+      if (!data) return;
+      const { roomId } = data;
       const room = draftRoomManager.leaveRoom(roomId, socket.id);
 
       socket.leave(roomId);
@@ -308,9 +324,12 @@ export function registerDraftEvents(
     }
   });
 
-  socket.on("draft:delete", (payload: { roomId: string }) => {
+  socket.on("draft:delete", async (payload: unknown) => {
     try {
-      const { roomId } = payload;
+      if (!(await requireDraftUser(socket))) return;
+      const data = parseDraft(socket, draftSchemas.roomRef, payload);
+      if (!data) return;
+      const { roomId } = data;
       const deleted = draftRoomManager.deleteRoom(roomId, socket.id);
 
       if (deleted) {
@@ -327,8 +346,11 @@ export function registerDraftEvents(
   // Draft Actions
   // --------------------------------------------------------------------------
 
-  socket.on("draft:start", async (payload: { roomId: string }) => {
-    const roomId = payload?.roomId;
+  socket.on("draft:start", async (payload: unknown) => {
+    if (!(await requireDraftUser(socket))) return;
+    const data = parseDraft(socket, draftSchemas.roomRef, payload);
+    if (!data) return;
+    const roomId = data.roomId;
     if (startingRooms.has(roomId)) return; // a start (and its charging) is already in progress
     const charged: string[] = [];
     let entryFee = 0;
@@ -385,9 +407,12 @@ export function registerDraftEvents(
     }
   });
 
-  socket.on("draft:pick", (payload: { roomId: string; cardId: string }) => {
+  socket.on("draft:pick", async (payload: unknown) => {
     try {
-      const { roomId, cardId } = payload;
+      if (!(await requireDraftUser(socket))) return;
+      const data = parseDraft(socket, draftSchemas.pick, payload);
+      if (!data) return;
+      const { roomId, cardId } = data;
       draftRoomManager.pickCard(roomId, socket.id, cardId);
       broadcastDraftState(io, roomId);
     } catch (error) {
@@ -397,9 +422,12 @@ export function registerDraftEvents(
 
   socket.on(
     "draft:bonusPick",
-    (payload: { roomId: string; cardDefIds: string[] }) => {
+    async (payload: unknown) => {
       try {
-        const { roomId, cardDefIds } = payload;
+        if (!(await requireDraftUser(socket))) return;
+        const data = parseDraft(socket, draftSchemas.bonusPick, payload);
+        if (!data) return;
+        const { roomId, cardDefIds } = data;
         draftRoomManager.bonusPick(roomId, socket.id, cardDefIds);
         broadcastDraftState(io, roomId);
       } catch (error) {
@@ -410,13 +438,12 @@ export function registerDraftEvents(
 
   socket.on(
     "draft:submitDeck",
-    (payload: {
-      roomId: string;
-      deckCardIds: string[];
-      energyCards: { type: string; count: number }[];
-    }) => {
+    async (payload: unknown) => {
       try {
-        const { roomId, deckCardIds, energyCards } = payload;
+        if (!(await requireDraftUser(socket))) return;
+        const data = parseDraft(socket, draftSchemas.submitDeck, payload);
+        if (!data) return;
+        const { roomId, deckCardIds, energyCards } = data;
         const room = draftRoomManager.submitDeck(roomId, socket.id, deckCardIds, energyCards);
         broadcastDraftState(io, roomId);
 
@@ -443,9 +470,12 @@ export function registerDraftEvents(
 
   socket.on(
     "draft:forfeit",
-    (payload: { draftRoomId: string; gameRoomId: string }) => {
+    async (payload: unknown) => {
       try {
-        const { draftRoomId, gameRoomId } = payload;
+        if (!(await requireDraftUser(socket))) return;
+        const data = parseDraft(socket, draftSchemas.forfeit, payload);
+        if (!data) return;
+        const { draftRoomId, gameRoomId } = data;
         const draftInfo = draftRoomManager.getDraftInfoForGameRoom(gameRoomId);
         if (!draftInfo) return;
 

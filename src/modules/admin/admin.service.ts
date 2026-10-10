@@ -3,6 +3,17 @@ import { prisma } from "../../lib/prisma.js";
 import { Errors } from "../../middleware/error-handler.js";
 import { ALL_PERMISSIONS } from "./permissions.js";
 import * as usersService from "../users/users.service.js";
+import { invalidateAccountState } from "../../lib/account-state.js";
+import { disconnectUserSockets } from "../../socket/io-registry.js";
+
+/**
+ * Apply a moderation change right away: drop the cached account state (HTTP tokens and
+ * sockets re-read it) and, when the user lost access, close their open sockets.
+ */
+function applySessionChange(userId: string, kickMessage?: string) {
+  invalidateAccountState(userId);
+  if (kickMessage) disconnectUserSockets(userId, kickMessage);
+}
 
 // =============================================================================
 // User Management
@@ -215,6 +226,7 @@ export async function deleteUser(userId: string) {
   }
 
   await prisma.user.delete({ where: { id: userId } });
+  applySessionChange(userId, "Tu cuenta fue eliminada");
   return { success: true };
 }
 
@@ -236,6 +248,7 @@ export async function toggleUserBan(userId: string, banned: boolean, reason?: st
     },
     select: { status: true },
   });
+  applySessionChange(userId, banned ? "Tu cuenta ha sido deshabilitada" : undefined);
   return user;
 }
 
@@ -256,6 +269,7 @@ export async function suspendUser(userId: string, hours: number, reason?: string
     },
     select: { status: true, suspendedUntil: true },
   });
+  applySessionChange(userId, "Tu cuenta esta suspendida");
   return user;
 }
 
@@ -276,7 +290,7 @@ export async function setUserRole(userId: string, role: "user" | "admin") {
   }
 
   // When demoting to user, clear permissions
-  return prisma.user.update({
+  const updated = await prisma.user.update({
     where: { id: userId },
     data: {
       role,
@@ -289,6 +303,9 @@ export async function setUserRole(userId: string, role: "user" | "admin") {
       permissions: true,
     },
   });
+  // requireAuth reads the role from the account state, so this applies on the next request
+  applySessionChange(userId);
+  return updated;
 }
 
 // ---------------------------------------------------------------------------
