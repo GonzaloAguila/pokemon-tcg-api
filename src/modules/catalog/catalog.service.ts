@@ -101,6 +101,7 @@ const SETS: SetInfo[] = CARD_SETS.map((set) => ({
   code: set.code,
   releaseDate: set.releaseDate,
   totalCards: set.cards.length,
+  printedTotal: set.totalCards,
 }));
 
 /**

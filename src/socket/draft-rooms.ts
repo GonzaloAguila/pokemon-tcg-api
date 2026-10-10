@@ -188,7 +188,7 @@ export type BroadcastFn = (roomId: string) => void;
 // ============================================================================
 
 // Every set in game-core's registry
-const draftPool = ALL_CARDS.filter((card) => !isBasicEnergy(card));
+export const draftPool: readonly Card[] = ALL_CARDS.filter((card) => !isBasicEnergy(card));
 
 const poolByRarity = {
   common: draftPool.filter((c) => c.rarity === "common"),

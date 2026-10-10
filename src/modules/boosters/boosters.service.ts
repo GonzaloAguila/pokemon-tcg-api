@@ -93,6 +93,13 @@ const SET_BOOSTERS: Record<string, SetBoosterDef> = {
     image: "/packs/jungle/Jungle_Booster_Scyther.webp",
     price: 200,
   },
+  fossil: {
+    id: "fossil-booster",
+    name: "Fossil Booster",
+    description: "Contains 11 random cards from the Fossil expansion. Includes 1 guaranteed Rare!",
+    image: "/packs/fossil/booster.png",
+    price: 200,
+  },
 };
 
 /** Ids of the standard boosters, in set-registry order (prizes pick one at random). */

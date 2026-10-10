@@ -8,6 +8,8 @@ export interface SetInfo {
   code: string;
   releaseDate: string;
   totalCards: number;
+  /** Cards printed in the set, holo/non-holo duplicates included (Fossil: 62) */
+  printedTotal: number;
 }
 
 export interface CardListResponse {
