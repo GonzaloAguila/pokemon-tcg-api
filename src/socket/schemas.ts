@@ -20,9 +20,7 @@ const instanceId = z.string().min(1).max(200);
 const deckId = z.string().min(1).max(64);
 const idList = (max: number) => z.array(instanceId).max(max);
 
-const ENERGY_TYPES = ["grass", "fire", "water", "lightning", "psychic", "fighting", "colorless"] as const;
 const BASIC_ENERGY_TYPES = ["grass", "fire", "water", "lightning", "psychic", "fighting"] as const;
-const energyType = z.enum(ENERGY_TYPES);
 const coinSide = z.enum(["heads", "tails"]);
 
 const BENCH_SIZE = 5;
@@ -31,6 +29,19 @@ const MAX_PRIZES = 6;
 const MAX_ZONE_CARDS = 60;
 
 const benchIndex = z.number().int().min(0).max(BENCH_SIZE - 1);
+/** Most questions one Trainer / power asks (Super Energy Removal: 4). */
+const MAX_EFFECT_STEPS = 8;
+/**
+ * Answers to a Trainer's / power's steps (game-core getTrainerSteps / getPowerSteps):
+ * selections[i] = ids of the options chosen at step i (card / Pokémon ids, "0".."n-1"
+ * indices, energy types, peek targets...). Only the shape is checked here; game-core
+ * checks every answer against the options it offers and throws IllegalActionError.
+ */
+const effectSelections = z
+  .array(z.array(z.string().min(1).max(200)).max(MAX_ZONE_CARDS))
+  .max(MAX_EFFECT_STEPS)
+  .nullish()
+  .transform((v) => v ?? []);
 const attackIndex = z.number().int().min(0).max(9);
 
 /** Treat null like "not sent" (the client drops undefined fields when serializing). */
@@ -86,10 +97,11 @@ export const socketSchemas = {
   /** deleteRoom, leaveRoom, ready, requestKick, spectateRoom */
   roomRef: z.object({ roomId }),
 
-  requestCoinFlip: z.object({
-    roomId,
-    purpose: z.enum(["trainer", "healFlip"]),
-  }),
+  /** Coins a Trainer (by card id in hand) or activated power (by Pokémon id) flips before its steps. */
+  requestCoinFlip: z.discriminatedUnion("purpose", [
+    z.object({ roomId, purpose: z.literal("trainer"), cardId: instanceId }),
+    z.object({ roomId, purpose: z.literal("power"), pokemonId: instanceId }),
+  ]),
 
   /** The action itself is validated by parseGameAction() inside GameRoomManager.executeAction. */
   actionEnvelope: z.object({
@@ -147,40 +159,14 @@ const noPayload = z.object({}).nullish().transform(() => ({}));
 const action = <T extends string, P extends z.ZodTypeAny>(type: T, payload: P) =>
   z.object({ type: z.literal(type), payload });
 
-const powerPayload = z.discriminatedUnion("powerType", [
-  z.object({ powerType: z.literal("rainDance"), pokemonId: instanceId, energyCardId: instanceId, targetPokemonId: instanceId }),
-  z.object({
-    powerType: z.literal("energyTrans"),
-    pokemonId: instanceId,
-    sourcePokemonId: instanceId,
-    targetPokemonId: instanceId,
-    energyCardId: instanceId,
-  }),
-  z.object({
-    powerType: z.literal("damageSwap"),
-    pokemonId: instanceId,
-    sourcePokemonId: instanceId,
-    targetPokemonId: instanceId,
-    amount: z.number().int().positive().max(1000),
-  }),
-  z.object({ powerType: z.literal("energyBurn"), pokemonId: instanceId }),
-  z.object({
-    powerType: z.literal("buzzap"),
-    pokemonId: instanceId,
-    electrodePokemonId: instanceId,
-    chosenEnergyType: energyType,
-    targetPokemonId: instanceId,
-  }),
-  // coinResult is ignored: the server uses the coin it rolled in requestCoinFlip
-  z.object({ powerType: z.literal("healFlip"), pokemonId: instanceId, targetPokemonId: instanceId, coinResult: optional(coinSide) }),
-  z.object({ powerType: z.literal("typeShift"), pokemonId: instanceId, chosenType: energyType }),
-  z.object({
-    powerType: z.literal("peek"),
-    pokemonId: instanceId,
-    peekType: z.enum(["playerDeck", "opponentDeck", "opponentHand", "playerPrize", "opponentPrize"]),
-  }),
-  z.object({ powerType: z.literal("clearPeek"), pokemonId: optional(instanceId) }),
-]);
+/**
+ * Activated Pokémon Power through game-core's effect registry: the Pokémon in play using its
+ * power and the answers to getPowerSteps. Legacy `powerType` fields are ignored (stripped).
+ */
+const powerPayload = z.object({
+  pokemonId: instanceId,
+  selections: effectSelections,
+});
 
 export const gameActionSchema = z.discriminatedUnion("type", [
   action("attack", z.object({
@@ -188,20 +174,29 @@ export const gameActionSchema = z.discriminatedUnion("type", [
     // Sent by the client for energy-discard attacks; the engine picks the energy, so it's ignored.
     selectedEnergyIds: optional(idList(MAX_ZONE_CARDS)),
     metronomeAttack: optional(z.object({ name: z.string().max(100), index: attackIndex })),
-    conversionType: optional(energyType),
+    // Porygon: any type other than Colorless
+    conversionType: optional(z.enum(BASIC_ENERGY_TYPES)),
     conversionEffect: optional(z.enum(["changeWeakness", "changeResistance"])),
   })),
   action("endTurn", noPayload),
   action("retreat", z.object({ energyIdsToDiscard: idList(MAX_ZONE_CARDS), benchIndex })),
+  // Board actions run through game-core (playBasicPokemon / attachEnergyCard / evolvePokemonCard).
+  // Legacy fields (playBasicToBench.benchIndex, attachEnergy.isBench/benchIndex) are ignored:
+  // the Bench is compacted by the engine and Pokémon are identified by id.
   action("playBasicToActive", z.object({ cardId: instanceId })),
-  action("playBasicToBench", z.object({ cardId: instanceId, benchIndex })),
-  action("attachEnergy", z.object({
-    cardId: instanceId,
-    pokemonId: instanceId,
-    isBench: z.boolean(),
-    benchIndex: optional(benchIndex),
-  })),
-  action("evolve", z.object({ cardId: instanceId, targetIndex: z.number().int().min(-1).max(BENCH_SIZE - 1) })),
+  action("playBasicToBench", z.object({ cardId: instanceId })),
+  action("attachEnergy", z.object({ cardId: instanceId, pokemonId: instanceId })),
+  action("evolve", z
+    .object({
+      cardId: instanceId,
+      targetPokemonId: optional(instanceId),
+      /** Legacy: -1 = Active, 0-4 = Bench slot. Ignored when targetPokemonId is sent. */
+      targetIndex: optional(z.number().int().min(-1).max(BENCH_SIZE - 1)),
+    })
+    .refine((p) => p.targetPokemonId !== undefined || p.targetIndex !== undefined, {
+      message: "targetPokemonId requerido",
+      path: ["targetPokemonId"],
+    })),
   action("takePrize", z.object({ prizeIndex: z.number().int().min(0).max(MAX_PRIZES - 1) })),
   action("promote", z.object({ benchIndex })),
   action("deckSearch", z.object({ cardId: instanceId.nullish().transform((v) => v ?? null) })),
@@ -213,12 +208,13 @@ export const gameActionSchema = z.discriminatedUnion("type", [
   action("mulligan", noPayload),
   action("playerReady", noPayload),
   action("usePower", powerPayload),
+  // Trainer through game-core's effect registry: the card in the hand and the answers to
+  // getTrainerSteps. trainerName (optional, legacy) must match the card when sent; coinResult
+  // is ignored (coins come from requestCoinFlip or are rolled when the card is played).
   action("playTrainer", z.object({
     cardId: instanceId,
-    trainerName: z.string().min(1).max(64),
-    // One array per wizard step; Pokédex sends string indices.
-    selections: z.array(idList(MAX_ZONE_CARDS)).max(8).nullish().transform((v) => v ?? []),
-    // Presence asks the server to consume its stored trainer coin; the value itself is ignored.
+    selections: effectSelections,
+    trainerName: optional(z.string().min(1).max(64)),
     coinResult: optional(coinSide),
   })),
   action("surrender", noPayload),

@@ -73,10 +73,14 @@ describe("lobby / room event schemas", () => {
     }
   });
 
-  it("requestCoinFlip accepts only the two purposes", () => {
-    expect(parsePayload(socketSchemas.requestCoinFlip, { roomId: "AB12CD", purpose: "trainer" }).ok).toBe(true);
-    expect(parsePayload(socketSchemas.requestCoinFlip, { roomId: "AB12CD", purpose: "healFlip" }).ok).toBe(true);
-    expect(parsePayload(socketSchemas.requestCoinFlip, { roomId: "AB12CD", purpose: "attack" }).ok).toBe(false);
+  it("requestCoinFlip names the Trainer card or the Pokémon using its power", () => {
+    const ok = (p: unknown) => parsePayload(socketSchemas.requestCoinFlip, p).ok;
+    expect(ok({ roomId: "AB12CD", purpose: "trainer", cardId: "PB-0" })).toBe(true);
+    expect(ok({ roomId: "AB12CD", purpose: "power", pokemonId: "vileplume-1" })).toBe(true);
+    expect(ok({ roomId: "AB12CD", purpose: "trainer" })).toBe(false);
+    expect(ok({ roomId: "AB12CD", purpose: "power", cardId: "x" })).toBe(false);
+    expect(ok({ roomId: "AB12CD", purpose: "healFlip", pokemonId: "v" })).toBe(false);
+    expect(ok({ roomId: "AB12CD", purpose: "attack" })).toBe(false);
   });
 
   it("action envelope requires a room and an action type", () => {
@@ -151,10 +155,12 @@ describe("game action schemas (every executeAction case)", () => {
     ["retreat", { energyIdsToDiscard: ["e1"], benchIndex: 2 }],
     ["retreat", { energyIdsToDiscard: [], benchIndex: 0 }],
     ["playBasicToActive", { cardId: "Pikachu-0-1700000000000-0.123" }],
-    ["playBasicToBench", { cardId: "Pikachu-1-1700000000000-0.456", benchIndex: 4 }],
-    ["attachEnergy", { cardId: "e1", pokemonId: "p1", isBench: false, benchIndex: undefined }],
-    ["attachEnergy", { cardId: "e1", pokemonId: "p1", isBench: true, benchIndex: 3 }],
-    ["evolve", { cardId: "Raichu-0", targetIndex: -1 }],
+    ["playBasicToBench", { cardId: "Pikachu-1-1700000000000-0.456" }],
+    ["playBasicToBench", { cardId: "Pikachu-1-1700000000000-0.456", benchIndex: 4 }], // legacy, ignored
+    ["attachEnergy", { cardId: "e1", pokemonId: "p1" }],
+    ["attachEnergy", { cardId: "e1", pokemonId: "p1", isBench: true, benchIndex: 3 }], // legacy, ignored
+    ["evolve", { cardId: "Raichu-0", targetPokemonId: "pikachu-1" }],
+    ["evolve", { cardId: "Raichu-0", targetIndex: -1 }], // legacy
     ["evolve", { cardId: "Raichu-0", targetIndex: 4 }],
     ["takePrize", { prizeIndex: 5 }],
     ["promote", { benchIndex: 0 }],
@@ -168,15 +174,18 @@ describe("game action schemas (every executeAction case)", () => {
     ["mulligan", {}],
     ["playerReady", {}],
     ["surrender", {}],
-    ["usePower", { powerType: "rainDance", pokemonId: "blastoise", energyCardId: "w1", targetPokemonId: "p1" }],
-    ["usePower", { powerType: "energyTrans", pokemonId: "venusaur", sourcePokemonId: "p1", targetPokemonId: "p2", energyCardId: "g1" }],
-    ["usePower", { powerType: "damageSwap", pokemonId: "alakazam", sourcePokemonId: "p1", targetPokemonId: "p2", amount: 10 }],
-    ["usePower", { powerType: "energyBurn", pokemonId: "charizard" }],
-    ["usePower", { powerType: "buzzap", pokemonId: "electrode", electrodePokemonId: "electrode", chosenEnergyType: "lightning", targetPokemonId: "p1" }],
-    ["usePower", { powerType: "healFlip", pokemonId: "vileplume", targetPokemonId: "p1" }],
-    ["usePower", { powerType: "healFlip", pokemonId: "vileplume", targetPokemonId: "__none__", coinResult: "tails" }],
-    ["usePower", { powerType: "typeShift", pokemonId: "venomoth", chosenType: "water" }],
-    ["usePower", { powerType: "peek", pokemonId: "mankey", peekType: "opponentHand" }],
+    ["usePower", { pokemonId: "blastoise-1", selections: [["w1"], ["p1"]] }], // Rain Dance
+    ["usePower", { pokemonId: "venusaur-1", selections: [["p1"], ["g1"], ["p2"]] }], // Energy Trans
+    ["usePower", { pokemonId: "alakazam-1", selections: [["p1"], ["p2"], ["10"]] }], // Damage Swap
+    ["usePower", { pokemonId: "charizard-1" }], // Energy Burn
+    ["usePower", { pokemonId: "charizard-1", selections: [] }],
+    ["usePower", { pokemonId: "electrode-1", selections: [["lightning"], ["p1"]] }], // Buzzap
+    ["usePower", { pokemonId: "vileplume-1", selections: [["p1"]] }], // Heal, heads
+    ["usePower", { pokemonId: "venomoth-1", selections: [["water"]] }], // Shift
+    ["usePower", { pokemonId: "mankey-1", selections: [["opponentHand"]] }], // Peek
+    ["usePower", { powerType: "energyBurn", pokemonId: "charizard" }], // legacy powerType: stripped
+    ["playTrainer", { cardId: "Bill-0", selections: [] }],
+    ["playTrainer", { cardId: "Bill-0" }],
     ["playTrainer", { cardId: "Bill-0", trainerName: "Bill", selections: [] }],
     ["playTrainer", { cardId: "Potion-0", trainerName: "Potion", selections: [["p1"]] }],
     ["playTrainer", { cardId: "PB-0", trainerName: "Poké Ball", selections: [], coinResult: "heads" }],
@@ -196,9 +205,11 @@ describe("game action schemas (every executeAction case)", () => {
     }
   });
 
-  it("normalizes optional fields (null benchIndex, missing deckSearch card)", () => {
+  it("normalizes optional fields (legacy attach fields, missing deckSearch card, selections)", () => {
     const attach = parseGameAction({ type: "attachEnergy", payload: { cardId: "e1", pokemonId: "p1", isBench: false, benchIndex: null } });
-    expect(attach.ok && attach.action.type === "attachEnergy" && attach.action.payload.benchIndex).toBeUndefined();
+    expect(attach.ok && attach.action.payload).toEqual({ cardId: "e1", pokemonId: "p1" });
+    const power = parseGameAction({ type: "usePower", payload: { pokemonId: "charizard-1", powerType: "energyBurn" } });
+    expect(power.ok && power.action.payload).toEqual({ pokemonId: "charizard-1", selections: [] });
     const search = parseGameAction({ type: "deckSearch", payload: {} });
     expect(search.ok && search.action.type === "deckSearch" && search.action.payload.cardId).toBeNull();
     const trainer = parseGameAction({ type: "playTrainer", payload: { cardId: "Bill-0", trainerName: "Bill" } });
@@ -217,21 +228,23 @@ describe("game action schemas (every executeAction case)", () => {
     ["metronome index string", { type: "attack", payload: { attackIndex: 0, metronomeAttack: { name: "x", index: "1" } } }],
     ["retreat energies not array", { type: "retreat", payload: { energyIdsToDiscard: "e1", benchIndex: 0 } }],
     ["retreat huge array", { type: "retreat", payload: { energyIdsToDiscard: Array(10_000).fill("e"), benchIndex: 0 } }],
-    ["bench index out of range", { type: "playBasicToBench", payload: { cardId: "c", benchIndex: 5 } }],
+    ["bench card missing", { type: "playBasicToBench", payload: { benchIndex: 0 } }],
     ["cardId object", { type: "playBasicToActive", payload: { cardId: { $gt: "" } } }],
     ["cardId huge", { type: "playBasicToActive", payload: { cardId: "c".repeat(10_000) } }],
-    ["isBench string", { type: "attachEnergy", payload: { cardId: "e", pokemonId: "p", isBench: "true" } }],
+    ["attach without target", { type: "attachEnergy", payload: { cardId: "e", isBench: true, benchIndex: 0 } }],
     ["evolve target -2", { type: "evolve", payload: { cardId: "c", targetIndex: -2 } }],
+    ["evolve without target", { type: "evolve", payload: { cardId: "c" } }],
+    ["evolve target id object", { type: "evolve", payload: { cardId: "c", targetPokemonId: { $ne: 1 } } }],
     ["prize index 6", { type: "takePrize", payload: { prizeIndex: 6 } }],
     ["promote missing index", { type: "promote", payload: {} }],
     ["benchDamage ids not strings", { type: "benchDamage", payload: { selectedPokemonIds: [1, 2] } }],
     ["benchDamage huge", { type: "benchDamage", payload: { selectedPokemonIds: Array(500).fill("p") } }],
-    ["unknown power", { type: "usePower", payload: { powerType: "infiniteDraw", pokemonId: "p" } }],
     ["power without pokemon", { type: "usePower", payload: { powerType: "peek", peekType: "playerDeck" } }],
-    ["damageSwap zero", { type: "usePower", payload: { powerType: "damageSwap", pokemonId: "a", sourcePokemonId: "p1", targetPokemonId: "p2", amount: 0 } }],
-    ["damageSwap huge", { type: "usePower", payload: { powerType: "damageSwap", pokemonId: "a", sourcePokemonId: "p1", targetPokemonId: "p2", amount: 1e9 } }],
-    ["bad peek type", { type: "usePower", payload: { powerType: "peek", pokemonId: "m", peekType: "everything" } }],
-    ["trainer without name", { type: "playTrainer", payload: { cardId: "c", selections: [] } }],
+    ["power selections not nested", { type: "usePower", payload: { pokemonId: "m", selections: ["playerDeck"] } }],
+    ["power selection not a string", { type: "usePower", payload: { pokemonId: "a", selections: [[10]] } }],
+    ["power selection empty string", { type: "usePower", payload: { pokemonId: "a", selections: [[""]] } }],
+    ["power too many steps", { type: "usePower", payload: { pokemonId: "a", selections: Array(9).fill(["x"]) } }],
+    ["trainer without card", { type: "playTrainer", payload: { trainerName: "Bill", selections: [] } }],
     ["selections not nested", { type: "playTrainer", payload: { cardId: "c", trainerName: "Potion", selections: ["p1"] } }],
     ["selections huge", { type: "playTrainer", payload: { cardId: "c", trainerName: "Maintenance", selections: [Array(5000).fill("x")] } }],
     ["selections too many steps", { type: "playTrainer", payload: { cardId: "c", trainerName: "Maintenance", selections: Array(100).fill(["x"]) } }],

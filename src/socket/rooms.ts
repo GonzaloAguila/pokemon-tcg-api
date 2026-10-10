@@ -10,78 +10,51 @@ import {
   resolveConfusionFlip,
   type GameState,
   type GameCard,
-  type PokemonInPlay,
-  type EnergyType,
   type Attack,
+  type CoinFlipRequirement,
   GamePhase,
+  IllegalActionError,
   initializeMultiplayerGame,
   startGame,
   shuffle,
+  // Attacks and turn flow
   executeAttack,
   executeMetronome,
+  canExecuteAttack,
+  canExecuteMetronome,
   getAttackCoinFlipCount,
   endTurn,
   executeRetreat,
   doMulligan,
   setPlayerReady,
   startPlayingPhase,
+  promoteActivePokemon,
+  takePrize,
   getDeckById,
   decks,
   isPokemonCard,
-  isEnergyCard,
-  canEvolveInto,
-  promoteActivePokemon,
-  takePrize,
   createGameEvent,
   AttackEffectType,
+  // Perspective + board actions (engine-owned, throw IllegalActionError when illegal)
+  swapSides,
+  findInPlay,
+  playBasicPokemon,
+  attachEnergyCard,
+  evolvePokemonCard,
   // Pending state handlers
   executeDeckSearch,
   executeBenchDamage,
   applyForceSwitch,
   applySelfSwitch,
   skipPendingSwitch,
-  // Trainers
-  playBill,
-  playSwitch,
-  playGustOfWind,
-  playPlusPower,
-  playDefender,
-  playPotion,
-  playSuperPotion,
-  playFullHeal,
-  playEnergyRemoval,
-  playSuperEnergyRemoval,
-  playProfessorOak,
-  playImposterProfessorOak,
-  playLass,
-  playPokemonCenter,
-  playEnergyRetrieval,
-  playMaintenance,
-  playComputerSearch,
-  playItemFinder,
-  playPokemonBreeder,
-  playPokemonTrader,
-  playScoopUp,
-  playPokeBall,
-  // Powers
-  attachEnergyWithRainDance,
-  moveEnergyWithEnergyTrans,
-  moveDamageWithDamageSwap,
-  activateEnergyBurn,
-  executeBuzzap,
-  executeHealFlip,
-  canUseHealFlip,
-  canUsePower,
-  initiateShift,
-  executeShift,
-  executePeek,
   clearPendingPeek,
-  canUseRainDance,
-  canAttachWithPower,
-  getEnergyTypeInSpanish,
-  // Additional trainers
-  playDevolutionSpray,
-  playPokedex,
+  // Effect registry: every Trainer and activated Pokémon Power
+  canPlayTrainerCard,
+  getTrainerCoinFlips,
+  playTrainerCard,
+  canUsePokemonPower,
+  getPowerCoinFlips,
+  usePokemonPower,
 } from "@gonzaloaguila/game-core";
 import { parseGameAction } from "./schemas.js";
 
@@ -132,19 +105,20 @@ interface GameRoom {
   players: string[];
   createdAt: Date;
 
-  // Coin flips a client asked for before acting (Poké Ball, Heal), rolled by the server.
-  // The action uses this stored result, never one sent by the client.
-  pendingCoinFlips?: Partial<Record<PlayerKey, PendingCoinFlip>>;
+  // Coins rolled for a Trainer / power before it resolved (requestCoinFlip, or a failed
+  // attempt), by effectCoinKey. The action uses these, never coins sent by the client.
+  effectCoins?: Record<string, { results: Coin[]; turnNumber: number | null }>;
 }
 
 type PlayerKey = "player1" | "player2";
-export type ClientCoinFlipPurpose = "trainer" | "healFlip";
-
-interface PendingCoinFlip {
-  purpose: ClientCoinFlipPurpose;
-  result: "heads" | "tails";
-  turnNumber: number;
+type Coin = "heads" | "tails";
+interface CoinFlipInfo {
+  attackName: string;
+  results: Coin[];
 }
+
+/** What a client asks coins for before choosing (requestCoinFlip). */
+export type CoinFlipRequest = { purpose: "trainer"; cardId: string } | { purpose: "power"; pokemonId: string };
 
 /** A coin flip rolled by the server (CSPRNG). Every multiplayer coin comes from here. */
 export type CoinSource = () => "heads" | "tails";
@@ -153,13 +127,58 @@ function serverCoin(): "heads" | "tails" {
   return randomInt(2) === 0 ? "heads" : "tails";
 }
 
+/** Cap for "flip until tails" (odds 2^-63 of reaching it); the last coin is then tails. */
+const MAX_UNTIL_TAILS = 64;
+
+/** Exactly the coins an engine requirement asks for. */
+function rollCoins(requirement: CoinFlipRequirement, flip: CoinSource): Coin[] {
+  if (requirement === "untilTails") {
+    const coins: Coin[] = [];
+    while (coins.length < MAX_UNTIL_TAILS - 1) {
+      const coin = flip();
+      coins.push(coin);
+      if (coin === "tails") return coins;
+    }
+    coins.push("tails");
+    return coins;
+  }
+  return Array.from({ length: requirement }, () => flip());
+}
+
+function coinsSatisfy(requirement: CoinFlipRequirement, coins: Coin[]): boolean {
+  if (requirement === "untilTails") return coins.length > 0 && coins.indexOf("tails") === coins.length - 1;
+  return coins.length === requirement;
+}
+
+/** Trainer coins stay with the card instance; power coins with the Pokémon for one turn. */
+function effectCoinKey(player: PlayerKey, kind: "trainer" | "power", sourceId: string, turnNumber?: number): string {
+  return kind === "trainer" ? `${player}:trainer:${sourceId}` : `${player}:power:${sourceId}:${turnNumber}`;
+}
+
+/** Legacy evolve target: -1 = Active, 0-4 = Bench slot (in the actor's perspective). */
+function pokemonIdAt(state: GameState, targetIndex: number | undefined): string | undefined {
+  if (targetIndex === undefined) return undefined;
+  const pokemon = targetIndex === -1 ? state.playerActivePokemon : state.playerBench[targetIndex];
+  return pokemon?.pokemon.id;
+}
+
+/** The Spanish reason of a game-core IllegalActionError (illegal move), else null. */
+function illegalReason(error: unknown): string | null {
+  if (error instanceof IllegalActionError) return error.reason;
+  if (error instanceof Error && error.name === "IllegalActionError") return (error as IllegalActionError).reason ?? error.message;
+  return null;
+}
+
 interface ActionResult {
   success: boolean;
   error?: string;
   gameState?: GameState;
   gameOver?: boolean;
   winner?: "player1" | "player2";
-  coinFlipInfo?: { attackName: string; results: Array<"heads" | "tails"> };
+  /** Coins every client animates (attacks, confusion): showCoinFlip to the room */
+  coinFlipInfo?: CoinFlipInfo;
+  /** Trainer/power coins: showCoinFlip to everyone but the actor (it showed them from requestCoinFlip) */
+  opponentCoinFlipInfo?: CoinFlipInfo;
   winReason?: string;
   setupTimerStarted?: number; // timestamp when setup timer started (ms)
 }
@@ -240,6 +259,19 @@ function neutralizeEvents(
     // Adjuntar energy — "Tú adjuntaste" / "Rival adjuntó"
     [/Tú adjuntaste/g, `${self} adjuntó`],
     [/Rival adjuntó/g, `${opponent} adjuntó`],
+    // game-core board actions, Trainers and powers (second person, acting side)
+    [/^Colocaste /, `${self} colocó `],
+    [/^Adjuntaste /, `${self} adjuntó `],
+    [/^Jugaste /, `${self} jugó `],
+    [/^Robaste (\d+) carta/, `${self} robó $1 carta`],
+    [/^Descartaste /, `${self} descartó `],
+    [/^Barajaste /, `${self} barajó `],
+    [/^Reordenaste /, `${self} reordenó `],
+    [/^El rival barajó /, `${opponent} barajó `],
+    [/ de tu mano/g, " de su mano"],
+    [/ tu mazo/g, " su mazo"],
+    [/^Turno de Jugador$/, `Turno de ${self}`],
+    [/^Turno de Rival$/, `Turno de ${opponent}`],
   ];
 
   const newEvents = [...events];
@@ -605,15 +637,17 @@ export class GameRoomManager {
   }
 
   /**
-   * Roll a coin the client needs to show before choosing what to do (e.g. Poké Ball heads
-   * → pick a card). Asking again for the same purpose in the same turn returns the same
-   * result, so a player can't cancel and re-roll.
+   * Roll the coins a Trainer (Poké Ball) or activated power (Heal) needs BEFORE the client
+   * asks its questions (heads → pick a card...). The coins are game-core's
+   * getTrainerCoinFlips / getPowerCoinFlips for that card / Pokémon, and are kept until the
+   * action succeeds: asking again returns the same coins (no re-rolls), for a Trainer card
+   * for the rest of the game and for a power for the rest of the turn.
    */
   requestCoinFlip(
     roomId: string,
     socketId: string,
-    purpose: ClientCoinFlipPurpose,
-  ): { success: true; result: "heads" | "tails" } | { success: false; error: string } {
+    request: CoinFlipRequest,
+  ): { success: true; results: Coin[]; result: Coin } | { success: false; error: string } {
     const room = this.rooms.get(roomId);
     if (!room?.gameState) return { success: false, error: "Game not started" };
     const key = room.player1SocketId === socketId ? "player1" : room.player2SocketId === socketId ? "player2" : null;
@@ -621,24 +655,48 @@ export class GameRoomManager {
     const isMyTurn = key === "player1" ? room.gameState.isPlayerTurn : !room.gameState.isPlayerTurn;
     if (!isMyTurn) return { success: false, error: "Not your turn" };
 
-    const turnNumber = room.gameState.turnNumber;
-    const existing = room.pendingCoinFlips?.[key];
-    if (existing && existing.purpose === purpose && existing.turnNumber === turnNumber) {
-      return { success: true, result: existing.result };
+    const view = key === "player1" ? room.gameState : swapSides(room.gameState);
+    let coinKey: string;
+    let requirement: CoinFlipRequirement;
+    try {
+      if (request.purpose === "trainer") {
+        const reason = canPlayTrainerCard(view, request.cardId);
+        if (reason) return { success: false, error: reason };
+        requirement = getTrainerCoinFlips(view, request.cardId);
+        coinKey = effectCoinKey(key, "trainer", request.cardId);
+      } else {
+        const reason = canUsePokemonPower(view, request.pokemonId);
+        if (reason) return { success: false, error: reason };
+        requirement = getPowerCoinFlips(view, request.pokemonId);
+        coinKey = effectCoinKey(key, "power", request.pokemonId, view.turnNumber);
+      }
+    } catch (error) {
+      return { success: false, error: illegalReason(error) ?? "No se pudo lanzar la moneda" };
     }
-    const result = this.flipCoin();
-    room.pendingCoinFlips = { ...room.pendingCoinFlips, [key]: { purpose, result, turnNumber } };
-    return { success: true, result };
+    if (requirement === 0) return { success: false, error: "Esta carta no lanza monedas" };
+
+    const results = this.effectCoins(room, coinKey, requirement);
+    return { success: true, results, result: results[0] };
   }
 
-  /** The stored flip for this purpose/turn (consumed), or a fresh server roll. */
-  private consumeCoinFlip(room: GameRoom, key: PlayerKey, purpose: ClientCoinFlipPurpose): "heads" | "tails" {
-    const stored = room.pendingCoinFlips?.[key];
-    if (room.pendingCoinFlips) delete room.pendingCoinFlips[key];
-    if (stored && stored.purpose === purpose && stored.turnNumber === room.gameState?.turnNumber) {
-      return stored.result;
+  /**
+   * Coins for one effect: the ones already rolled for `coinKey` (requestCoinFlip, or an
+   * earlier attempt that failed) when they still fit the requirement, else a fresh roll that
+   * is stored. Removed by executeAction once the effect resolved.
+   */
+  private effectCoins(room: GameRoom, coinKey: string, requirement: CoinFlipRequirement): Coin[] {
+    if (requirement === 0) return [];
+    const store = (room.effectCoins ??= {});
+    const turnNumber = room.gameState?.turnNumber ?? 0;
+    // Power coins are per turn: forget older ones
+    for (const [k, entry] of Object.entries(store)) {
+      if (entry.turnNumber !== null && entry.turnNumber !== turnNumber) delete store[k];
     }
-    return this.flipCoin();
+    const stored = store[coinKey];
+    if (stored && coinsSatisfy(requirement, stored.results)) return stored.results;
+    const results = rollCoins(requirement, this.flipCoin);
+    store[coinKey] = { results, turnNumber: coinKey.includes(":power:") ? turnNumber : null };
+    return results;
   }
 
   /**
@@ -671,7 +729,7 @@ export class GameRoomManager {
     // Pending attack choices (deckSearch, forceSwitch, selfSwitch, skipSwitch, benchDamage) are NOT here:
     // they belong to the attacker, and endTurn() doesn't advance while one is pending, so they
     // require it to be the acting player's turn. Otherwise the opponent could resolve your choice.
-    const turnFreeActions = ["ready", "mulligan", "playerReady", "takePrize", "promote", "clearPeek", "surrender"];
+    const turnFreeActions = ["ready", "mulligan", "playerReady", "takePrize", "promote", "surrender"];
     const setupActions = ["playBasicToActive", "playBasicToBench"];
     const isSetupPhase = room.gameState.gamePhase === "MULLIGAN" || room.gameState.gamePhase === "SETUP";
     const isMyTurn = isPlayer1 ? room.gameState.isPlayerTurn : !room.gameState.isPlayerTurn;
@@ -687,63 +745,29 @@ export class GameRoomManager {
 
     // Track event count for neutralization
     const eventCountBefore = room.gameState.events.length;
-    let usedExecuteForPlayer = false;
+    // mulligan/playerReady/surrender work on player 1's perspective; everything else as the actor
+    const actsAsActor = action.type !== "mulligan" && action.type !== "playerReady" && action.type !== "surrender";
+    let eventsNeutralizedTo = eventCountBefore;
 
-    // Helper to get the correct fields based on which player is acting
-    // The game state is stored in player1's perspective
-    // For player1: "player" fields, for player2: "opponent" fields
-    const getHand = () => isPlayer1 ? room.gameState!.playerHand : room.gameState!.opponentHand;
-    const getActive = () => isPlayer1 ? room.gameState!.playerActivePokemon : room.gameState!.opponentActivePokemon;
-    const getBench = () => isPlayer1 ? room.gameState!.playerBench : room.gameState!.opponentBench;
-
-    // Helper to swap state perspective for player2
-    // Game-core functions always operate on "player" side, so for player2 we swap before and after
-    const swapPerspective = (state: GameState): GameState => ({
-      ...state,
-      playerActivePokemon: state.opponentActivePokemon,
-      playerBench: state.opponentBench,
-      playerHand: state.opponentHand,
-      playerDeck: state.opponentDeck,
-      playerDiscard: state.opponentDiscard,
-      playerPrizes: state.opponentPrizes,
-      playerReady: state.opponentReady,
-      playerCanTakePrize: state.opponentCanTakePrize,
-      playerNeedsToPromote: state.opponentNeedsToPromote,
-      opponentActivePokemon: state.playerActivePokemon,
-      opponentBench: state.playerBench,
-      opponentHand: state.playerHand,
-      opponentDeck: state.playerDeck,
-      opponentDiscard: state.playerDiscard,
-      opponentPrizes: state.playerPrizes,
-      opponentReady: state.playerReady,
-      opponentCanTakePrize: state.playerCanTakePrize,
-      opponentNeedsToPromote: state.playerNeedsToPromote,
-      isPlayerTurn: !state.isPlayerTurn,
-      // PlusPower/Defender belong to a side: without this, P2's PlusPower would boost P1's
-      // attacks and P2's Defender would protect P1 (same as game-core's AI swapSides)
-      activeModifiers: state.activeModifiers.map((m) => ({
-        ...m,
-        playerId: m.playerId === "player" ? "opponent" as const : "player" as const,
-      })),
-      // Swap game result perspective so it stays correct after double-swap
-      gameResult: state.gameResult === "victory" ? "defeat"
-        : state.gameResult === "defeat" ? "victory"
-        : state.gameResult,
-    });
+    // The game state is stored in player 1's perspective and game-core always acts for
+    // "player": player 2's actions run on a swapped copy (game-core's swapSides, which also
+    // swaps the starting player, PlusPower/Defender owner and result) that is swapped back.
+    // Pending choices are not swapped: they belong to the side whose turn it is.
+    const toActor = (state: GameState): GameState => (isPlayer1 ? state : swapSides(state));
+    const fromActor = toActor; // the swap is its own inverse
+    const actorView = toActor(room.gameState);
+    const actorKey: PlayerKey = isPlayer1 ? "player1" : "player2";
 
     // For game-core functions: swap perspective for player2, call function, swap back
-    const executeForPlayer = (fn: (state: GameState) => GameState): GameState => {
-      if (isPlayer1) {
-        return fn(room.gameState!);
-      } else {
-        const swapped = swapPerspective(room.gameState!);
-        const result = fn(swapped);
-        return swapPerspective(result);
-      }
-    };
+    const executeForPlayer = (fn: (state: GameState) => GameState, from: GameState = room.gameState!): GameState =>
+      fromActor(fn(toActor(from)));
 
-    // Coin shown to both players for this action when it didn't come from attack effects (e.g. confusion)
-    let actionCoinFlipInfo: { attackName: string; results: Array<"heads" | "tails"> } | undefined;
+    // Coins shown to both players (attacks, confusion) / only to the opponent and spectators
+    // (trainer and power coins: the acting client already showed them from requestCoinFlip)
+    let actionCoinFlipInfo: CoinFlipInfo | undefined;
+    let opponentCoinFlipInfo: CoinFlipInfo | undefined;
+    // Effect coins to forget once the action succeeded
+    let consumedCoinKey: string | undefined;
 
     try {
       let newState = room.gameState;
@@ -751,14 +775,49 @@ export class GameRoomManager {
       switch (action.type) {
         case "attack": {
           const attackIndex = action.payload.attackIndex;
+          const metronomePayload = action.payload.metronomeAttack;
+          const conversionType = action.payload.conversionType;
+          const conversionEffect = action.payload.conversionEffect;
+          const attacker = actorView.playerActivePokemon;
+          const ownAttack = attacker && isPokemonCard(attacker.pokemon) ? attacker.pokemon.attacks[attackIndex] : undefined;
+
+          // ── Which attack, and is it legal? Checked BEFORE any coin (confusion included):
+          // energy cost, Asleep/Paralyzed, Leer, one attack per turn, nothing pending...
+          let attackToUse: number | Attack = attackIndex;
+          let attackName = ownAttack?.name ?? "";
+          if (metronomePayload) {
+            if (!ownAttack?.effects?.some((e) => e.type === AttackEffectType.CopyAttack)) {
+              return { success: false, error: "Ese ataque no puede copiar ataques" };
+            }
+            const opponentActive = actorView.opponentActivePokemon;
+            const copiedAttack = opponentActive && isPokemonCard(opponentActive.pokemon)
+              ? opponentActive.pokemon.attacks[metronomePayload.index]
+              : undefined;
+            if (!copiedAttack) return { success: false, error: "El Pokémon defensor no tiene ese ataque" };
+            const reason = canExecuteMetronome(actorView, copiedAttack);
+            if (reason) return { success: false, error: reason };
+            attackToUse = copiedAttack;
+            attackName = copiedAttack.name;
+          } else {
+            const reason = canExecuteAttack(actorView, attackIndex);
+            if (reason) return { success: false, error: reason };
+          }
+
+          // Porygon's Conversion 1/2: only with the attack that has that effect
+          const conversion = conversionType && conversionEffect ? { type: conversionType, effect: conversionEffect } : null;
+          if (conversion) {
+            const effectType = conversion.effect === "changeWeakness" ? AttackEffectType.ChangeWeakness : AttackEffectType.ChangeResistance;
+            if (metronomePayload || !ownAttack?.effects?.some((e) => e.type === effectType)) {
+              return { success: false, error: "Ese ataque no cambia debilidad ni resistencia" };
+            }
+          }
 
           // ── Confusion: the server flips (never the client). Tails: the attack fails, the
           // engine applies the self-damage / KO / end of turn. Heads: the attack proceeds.
-          const actingActive = isPlayer1 ? room.gameState!.playerActivePokemon : room.gameState!.opponentActivePokemon;
-          if (actingActive?.statusConditions?.includes("confused")) {
+          let beforeAttack = room.gameState;
+          if (attacker?.statusConditions?.includes("confused")) {
             const confusionCoin = this.flipCoin();
             let canAttack = true as boolean;
-            usedExecuteForPlayer = true;
             const afterFlip = executeForPlayer((state) => {
               const resolved = resolveConfusionFlip(state, confusionCoin === "heads");
               canAttack = resolved.canAttack;
@@ -769,441 +828,103 @@ export class GameRoomManager {
               actionCoinFlipInfo = { attackName: "Confusión", results: [confusionCoin] };
               break;
             }
-            room.gameState = afterFlip; // heads: continue the attack from the flipped state
+            beforeAttack = afterFlip; // heads: continue the attack from the flipped state
           }
 
-          // ── Porygon Conversion 1 / Conversion 2 ──
-          const conversionType = action.payload.conversionType;
-          const conversionEffect = action.payload.conversionEffect;
-
-          if (conversionType && conversionEffect) {
-            usedExecuteForPlayer = true;
+          // ── Porygon Conversion 1 / Conversion 2 (still resolved here, no engine resolver) ──
+          if (conversion && ownAttack) {
             newState = executeForPlayer((state) => {
-              const attacker = state.playerActivePokemon;
-              if (!attacker || !isPokemonCard(attacker.pokemon)) return state;
-              const attack = attacker.pokemon.attacks[attackIndex];
-              if (!attack) return state;
-
-              let updatedState = { ...state };
-
-              if (conversionEffect === "changeWeakness") {
-                const defender = updatedState.opponentActivePokemon;
-                if (defender) {
-                  updatedState = {
-                    ...updatedState,
-                    opponentActivePokemon: { ...defender, modifiedWeakness: conversionType },
-                    events: [
-                      ...updatedState.events,
-                      createGameEvent(`${attacker.pokemon.name} usó ${attack.name}`, "action"),
-                      createGameEvent(`La debilidad de ${defender.pokemon.name} cambió a ${conversionType}`, "action"),
-                    ],
-                  };
-                }
-              } else {
-                updatedState = {
-                  ...updatedState,
-                  playerActivePokemon: { ...attacker, modifiedResistance: conversionType },
-                  events: [
-                    ...updatedState.events,
-                    createGameEvent(`${attacker.pokemon.name} usó ${attack.name}`, "action"),
-                    createGameEvent(`La resistencia de ${attacker.pokemon.name} cambió a ${conversionType}`, "action"),
-                  ],
-                };
+              const user = state.playerActivePokemon!;
+              const events = [...state.events, createGameEvent(`${user.pokemon.name} usó ${ownAttack.name}`, "action")];
+              if (conversion.effect === "changeWeakness") {
+                const defender = state.opponentActivePokemon!;
+                events.push(createGameEvent(`La debilidad de ${defender.pokemon.name} cambió a ${conversion.type}`, "action"));
+                return endTurn({ ...state, opponentActivePokemon: { ...defender, modifiedWeakness: conversion.type }, events }, true);
               }
-
-              return endTurn(updatedState, true);
-            });
+              events.push(createGameEvent(`La resistencia de ${user.pokemon.name} cambió a ${conversion.type}`, "action"));
+              return endTurn({ ...state, playerActivePokemon: { ...user, modifiedResistance: conversion.type }, events }, true);
+            }, beforeAttack);
             break;
           }
 
           // ── Attack (or Metronome copying the Defending Pokémon's attack) ──
-          // The server flips exactly the coins the engine asks for (getAttackCoinFlipCount) and
-          // passes them in; the engine resolves every coin effect (coin damage before
-          // weakness/resistance, statuses, self-damage, protection, Pay Day...), the KO/prize
-          // flow and the end of the turn. skipDefenderPromotion: the defender picks its new
-          // active (`promote`), which then ends the attacker's turn.
-          const metronomePayload = action.payload.metronomeAttack;
-          const actorView = isPlayer1 ? room.gameState! : swapPerspective(room.gameState!);
-          let attackToUse: number | Attack = attackIndex;
-          let attackName = "";
-
-          if (metronomePayload) {
-            const metronomeUser = actorView.playerActivePokemon;
-            const ownAttack = metronomeUser && isPokemonCard(metronomeUser.pokemon)
-              ? metronomeUser.pokemon.attacks[attackIndex]
-              : undefined;
-            if (!ownAttack?.effects?.some((e) => e.type === AttackEffectType.CopyAttack)) {
-              return { success: false, error: "Ese ataque no puede copiar ataques" };
-            }
-            const opponentActive = actorView.opponentActivePokemon;
-            if (!opponentActive || !isPokemonCard(opponentActive.pokemon)) {
-              return { success: false, error: "Opponent has no active Pokemon to copy attack from" };
-            }
-            const copiedAttack: Attack | undefined = opponentActive.pokemon.attacks[metronomePayload.index];
-            if (!copiedAttack) {
-              return { success: false, error: "Copied attack not found on opponent's active Pokemon" };
-            }
-            console.log(`[attack] Metronome copying ${copiedAttack.name} from opponent's ${opponentActive.pokemon.name}`);
-            attackToUse = copiedAttack;
-            attackName = copiedAttack.name;
-          } else {
-            const attacker = actorView.playerActivePokemon;
-            if (attacker && isPokemonCard(attacker.pokemon)) {
-              attackName = attacker.pokemon.attacks[attackIndex]?.name ?? "";
-            }
-          }
-
-          const coinResults = Array.from(
-            { length: getAttackCoinFlipCount(actorView, attackToUse) },
-            () => this.flipCoin()
-          );
+          // The server flips exactly the coins the engine asks for (getAttackCoinFlipCount,
+          // Sand-attack's coin included) and passes them in; the engine resolves every coin
+          // effect, the KO/prize flow and the end of the turn. skipDefenderPromotion: the
+          // defender picks its new active (`promote`), which then ends the attacker's turn.
+          const coinResults = rollCoins(getAttackCoinFlipCount(toActor(beforeAttack), attackToUse), this.flipCoin);
           const attackOptions = { coinResults, skipDefenderPromotion: true };
-          usedExecuteForPlayer = true;
           newState = executeForPlayer((state) =>
             typeof attackToUse === "number"
               ? executeAttack(state, attackToUse, attackOptions)
-              : executeMetronome(state, attackToUse, attackOptions)
-          );
+              : executeMetronome(state, attackToUse, attackOptions),
+          beforeAttack);
 
           // Both clients animate the real coins (showCoinFlip)
           if (coinResults.length > 0) {
-            console.log(`[attack] Coin flip for ${attackName}: ${coinResults.join(", ")}`);
             actionCoinFlipInfo = { attackName, results: coinResults };
           }
           break;
         }
 
         case "endTurn":
-          usedExecuteForPlayer = true;
           newState = executeForPlayer((state) => endTurn(state, true));
           break;
 
         case "retreat": {
           const energyIds = action.payload.energyIdsToDiscard;
           const benchIdx = action.payload.benchIndex;
-          usedExecuteForPlayer = true;
           newState = executeForPlayer((state) => executeRetreat(state, energyIds, benchIdx));
           break;
         }
 
+        // ── Board actions: game-core validates and applies them (IllegalActionError otherwise) ──
         case "playBasicToActive": {
           const cardId = action.payload.cardId;
-          const hand = getHand();
-          const active = getActive();
-          console.log(`[playBasicToActive] Looking for card ${cardId} in hand (${hand.length} cards)`);
-          console.log(`[playBasicToActive] Hand card IDs:`, hand.map(c => c.id));
-          const card = hand.find((c) => c.id === cardId);
-          if (!card) {
-            console.log(`[playBasicToActive] Card not found in hand!`);
-            return { success: false, error: "Card not found in hand" };
-          }
-          if (!isPokemonCard(card) || card.stage !== "basic") {
-            console.log(`[playBasicToActive] Card is not a basic Pokemon: kind=${card.kind}, stage=${(card as any).stage}`);
-            return { success: false, error: "Invalid card for active slot" };
-          }
-          if (active) {
-            console.log(`[playBasicToActive] Active slot already occupied`);
-            return { success: false, error: "Active slot already occupied" };
-          }
-          console.log(`[playBasicToActive] Placing ${card.name} as active for ${isPlayer1 ? 'P1' : 'P2'}`);
-          const effectiveTurn = room.gameState.turnNumber <= 0 ? 0 : room.gameState.turnNumber;
-          const newPokemon: PokemonInPlay = {
-            pokemon: card,
-            attachedEnergy: [],
-            attachedTrainers: [],
-            previousEvolutions: [],
-            currentDamage: 0,
-            playedOnTurn: effectiveTurn,
-          };
-          const newHand = hand.filter((c) => c.id !== cardId);
-
-          if (isPlayer1) {
-            newState = {
-              ...room.gameState,
-              playerHand: newHand,
-              playerActivePokemon: newPokemon,
-              events: [...room.gameState.events, createGameEvent(`${card.name} entra como activo`, "action")],
-            };
-          } else {
-            newState = {
-              ...room.gameState,
-              opponentHand: newHand,
-              opponentActivePokemon: newPokemon,
-              events: [...room.gameState.events, createGameEvent(`${card.name} entra como activo (rival)`, "action")],
-            };
-          }
+          newState = executeForPlayer((state) => playBasicPokemon(state, cardId, "active"));
           break;
         }
 
         case "playBasicToBench": {
           const cardId = action.payload.cardId;
-          const benchIndex = action.payload.benchIndex;
-          if (benchIndex < 0 || benchIndex >= 5) {
-            return { success: false, error: "Invalid bench index" };
-          }
-          const hand = getHand();
-          const bench = getBench();
-          const active = getActive();
-          // Cannot place on bench without an active Pokemon
-          if (!active) {
-            return { success: false, error: "Must place active Pokemon first" };
-          }
-          if (bench[benchIndex]) {
-            return { success: false, error: "Bench slot already occupied" };
-          }
-          const card = hand.find((c) => c.id === cardId);
-          if (!card || !isPokemonCard(card) || card.stage !== "basic") {
-            return { success: false, error: "Invalid card for bench" };
-          }
-          const effectiveTurn = room.gameState.turnNumber <= 0 ? 0 : room.gameState.turnNumber;
-          const newBench = [...bench];
-          newBench[benchIndex] = {
-            pokemon: card,
-            attachedEnergy: [],
-            attachedTrainers: [],
-            previousEvolutions: [],
-            currentDamage: 0,
-            playedOnTurn: effectiveTurn,
-          };
-          const newHand = hand.filter((c) => c.id !== cardId);
-
-          if (isPlayer1) {
-            newState = {
-              ...room.gameState,
-              playerHand: newHand,
-              playerBench: newBench,
-              events: [...room.gameState.events, createGameEvent(`${card.name} va a la banca`, "action")],
-            };
-          } else {
-            newState = {
-              ...room.gameState,
-              opponentHand: newHand,
-              opponentBench: newBench,
-              events: [...room.gameState.events, createGameEvent(`${card.name} va a la banca (rival)`, "action")],
-            };
-          }
+          newState = executeForPlayer((state) => playBasicPokemon(state, cardId, "bench"));
           break;
         }
 
         case "attachEnergy": {
-          const cardId = action.payload.cardId;
-          const pokemonId = action.payload.pokemonId;
-          const isBench = action.payload.isBench;
-          const benchIndex = action.payload.benchIndex;
-
-          if (room.gameState.gamePhase !== "PLAYING") {
-            return { success: false, error: "Cannot attach energy during setup" };
-          }
-
-          const hand = getHand();
-          const bench = getBench();
-          const active = getActive();
-          const energyCard = hand.find((c) => c.id === cardId);
-          if (!energyCard || !isEnergyCard(energyCard)) {
-            return { success: false, error: "Invalid energy card" };
-          }
-
-          // Find target Pokemon
-          let targetPokemon: PokemonInPlay | null = null;
-          if (isBench && benchIndex !== undefined) {
-            targetPokemon = bench[benchIndex];
-            if (!targetPokemon || targetPokemon.pokemon.id !== pokemonId) {
-              return { success: false, error: "Target pokemon not found" };
-            }
-          } else {
-            if (!active || active.pokemon.id !== pokemonId) {
-              return { success: false, error: "Target pokemon not found" };
-            }
-            targetPokemon = active;
-          }
-
-          // Check if Rain Dance applies (Water energy to Water Pokemon with Blastoise available)
-          // Use swapped perspective for player2
-          const stateForCheck = isPlayer1 ? room.gameState : swapPerspective(room.gameState);
-          const { canUse: hasRainDance, pokemonWithPower } = canUseRainDance(stateForCheck, "player");
-
-          let useRainDance = false;
-          if (hasRainDance && pokemonWithPower.length > 0) {
-            const power = isPokemonCard(pokemonWithPower[0].pokemon)
-              ? pokemonWithPower[0].pokemon.power
-              : null;
-            if (power) {
-              const attachError = canAttachWithPower(power, targetPokemon, energyCard);
-              if (!attachError) {
-                useRainDance = true;
-                console.log(`[attachEnergy] Using Rain Dance for ${energyCard.energyType} energy to ${targetPokemon.pokemon.name}`);
-              }
-            }
-          }
-
-          // If not using Rain Dance, check normal energy limit
-          if (!useRainDance && room.gameState.energyAttachedThisTurn) {
-            return { success: false, error: "Already attached energy this turn" };
-          }
-
-          const newHand = hand.filter((c) => c.id !== cardId);
-          const energyName = getEnergyTypeInSpanish(energyCard.energyType);
-          const selfName = isPlayer1 ? "Jugador 1" : "Jugador 2";
-          const eventMsg = useRainDance
-            ? `Rain Dance: ${selfName} adjuntó energía ${energyName} a ${targetPokemon.pokemon.name}`
-            : `${selfName} adjuntó energía ${energyName} a ${targetPokemon.pokemon.name}`;
-
-          // Only set energyAttachedThisTurn if NOT using Rain Dance
-          const shouldSetEnergyFlag = !useRainDance;
-
-          if (isBench && benchIndex !== undefined) {
-            const newBench = [...bench];
-            newBench[benchIndex] = {
-              ...targetPokemon,
-              attachedEnergy: [...targetPokemon.attachedEnergy, energyCard],
-            };
-            if (isPlayer1) {
-              newState = {
-                ...room.gameState,
-                playerHand: newHand,
-                playerBench: newBench,
-                energyAttachedThisTurn: shouldSetEnergyFlag ? true : room.gameState.energyAttachedThisTurn,
-                events: [...room.gameState.events, createGameEvent(eventMsg, "action")],
-              };
-            } else {
-              newState = {
-                ...room.gameState,
-                opponentHand: newHand,
-                opponentBench: newBench,
-                energyAttachedThisTurn: shouldSetEnergyFlag ? true : room.gameState.energyAttachedThisTurn,
-                events: [...room.gameState.events, createGameEvent(eventMsg, "action")],
-              };
-            }
-          } else {
-            const updatedActive = {
-              ...targetPokemon,
-              attachedEnergy: [...targetPokemon.attachedEnergy, energyCard],
-            };
-            if (isPlayer1) {
-              newState = {
-                ...room.gameState,
-                playerHand: newHand,
-                playerActivePokemon: updatedActive,
-                energyAttachedThisTurn: shouldSetEnergyFlag ? true : room.gameState.energyAttachedThisTurn,
-                events: [...room.gameState.events, createGameEvent(eventMsg, "action")],
-              };
-            } else {
-              newState = {
-                ...room.gameState,
-                opponentHand: newHand,
-                opponentActivePokemon: updatedActive,
-                energyAttachedThisTurn: shouldSetEnergyFlag ? true : room.gameState.energyAttachedThisTurn,
-                events: [...room.gameState.events, createGameEvent(eventMsg, "action")],
-              };
-            }
-          }
+          // Rain Dance (and any future attach power) is applied by the engine when it applies
+          const { cardId, pokemonId } = action.payload;
+          newState = executeForPlayer((state) => attachEnergyCard(state, cardId, pokemonId));
           break;
         }
 
         case "evolve": {
-          const cardId = action.payload.cardId;
-          const targetIndex = action.payload.targetIndex;
-          const hand = getHand();
-          const bench = getBench();
-          const active = getActive();
-          const evolutionCard = hand.find((c) => c.id === cardId);
-          if (!evolutionCard || !isPokemonCard(evolutionCard)) {
-            return { success: false, error: "Invalid evolution card" };
-          }
-          if (evolutionCard.stage !== "stage-1" && evolutionCard.stage !== "stage-2") {
-            return { success: false, error: "Card is not an evolution" };
-          }
-
-          let targetPokemon: PokemonInPlay | null = null;
-          if (targetIndex === -1) {
-            targetPokemon = active;
-          } else if (targetIndex >= 0 && targetIndex < bench.length) {
-            targetPokemon = bench[targetIndex];
-          }
-
-          if (!targetPokemon) {
-            return { success: false, error: "Target pokemon not found" };
-          }
-          if (!canEvolveInto(evolutionCard, targetPokemon.pokemon)) {
-            return { success: false, error: "Invalid evolution target" };
-          }
-          // Cannot evolve on turn 1 or same turn Pokemon was played
-          if (room.gameState.turnNumber === 1 || targetPokemon.playedOnTurn === room.gameState.turnNumber) {
-            return { success: false, error: "Cannot evolve this turn" };
-          }
-
-          const evolvedPokemon: PokemonInPlay = {
-            ...targetPokemon,
-            pokemon: evolutionCard,
-            previousEvolutions: [...(targetPokemon.previousEvolutions || []), targetPokemon.pokemon],
-            statusConditions: [], // Clear status on evolution
-            playedOnTurn: room.gameState.turnNumber,
-          };
-          const newHand = hand.filter((c) => c.id !== cardId);
-          const eventMsg = `${targetPokemon.pokemon.name} evolucionó a ${evolutionCard.name}`;
-
-          if (targetIndex === -1) {
-            if (isPlayer1) {
-              newState = {
-                ...room.gameState,
-                playerHand: newHand,
-                playerActivePokemon: evolvedPokemon,
-                events: [...room.gameState.events, createGameEvent(eventMsg, "action")],
-              };
-            } else {
-              newState = {
-                ...room.gameState,
-                opponentHand: newHand,
-                opponentActivePokemon: evolvedPokemon,
-                events: [...room.gameState.events, createGameEvent(eventMsg, "action")],
-              };
-            }
-          } else {
-            const newBench = [...bench];
-            newBench[targetIndex] = evolvedPokemon;
-            if (isPlayer1) {
-              newState = {
-                ...room.gameState,
-                playerHand: newHand,
-                playerBench: newBench,
-                events: [...room.gameState.events, createGameEvent(eventMsg, "action")],
-              };
-            } else {
-              newState = {
-                ...room.gameState,
-                opponentHand: newHand,
-                opponentBench: newBench,
-                events: [...room.gameState.events, createGameEvent(eventMsg, "action")],
-              };
-            }
-          }
+          const { cardId } = action.payload;
+          const targetPokemonId = action.payload.targetPokemonId ?? pokemonIdAt(actorView, action.payload.targetIndex);
+          if (!targetPokemonId) return { success: false, error: "Debes elegir uno de tus Pokémon en juego" };
+          newState = executeForPlayer((state) => evolvePokemonCard(state, cardId, targetPokemonId));
           break;
         }
 
         case "takePrize": {
           const prizeIndex = action.payload.prizeIndex;
-          const canTake = isPlayer1 ? room.gameState.playerCanTakePrize : room.gameState.opponentCanTakePrize;
-          if (!canTake) {
+          if (!actorView.playerCanTakePrize) {
             return { success: false, error: "Cannot take a prize now" };
           }
-          usedExecuteForPlayer = true;
           newState = executeForPlayer((state) => takePrize(state, prizeIndex, true));
           break;
         }
 
         case "promote": {
           const benchIndex = action.payload.benchIndex;
-          const needsPromote = isPlayer1 ? room.gameState.playerNeedsToPromote : room.gameState.opponentNeedsToPromote;
-          if (!needsPromote) {
+          if (!actorView.playerNeedsToPromote) {
             return { success: false, error: "No promotion needed" };
           }
-          usedExecuteForPlayer = true;
           newState = executeForPlayer((state) => promoteActivePokemon(state, benchIndex));
 
-          // After opponent promotes their new active Pokemon, end the attacker's turn.
-          // The attacker is the OTHER player (the one who KO'd the defender).
-          // endTurn was skipped inside executeAttack because opponentNeedsToPromote was set,
-          // so we must call it now that the promotion is complete.
+          // After the defender promotes its new active Pokémon, end the attacker's turn.
+          // The attacker is the OTHER player (the one who KO'd the defender): endTurn was
+          // skipped inside executeAttack because the promotion was pending.
           // Only proceed if both actives are present and game can continue.
           if (
             newState.gamePhase !== "GAME_OVER" &&
@@ -1212,56 +933,51 @@ export class GameRoomManager {
             !newState.playerCanTakePrize &&
             !newState.opponentCanTakePrize
           ) {
-            // The promoter is `isPlayer1`. The attacker is the opposite player.
-            // We need endTurn from the ATTACKER's perspective.
+            // The promotion's events speak for the promoter; endTurn's for the attacker
+            const promoter = isPlayer1 ? "Jugador 1" : "Jugador 2";
+            const attackerName = isPlayer1 ? "Jugador 2" : "Jugador 1";
+            newState = { ...newState, events: neutralizeEvents(newState.events, eventsNeutralizedTo, promoter, attackerName) };
+            eventsNeutralizedTo = newState.events.length;
             const attackerIsPlayer1 = !isPlayer1;
-            if (attackerIsPlayer1) {
-              // Attacker is player1: state is already in player1 perspective
-              newState = endTurn(newState);
-            } else {
-              // Attacker is player2: swap → endTurn → swap back
-              newState = swapPerspective(endTurn(swapPerspective(newState)));
-            }
+            newState = attackerIsPlayer1 ? endTurn(newState) : swapSides(endTurn(swapSides(newState)));
+            newState = { ...newState, events: neutralizeEvents(newState.events, eventsNeutralizedTo, attackerName, promoter) };
+            eventsNeutralizedTo = newState.events.length;
           }
           break;
         }
 
         case "deckSearch": {
           const selectedCardId = action.payload.cardId;
-          usedExecuteForPlayer = true;
           newState = executeForPlayer((state) => executeDeckSearch(state, selectedCardId));
           break;
         }
 
         case "forceSwitch": {
           const benchIndex = action.payload.benchIndex;
-          usedExecuteForPlayer = true;
           newState = executeForPlayer((state) => applyForceSwitch(state, benchIndex));
           break;
         }
 
         case "selfSwitch": {
           const benchIndex = action.payload.benchIndex;
-          usedExecuteForPlayer = true;
           newState = executeForPlayer((state) => applySelfSwitch(state, benchIndex));
           break;
         }
 
         case "skipSwitch": {
-          usedExecuteForPlayer = true;
           newState = executeForPlayer((state) => skipPendingSwitch(state));
           break;
         }
 
         case "benchDamage": {
           const selectedPokemonIds = action.payload.selectedPokemonIds;
-          usedExecuteForPlayer = true;
           newState = executeForPlayer((state) => executeBenchDamage(state, selectedPokemonIds));
           break;
         }
 
         case "clearPeek": {
-          usedExecuteForPlayer = true;
+          // Only the side that peeked (whose turn it is) owns pendingPeek
+          if (!actorView.isPlayerTurn) return { success: false, error: "Not your turn" };
           newState = executeForPlayer((state) => clearPendingPeek(state));
           break;
         }
@@ -1275,26 +991,18 @@ export class GameRoomManager {
 
         case "playerReady": {
           // Mark player as ready (after mulligan check or setup)
-          console.log(`[playerReady] ${isPlayer1 ? 'P1' : 'P2'} clicked ready`);
-          console.log(`[playerReady] Before: playerReady=${room.gameState.playerReady}, opponentReady=${room.gameState.opponentReady}, phase=${room.gameState.gamePhase}`);
-
           newState = setPlayerReady(room.gameState, isPlayer1);
-
-          console.log(`[playerReady] After setPlayerReady: playerReady=${newState.playerReady}, opponentReady=${newState.opponentReady}`);
 
           // Check if both players are ready to start the game
           const p1Ready = isPlayer1 ? true : newState.playerReady;
           const p2Ready = isPlayer1 ? newState.opponentReady : true;
 
-          console.log(`[playerReady] Check: p1Ready=${p1Ready}, p2Ready=${p2Ready}, phase=${newState.gamePhase}`);
-
           if (p1Ready && p2Ready && newState.gamePhase === "MULLIGAN") {
-            // Both players ready - cancel setup timer and start game
+            // Both players ready - cancel setup timer and start the game. The engine draws the
+            // starting player's first card (classic rule): nothing to draw here.
             this.cancelSetupTimer(roomId);
             const coinFlipResult = this.flipCoin();
-            console.log(`[playerReady] Both players ready! Coin flip: ${coinFlipResult}`);
             newState = startPlayingPhase(newState, coinFlipResult);
-            console.log(`[playerReady] Game started! New phase: ${newState.gamePhase}`);
           } else if ((p1Ready || p2Ready) && !(p1Ready && p2Ready)) {
             // Only one player is ready — start setup timer for the opponent
             this.startSetupTimer(roomId, isPlayer1 ? "player1" : "player2");
@@ -1302,206 +1010,46 @@ export class GameRoomManager {
           break;
         }
 
+        // ── Activated Pokémon Powers through game-core's effect registry ──
+        // { pokemonId, selections }: the engine checks the power (owner, status, once per turn,
+        // Toxic Gas...) and every selection against its own steps. Coins (Heal) are rolled here.
         case "usePower": {
-          const power = action.payload;
-          const pokemonId = "pokemonId" in power ? power.pokemonId : undefined;
-
-          console.log(`[usePower] ${isPlayer1 ? 'P1' : 'P2'} using ${power.powerType}`);
-
-          // Heal: game-core's executeHealFlip trusts the source id it is given (it never checks the
-          // Pokémon has Heal or already used it), so verify with the engine's own predicates first.
-          if (power.powerType === "healFlip") {
-            const actorState = isPlayer1 ? room.gameState : swapPerspective(room.gameState);
-            const { pokemonWithPower } = canUseHealFlip(actorState, "player");
-            const source = pokemonWithPower.find((p) => p.pokemon.id === power.pokemonId);
-            const sourceError = source
-              ? canUsePower(source, source === actorState.playerActivePokemon, actorState.usedPowersThisTurn)
-              : "Este Pokémon no puede usar Curación";
-            if (sourceError) return { success: false, error: sourceError };
+          const { pokemonId, selections } = action.payload;
+          const reason = canUsePokemonPower(actorView, pokemonId);
+          if (reason) return { success: false, error: reason };
+          const requirement = getPowerCoinFlips(actorView, pokemonId);
+          const coinKey = effectCoinKey(actorKey, "power", pokemonId, actorView.turnNumber);
+          const coinResults = this.effectCoins(room, coinKey, requirement);
+          newState = executeForPlayer((state) => usePokemonPower(state, pokemonId, selections, { coinResults }));
+          if (coinResults.length > 0) {
+            consumedCoinKey = coinKey;
+            const source = findInPlay(actorView, "player", pokemonId)?.pokemon.pokemon;
+            const powerName = source && isPokemonCard(source) ? source.power?.name : undefined;
+            opponentCoinFlipInfo = { attackName: powerName ?? "Poder Pokémon", results: coinResults };
           }
-
-          const executePower = (state: GameState): GameState => {
-            const side: "player" | "opponent" = "player";
-
-            switch (power.powerType) {
-              case "rainDance":
-                return attachEnergyWithRainDance(state, side, power.energyCardId, power.targetPokemonId);
-              case "energyTrans":
-                return moveEnergyWithEnergyTrans(state, side, power.sourcePokemonId, power.targetPokemonId, power.energyCardId);
-              case "damageSwap":
-                return moveDamageWithDamageSwap(state, side, power.sourcePokemonId, power.targetPokemonId, power.amount);
-              case "energyBurn":
-                return activateEnergyBurn(state, side, power.pokemonId);
-              case "buzzap":
-                return executeBuzzap(state, side, power.electrodePokemonId, power.chosenEnergyType, power.targetPokemonId);
-              case "healFlip": {
-                // Server-rolled coin (requested via requestCoinFlip); the client's claim is ignored
-                const coinResult = this.consumeCoinFlip(room, isPlayer1 ? "player1" : "player2", "healFlip");
-                if (coinResult === "tails" || power.targetPokemonId === "__none__") {
-                  // Tails: mark power as used without healing
-                  const usedPowersThisTurn = [...(state.usedPowersThisTurn || []), power.pokemonId];
-                  return {
-                    ...state,
-                    usedPowersThisTurn,
-                    events: [...state.events, createGameEvent("Moneda: [coin:tails] — Heal falló", "info")],
-                  };
-                }
-                return executeHealFlip(state, power.targetPokemonId, side, power.pokemonId);
-              }
-              case "typeShift": {
-                const initiated = initiateShift(state, side, power.pokemonId);
-                return executeShift(initiated, side, power.chosenType);
-              }
-              case "peek":
-                return executePeek(state, side, power.pokemonId, power.peekType);
-              case "clearPeek":
-                return clearPendingPeek(state);
-            }
-          };
-
-          usedExecuteForPlayer = true;
-          newState = executeForPlayer(executePower);
           break;
         }
 
+        // ── Trainers through game-core's effect registry ──
+        // { cardId, selections }: the card that runs is the one in the hand with that id; the
+        // engine validates the selections against the card's steps. Coins (Poké Ball) are rolled
+        // here, never taken from the client.
         case "playTrainer": {
-          const cardId = action.payload.cardId;
-          const selections = action.payload.selections;
-          // The effect that runs is the card's own name, never the client's trainerName: game-core's
-          // canPlayTrainer only checks the card is *a* trainer, so a Potion sent as "Computer Search"
-          // used to run Computer Search.
-          const trainerCard = getHand().find((c) => c.id === cardId);
-          if (!trainerCard || trainerCard.kind !== "trainer") {
-            return { success: false, error: "Carta de entrenador no encontrada en tu mano" };
-          }
-          if (trainerCard.name !== action.payload.trainerName) {
+          const { cardId, selections, trainerName } = action.payload;
+          const card = actorView.playerHand.find((c) => c.id === cardId);
+          if (card && trainerName !== undefined && card.name !== trainerName) {
             return { success: false, error: "La carta no coincide con el entrenador indicado" };
           }
-          const trainerName = trainerCard.name;
-          // Coin trainers (Poké Ball) use the server-rolled flip, never the client's claim
-          const coinResult =
-            action.payload.coinResult !== undefined || trainerName === "Poké Ball"
-              ? this.consumeCoinFlip(room, isPlayer1 ? "player1" : "player2", "trainer")
-              : undefined;
-
-          console.log(`[playTrainer] ${isPlayer1 ? 'P1' : 'P2'} playing ${trainerName}`);
-
-          // Helper to find bench index by Pokemon ID
-          const findBenchIndex = (pokemonId: string, bench: (PokemonInPlay | null)[]): number => {
-            return bench.findIndex(p => p?.pokemon.id === pokemonId);
-          };
-
-          // Helper to find target index (active = -1, bench = 0+)
-          const findTargetIndex = (pokemonId: string, active: PokemonInPlay | null, bench: (PokemonInPlay | null)[]): number => {
-            if (active?.pokemon.id === pokemonId) return -1;
-            const benchIdx = findBenchIndex(pokemonId, bench);
-            return benchIdx !== -1 ? benchIdx : -1;
-          };
-
-          // Execute trainer based on name, using selections for parameters
-          const executeTrainer = (state: GameState): GameState => {
-            switch (trainerName) {
-              case "Bill":
-                return playBill(state, cardId);
-              case "Professor Oak":
-                return playProfessorOak(state, cardId);
-              case "PlusPower":
-                return playPlusPower(state, cardId);
-              case "Lass":
-                return playLass(state, cardId);
-              case "Full Heal":
-                return playFullHeal(state, cardId);
-              case "Imposter Professor Oak":
-                return playImposterProfessorOak(state, cardId);
-              case "Pokémon Center":
-                return playPokemonCenter(state, cardId);
-              case "Switch": {
-                // selections[0][0] = pokemon id from bench
-                const pokemonId = selections[0]?.[0] || "";
-                const benchIndex = findBenchIndex(pokemonId, state.playerBench);
-                return playSwitch(state, cardId, benchIndex);
-              }
-              case "Gust of Wind": {
-                // selections[0][0] = pokemon id from opponent bench
-                const pokemonId = selections[0]?.[0] || "";
-                const benchIndex = findBenchIndex(pokemonId, state.opponentBench);
-                return playGustOfWind(state, cardId, benchIndex);
-              }
-              case "Potion":
-                // selections[0][0] = target pokemon id
-                return playPotion(state, cardId, selections[0]?.[0] || "");
-              case "Defender":
-                // selections[0][0] = target pokemon id
-                return playDefender(state, cardId, selections[0]?.[0] || "");
-              case "Super Potion":
-                // selections[0][0] = target pokemon id, selections[1][0] = energy id
-                return playSuperPotion(state, cardId, selections[0]?.[0] || "", selections[1]?.[0] || "");
-              case "Energy Removal":
-                // selections[0][0] = energy id from opponent active
-                return playEnergyRemoval(state, cardId, selections[0]?.[0] || "");
-              case "Super Energy Removal":
-                // selections[0][0] = own pokemon id, selections[1][0] = own energy id
-                // selections[2][0] = opponent pokemon id, selections[3] = opponent energy ids
-                return playSuperEnergyRemoval(
-                  state, cardId,
-                  selections[0]?.[0] || "", selections[1]?.[0] || "",
-                  selections[2]?.[0] || "", selections[3] || []
-                );
-              case "Energy Retrieval":
-                // selections[0][0] = card to discard, selections[1] = energy ids from discard
-                return playEnergyRetrieval(state, cardId, selections[0]?.[0] || "", selections[1] || []);
-              case "Maintenance":
-                // selections[0] = 2 card ids to return to deck
-                return playMaintenance(state, cardId, selections[0] || []);
-              case "Computer Search":
-                // selections[0] = 2 card ids to discard, selections[1][0] = deck card id
-                return playComputerSearch(state, cardId, selections[0] || [], selections[1]?.[0] || "");
-              case "Item Finder":
-                // selections[0] = 2 card ids to discard, selections[1][0] = trainer id from discard
-                return playItemFinder(state, cardId, selections[0] || [], selections[1]?.[0] || "");
-              case "Pokémon Breeder": {
-                // selections[0][0] = stage 2 card id, selections[1][0] = target pokemon id
-                const stage2Id = selections[0]?.[0] || "";
-                const targetPokemonId = selections[1]?.[0] || "";
-                const targetIndex = findTargetIndex(targetPokemonId, state.playerActivePokemon, state.playerBench);
-                console.log(`[Breeder] stage2Id=${stage2Id}, targetPokemonId=${targetPokemonId}, targetIndex=${targetIndex}`);
-                return playPokemonBreeder(state, cardId, stage2Id, targetIndex);
-              }
-              case "Pokémon Trader":
-                // selections[0][0] = hand pokemon id, selections[1][0] = deck pokemon id
-                return playPokemonTrader(state, cardId, selections[0]?.[0] || "", selections[1]?.[0] || "");
-              case "Scoop Up": {
-                // selections[0][0] = target pokemon id
-                const targetPokemonId = selections[0]?.[0] || "";
-                const targetIndex = findTargetIndex(targetPokemonId, state.playerActivePokemon, state.playerBench);
-                return playScoopUp(state, cardId, targetIndex);
-              }
-              case "Poké Ball": {
-                const isHeads = coinResult === "heads";
-                const selectedCardId = selections[0]?.[0] ?? null;
-                return playPokeBall(state, cardId, selectedCardId, isHeads);
-              }
-              case "Devolution Spray": {
-                const pokemonId = selections[0]?.[0] || "";
-                const targetIndex = findTargetIndex(pokemonId, state.playerActivePokemon, state.playerBench);
-                return playDevolutionSpray(state, cardId, targetIndex);
-              }
-              case "Pokédex": {
-                // selections[0] contains the new order as string indices
-                const newOrder = (selections[0] || []).map(s => parseInt(s, 10));
-                return playPokedex(state, cardId, newOrder);
-              }
-              default:
-                console.log(`[playTrainer] Unknown trainer: ${trainerName}`);
-                return {
-                  ...state,
-                  events: [...state.events, createGameEvent(`${trainerName} no implementado`, "info")]
-                };
-            }
-          };
-
-          usedExecuteForPlayer = true;
-          newState = executeForPlayer(executeTrainer);
+          const reason = canPlayTrainerCard(actorView, cardId);
+          if (reason) return { success: false, error: reason };
+          const requirement = getTrainerCoinFlips(actorView, cardId);
+          const coinKey = effectCoinKey(actorKey, "trainer", cardId);
+          const coinResults = this.effectCoins(room, coinKey, requirement);
+          newState = executeForPlayer((state) => playTrainerCard(state, cardId, selections, { coinResults }));
+          if (coinResults.length > 0) {
+            consumedCoinKey = coinKey;
+            opponentCoinFlipInfo = { attackName: card?.name ?? "Entrenador", results: coinResults };
+          }
           break;
         }
 
@@ -1531,19 +1079,16 @@ export class GameRoomManager {
 
       // Neutralize perspective-specific events for multiplayer
       {
-        const selfName = usedExecuteForPlayer
-          ? (isPlayer1 ? "Jugador 1" : "Jugador 2")
-          : "Jugador 1";
-        const opponentName = usedExecuteForPlayer
-          ? (isPlayer1 ? "Jugador 2" : "Jugador 1")
-          : "Jugador 2";
+        const selfName = actsAsActor && !isPlayer1 ? "Jugador 2" : "Jugador 1";
+        const opponentName = selfName === "Jugador 1" ? "Jugador 2" : "Jugador 1";
         newState = {
           ...newState,
-          events: neutralizeEvents(newState.events, eventCountBefore, selfName, opponentName),
+          events: neutralizeEvents(newState.events, eventsNeutralizedTo, selfName, opponentName),
         };
       }
 
       room.gameState = newState;
+      if (consumedCoinKey && room.effectCoins) delete room.effectCoins[consumedCoinKey];
 
       // Update turn timer when turn changes
       room.turnStartedAt = Date.now();
@@ -1572,9 +1117,16 @@ export class GameRoomManager {
         winner,
         winReason,
         ...(actionCoinFlipInfo ? { coinFlipInfo: actionCoinFlipInfo } : {}),
+        ...(opponentCoinFlipInfo ? { opponentCoinFlipInfo } : {}),
         ...(setupTimerStarted ? { setupTimerStarted } : {}),
       };
     } catch (error) {
+      // An illegal move (game-core's canX said no): reject it, the stored state is untouched
+      const reason = illegalReason(error);
+      if (reason) {
+        console.log(`[Room ${roomId}] Rejected ${action.type}: ${reason}`);
+        return { success: false, error: reason };
+      }
       console.error(`[Room ${roomId}] Action error:`, error);
       return { success: false, error: (error as Error).message };
     }

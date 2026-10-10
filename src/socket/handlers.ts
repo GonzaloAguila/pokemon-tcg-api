@@ -572,8 +572,9 @@ export function setupSocketHandlers(io: Server): void {
     // Game Actions
     // ==========================================================================
 
-    // Coin a client must show before acting (Poké Ball, Heal). Rolled and stored server-side;
-    // the subsequent action uses the stored result.
+    // Coins a Trainer / power flips before its steps (Poké Ball, Heal): { roomId, purpose:
+    // "trainer", cardId } | { roomId, purpose: "power", pokemonId }. Rolled and stored
+    // server-side; the playTrainer / usePower action uses the stored coins.
     socket.on("requestCoinFlip", async (payload: unknown, ack?: (res: unknown) => void) => {
       if (typeof ack !== "function") return;
       const session = await checkSocketSession(socket);
@@ -584,7 +585,7 @@ export function setupSocketHandlers(io: Server): void {
       }
       const parsed = parsePayload(socketSchemas.requestCoinFlip, payload);
       if (!parsed.ok) return ack({ success: false, error: parsed.error });
-      ack(roomManager.requestCoinFlip(parsed.data.roomId, socket.id, parsed.data.purpose));
+      ack(roomManager.requestCoinFlip(parsed.data.roomId, socket.id, parsed.data));
     });
 
     socket.on("action", async (payload: unknown) => {
@@ -630,6 +631,15 @@ export function setupSocketHandlers(io: Server): void {
               attackName: result.coinFlipInfo.attackName,
               results: result.coinFlipInfo.results,
               count: result.coinFlipInfo.results.length,
+            });
+          }
+
+          // Trainer/power coins: the actor already showed them (requestCoinFlip ack)
+          if (result.opponentCoinFlipInfo) {
+            socket.to(roomId).emit("showCoinFlip", {
+              attackName: result.opponentCoinFlipInfo.attackName,
+              results: result.opponentCoinFlipInfo.results,
+              count: result.opponentCoinFlipInfo.results.length,
             });
           }
 

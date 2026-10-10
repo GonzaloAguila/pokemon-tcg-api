@@ -25,8 +25,8 @@ function inPlay(card: typeof pikachu, id: string, extra: Record<string, unknown>
   };
 }
 
-function setup(overrides: Partial<Record<keyof GameState, unknown>> = {}) {
-  const manager = new GameRoomManager();
+function setup(overrides: Partial<Record<keyof GameState, unknown>> = {}, coin: "heads" | "tails" = "heads") {
+  const manager = new GameRoomManager(() => coin);
   const base = initializeMultiplayerGame(getDeckById("zap")!, getDeckById("overgrowth")!);
   const gameState = {
     ...base,
@@ -52,7 +52,7 @@ describe("executeAction rejects malformed actions before touching the game", () 
     ["unknown action type", { type: "winGame", payload: {} }],
     ["retreat with huge energy list", { type: "retreat", payload: { energyIdsToDiscard: Array(5000).fill("e"), benchIndex: 0 } }],
     ["playTrainer with flat selections", { type: "playTrainer", payload: { cardId: "x", trainerName: "Potion", selections: ["p1-pika"] } }],
-    ["usePower with unknown power", { type: "usePower", payload: { powerType: "drawAll", pokemonId: "p1-pika" } }],
+    ["usePower without a Pokémon", { type: "usePower", payload: { powerType: "drawAll", selections: [] } }],
     ["null action", null],
   ];
 
@@ -110,17 +110,12 @@ describe("playTrainer: the trainer that runs is the card in hand, not the client
   });
 });
 
-describe("usePower healFlip needs a Pokémon that can actually use Heal", () => {
-  function forceHeads(room: ReturnType<typeof setup>["room"]) {
-    room.pendingCoinFlips = { player1: { purpose: "healFlip", result: "heads", turnNumber: room.gameState!.turnNumber } };
-  }
-
+describe("usePower (Heal) needs a Pokémon that can actually use Heal", () => {
   it("rejects healing with a Pokémon that has no Heal power", async () => {
     const { manager, room } = setup();
-    forceHeads(room);
     const result = await manager.executeAction(room.id, "s1", {
       type: "usePower",
-      payload: { powerType: "healFlip", pokemonId: "p1-pika", targetPokemonId: "p1-pika" },
+      payload: { pokemonId: "p1-pika", selections: [["p1-pika"]] },
     });
     expect(result.success).toBe(false);
     expect(room.gameState!.playerActivePokemon!.currentDamage).toBe(30);
@@ -128,18 +123,16 @@ describe("usePower healFlip needs a Pokémon that can actually use Heal", () => 
 
   it("heals once with a real Vileplume, then refuses a second use the same turn", async () => {
     const { manager, room } = setup({ playerBench: [inPlay(vileplume, "p1-vile")] });
-    forceHeads(room);
     const first = await manager.executeAction(room.id, "s1", {
       type: "usePower",
-      payload: { powerType: "healFlip", pokemonId: "p1-vile", targetPokemonId: "p1-pika" },
+      payload: { pokemonId: "p1-vile", selections: [["p1-pika"]] },
     });
-    expect(first.success).toBe(true);
+    expect(first.success, first.error).toBe(true);
     expect(room.gameState!.playerActivePokemon!.currentDamage).toBe(20);
 
-    forceHeads(room);
     const second = await manager.executeAction(room.id, "s1", {
       type: "usePower",
-      payload: { powerType: "healFlip", pokemonId: "p1-vile", targetPokemonId: "p1-pika" },
+      payload: { pokemonId: "p1-vile", selections: [["p1-pika"]] },
     });
     expect(second.success).toBe(false);
     expect(room.gameState!.playerActivePokemon!.currentDamage).toBe(20);
