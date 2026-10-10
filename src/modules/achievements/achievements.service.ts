@@ -189,12 +189,14 @@ export async function checkAndUpdateProgress(userId: string): Promise<ClaimableA
     const existing = existingMap.get(def.id);
 
     if (!existing) {
-      // No record exists — create one (never set unlockedAt here)
-      await prisma.userAchievement.create({
-        data: { userId, achievementId: def.id, progress },
+      // No record exists — create one (never set unlockedAt here). skipDuplicates makes this
+      // ON CONFLICT DO NOTHING, so concurrent checks (e.g. login + session restore) don't 500.
+      const { count } = await prisma.userAchievement.createMany({
+        data: [{ userId, achievementId: def.id, progress }],
+        skipDuplicates: true,
       });
 
-      if (isComplete) {
+      if (count === 1 && isComplete) {
         newlyClaimable.push({ achievementId: def.id, name: def.name, tier: def.tier });
       }
     } else if (existing.unlockedAt === null) {

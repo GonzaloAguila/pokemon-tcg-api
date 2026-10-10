@@ -131,3 +131,13 @@ describe("admin adjustments", () => {
     expect(rows.map((r) => [r.currency, r.amount])).toEqual([["coupons", 5], ["coupons", -15]]);
   });
 });
+
+describe("achievement progress check", () => {
+  it("tolerates concurrent checks for a new user", async () => {
+    const { checkAndUpdateProgress } = await import("../src/modules/achievements/achievements.service.js");
+    const user = await createUser();
+    await prisma.userStats.create({ data: { userId: user.id } });
+    const { rejected } = await race(4, () => checkAndUpdateProgress(user.id));
+    expect(rejected).toHaveLength(0);
+  });
+});
