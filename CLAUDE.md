@@ -6,11 +6,11 @@ Backend for **Nostalgic TCG** (browser Pokémon TCG, Base Set + Jungle). Express
 
 | Repo | Role |
 |------|------|
-| `pokemon-tcg-game-core` | Game engine. Consumed here via `"file:../pokemon-tcg-game-core"` — this API runs whatever is checked out/built there, NOT a published version. |
+| `pokemon-tcg-game-core` | Game engine, consumed from GitHub Packages at an **exact** version. The frontend must pin the same version so single-player and multiplayer run identical rules. Auth: repo `.npmrc` only sets the `@gonzaloaguila` registry; the token lives in each machine's `~/.npmrc` (`//npm.pkg.github.com/:_authToken=...`). |
 | `pokemon-tcg` | Next.js frontend (Vercel). Talks to this API via `NEXT_PUBLIC_API_URL`. Holds the cross-repo orchestration notes and the VPS deploy skill (`.claude/skills/api-deploy/`). |
 | `pokemon-tcg-landing` | Astro landing; only uses `POST /api/waitlist`. |
 
-Change order when work spans repos: game-core (build) → API → frontend.
+Change order when work spans repos: game-core (build, bump, publish) → API and frontend (bump to the same exact version).
 
 ## Commands
 
@@ -23,7 +23,7 @@ npm run db:generate  # regenerate Prisma client after schema edits
 npx tsx prisma/seed.ts   # superadmin seed
 ```
 
-`npm run lint` and `npm run test` are declared but **do not work**: eslint isn't installed/configured and there are no test files.
+`npm run lint` and `npm run test` are declared but **do not work**: eslint isn't installed/configured and there are no test files. CI (`.github/workflows/ci.yml`) runs `npm ci`, `prisma generate`, `tsc --noEmit` and `build`; it needs the `NPM_TOKEN` repo secret.
 
 ## Layout
 
@@ -56,9 +56,7 @@ See `.env.example`. Also used: `COOKIE_DOMAIN` (prod: `.nostalgic-tcg.online`, n
 
 ## Deploy
 
-Production: Hostinger VPS, `api.nostalgic-tcg.online`, Nginx (TLS via Certbot) → `127.0.0.1:3001`, PM2 process `pokemon-tcg-api`, Postgres on the same box. Code at `/var/www/pokemon-tcg-api`, engine at `/var/www/pokemon-tcg-game-core`. Claude has no SSH access; give the user commands to run. Full pipeline: frontend repo `.claude/skills/api-deploy/SKILL.md`.
-
-`file:` deps are copied at install time: after rebuilding game-core run `rm -rf node_modules/@gonzaloaguila && npm install`.
+Production: Hostinger VPS, `api.nostalgic-tcg.online`, Nginx (TLS via Certbot) → `127.0.0.1:3001`, PM2 process `pokemon-tcg-api`, Postgres on the same box. Code at `/var/www/pokemon-tcg-api`. The VPS installs game-core from GitHub Packages, so root's `~/.npmrc` needs a valid token. Claude has no SSH access; give the user commands to run. Full pipeline: frontend repo `.claude/skills/api-deploy/SKILL.md`.
 
 ## Admin data fixes
 
