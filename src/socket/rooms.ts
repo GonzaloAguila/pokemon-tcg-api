@@ -5,6 +5,7 @@
  * TODO: Persist to database for reconnection support.
  */
 
+import { randomInt } from "crypto";
 import {
   type GameState,
   type GameCard,
@@ -132,6 +133,23 @@ interface GameRoom {
   // Metadata
   players: string[];
   createdAt: Date;
+
+  // Coin flips a client asked for before acting (Poké Ball, Heal), rolled by the server.
+  // The action uses this stored result, never one sent by the client.
+  pendingCoinFlips?: Partial<Record<PlayerKey, PendingCoinFlip>>;
+}
+
+type PlayerKey = "player1" | "player2";
+export type ClientCoinFlipPurpose = "trainer" | "healFlip";
+
+interface PendingCoinFlip {
+  purpose: ClientCoinFlipPurpose;
+  result: "heads" | "tails";
+  turnNumber: number;
+}
+
+function serverCoin(): "heads" | "tails" {
+  return randomInt(2) === 0 ? "heads" : "tails";
 }
 
 interface ActionResult {
@@ -741,6 +759,43 @@ export class GameRoomManager {
     room.gameState = gameState;
     room.turnStartedAt = Date.now();
     return room.gameState;
+  }
+
+  /**
+   * Roll a coin the client needs to show before choosing what to do (e.g. Poké Ball heads
+   * → pick a card). Asking again for the same purpose in the same turn returns the same
+   * result, so a player can't cancel and re-roll.
+   */
+  requestCoinFlip(
+    roomId: string,
+    socketId: string,
+    purpose: ClientCoinFlipPurpose,
+  ): { success: true; result: "heads" | "tails" } | { success: false; error: string } {
+    const room = this.rooms.get(roomId);
+    if (!room?.gameState) return { success: false, error: "Game not started" };
+    const key = room.player1SocketId === socketId ? "player1" : room.player2SocketId === socketId ? "player2" : null;
+    if (!key) return { success: false, error: "Not a player in this room" };
+    const isMyTurn = key === "player1" ? room.gameState.isPlayerTurn : !room.gameState.isPlayerTurn;
+    if (!isMyTurn) return { success: false, error: "Not your turn" };
+
+    const turnNumber = room.gameState.turnNumber;
+    const existing = room.pendingCoinFlips?.[key];
+    if (existing && existing.purpose === purpose && existing.turnNumber === turnNumber) {
+      return { success: true, result: existing.result };
+    }
+    const result = serverCoin();
+    room.pendingCoinFlips = { ...room.pendingCoinFlips, [key]: { purpose, result, turnNumber } };
+    return { success: true, result };
+  }
+
+  /** The stored flip for this purpose/turn (consumed), or a fresh server roll. */
+  private consumeCoinFlip(room: GameRoom, key: PlayerKey, purpose: ClientCoinFlipPurpose): "heads" | "tails" {
+    const stored = room.pendingCoinFlips?.[key];
+    if (room.pendingCoinFlips) delete room.pendingCoinFlips[key];
+    if (stored && stored.purpose === purpose && stored.turnNumber === room.gameState?.turnNumber) {
+      return stored.result;
+    }
+    return serverCoin();
   }
 
   /**
@@ -1484,7 +1539,8 @@ export class GameRoomManager {
               }
               case "healFlip": {
                 const targetPokemonId = action.payload.targetPokemonId as string;
-                const coinResult = action.payload.coinResult as string | undefined;
+                // Server-rolled coin (requested via requestCoinFlip); the client's claim is ignored
+                const coinResult = this.consumeCoinFlip(room, isPlayer1 ? "player1" : "player2", "healFlip");
                 if (coinResult === "tails" || targetPokemonId === "__none__") {
                   // Tails: mark power as used without healing
                   const usedPowersThisTurn = [...(state.usedPowersThisTurn || []), pokemonId];
@@ -1526,7 +1582,11 @@ export class GameRoomManager {
           const cardId = action.payload.cardId as string;
           const trainerName = action.payload.trainerName as string;
           const selections = action.payload.selections as string[][] || [];
-          const coinResult = action.payload.coinResult as string | undefined;
+          // Coin trainers (Poké Ball) use the server-rolled flip, never the client's claim
+          const coinResult =
+            action.payload.coinResult !== undefined || trainerName === "Poké Ball"
+              ? this.consumeCoinFlip(room, isPlayer1 ? "player1" : "player2", "trainer")
+              : undefined;
 
           console.log(`[playTrainer] ${isPlayer1 ? 'P1' : 'P2'} playing ${trainerName}`);
 

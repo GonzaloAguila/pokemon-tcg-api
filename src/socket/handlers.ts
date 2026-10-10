@@ -601,6 +601,16 @@ export function setupSocketHandlers(io: Server): void {
     // Game Actions
     // ==========================================================================
 
+    // Coin a client must show before acting (Poké Ball, Heal). Rolled and stored server-side;
+    // the subsequent action uses the stored result.
+    socket.on("requestCoinFlip", (payload: { roomId: string; purpose: string }, ack?: (res: unknown) => void) => {
+      if (typeof ack !== "function") return;
+      if (!getAuthUserId(socket)) return ack({ success: false, error: "Autenticacion requerida" });
+      const purpose = payload?.purpose;
+      if (purpose !== "trainer" && purpose !== "healFlip") return ack({ success: false, error: "Invalid purpose" });
+      ack(roomManager.requestCoinFlip(String(payload?.roomId ?? ""), socket.id, purpose));
+    });
+
     socket.on("action", async (payload: { roomId: string; action: PlayerAction }) => {
       try {
         if (!getAuthUserId(socket)) { socket.emit("error", { message: "Autenticacion requerida" }); return; }
