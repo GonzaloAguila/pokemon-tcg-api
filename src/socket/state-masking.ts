@@ -13,12 +13,22 @@
  * the other player and spectators never get them (pendingPeek holds the cards the acting
  * player looked at, e.g. the top card of their own deck).
  *
+ * pendingAttackChoice is different: it is answered by its step's chooser (the attacker, or
+ * the defending player for "opponent" steps such as Terror Strike). The chooser gets it in
+ * full (Prophecy's top cards included, even of the opponent's deck); everyone else gets a
+ * "waiting" stub with the question but no options, cards, deck or context.
+ *
  * Still visible to the owner: their own deck order and prizes (the client needs the
  * deck contents for search effects); hiding those needs search UIs to get a sorted
  * copy instead — tracked as a follow-up.
  */
 
-import { swapSides, type GameState as EngineState } from "@gonzaloaguila/game-core";
+import {
+  isHandRevealed,
+  swapSides,
+  type GameState as EngineState,
+  type PendingAttackChoice,
+} from "@gonzaloaguila/game-core";
 
 // Loose record: emitted states are plain JSON and tests pass partial states
 type GameState = Record<string, unknown>;
@@ -87,11 +97,30 @@ export type HiddenZone =
  *
  * A rule gets the state in the viewer's perspective (player 2: swapped; spectators: player
  * 1's) and returns the zones of THAT perspective the viewer may see. Rules must ask the
- * engine (e.g. a future game-core `isOpponentHandRevealed(state)`), never re-implement the
- * card. No Base Set / Jungle card reveals a zone, so the list is empty for now.
+ * engine, never re-implement the card.
  */
 export type RevealRule = (viewerState: GameState, viewer: Viewer) => readonly HiddenZone[];
-export const REVEAL_RULES: RevealRule[] = [];
+
+/**
+ * Clairvoyance (Omanyte): a side plays with its hand face up while the other side has a
+ * working Clairvoyance in play (game-core isHandRevealed). Face up = public: the opponent
+ * sees it, and so do spectators.
+ */
+const clairvoyanceRule: RevealRule = (viewerState) => {
+  // Not a full game state (partial test fixtures): nothing is revealed
+  if (!Array.isArray(viewerState.playerBench) || !Array.isArray(viewerState.opponentBench)) return [];
+  const state = viewerState as unknown as EngineState;
+  const zones: HiddenZone[] = [];
+  try {
+    if (isHandRevealed(state, "opponent")) zones.push("opponentHand");
+    if (isHandRevealed(state, "player")) zones.push("playerHand");
+  } catch {
+    return []; // fail closed: keep the hands hidden
+  }
+  return zones;
+};
+
+export const REVEAL_RULES: RevealRule[] = [clairvoyanceRule];
 
 /** Zones revealed to this viewer by REVEAL_RULES. */
 export function revealedZones(viewerState: GameState, viewer: Viewer): Set<HiddenZone> {
@@ -133,9 +162,33 @@ function stripForeignPending(state: GameState, viewer: Viewer): GameState {
 }
 
 /**
+ * pendingAttackChoice for a viewer who is not its chooser (or a spectator): the question
+ * without anything to choose from (no options, cards, ordering cards, thumbnails, deck,
+ * context or queue) plus `waiting: true`. `state` is in the viewer's perspective: the
+ * attacker is the side whose turn it is.
+ */
+function maskAttackChoice(state: GameState, viewer: Viewer): GameState {
+  const choice = state.pendingAttackChoice as PendingAttackChoice | undefined;
+  if (!choice) return state;
+  const viewerIsAttacker = state.isPlayerTurn === true;
+  const chooser = choice.step.chooser ?? "self";
+  const viewerChooses = viewer !== "spectator" && (chooser === "opponent" ? !viewerIsAttacker : viewerIsAttacker);
+  if (viewerChooses) return state;
+  const { title, description, maxSelections, minSelections } = choice.step;
+  return {
+    ...state,
+    pendingAttackChoice: {
+      effect: choice.effect,
+      step: { title, description, chooser, options: [], maxSelections, minSelections },
+      waiting: true,
+    },
+  };
+}
+
+/**
  * The state a given viewer may receive: perspective-swapped for player 2, with the
- * opponent's hidden zones masked (unless a REVEAL_RULE shows them) and pending choices
- * only for the side resolving them. Spectators see player 1's perspective with both
+ * opponent's hidden zones masked (unless a REVEAL_RULE shows them), pending choices
+ * only for the side resolving them and pendingAttackChoice in full only for its chooser. Spectators see player 1's perspective with both
  * sides masked and no pending choices.
  */
 export function maskGameStateForPlayer(
@@ -144,5 +197,5 @@ export function maskGameStateForPlayer(
 ): GameState {
   const view = forPlayer === "spectator" ? state : getGameStateForPlayer(state, forPlayer);
   const sides: HiddenZoneSide[] = forPlayer === "spectator" ? ["player", "opponent"] : ["opponent"];
-  return stripForeignPending(hideZones(view, sides, revealedZones(view, forPlayer)), forPlayer);
+  return maskAttackChoice(stripForeignPending(hideZones(view, sides, revealedZones(view, forPlayer)), forPlayer), forPlayer);
 }
