@@ -5,7 +5,7 @@ import { Errors } from "../../middleware/error-handler.js";
 import { ALL_PERMISSIONS, type AdminPermission } from "./permissions.js";
 import * as adminService from "./admin.service.js";
 import { roomManager } from "../../socket/handlers.js";
-import { io } from "../../index.js";
+import { getIo } from "../../socket/io-registry.js";
 
 const router = Router();
 
@@ -17,6 +17,47 @@ const router = Router();
  * Middleware that prevents an admin from performing actions on their own account.
  * Must be placed AFTER requireAuth so that req.user is populated.
  */
+// Request bodies (shapes match the admin panel's src/infra/http/admin-api.ts)
+const reason = z.string().trim().min(1).max(500);
+const optionalReason = z.string().trim().max(500).nullish().transform((v) => v || undefined);
+/** Signed, non-zero integer: the panel sends negative amounts for "Descontar". */
+const signedAmount = (max: number) =>
+  z.number().int().refine((n) => n !== 0, "no puede ser cero").refine((n) => Math.abs(n) <= max, `maximo ${max}`);
+
+const adminBodies = {
+  adjustBalance: z.object({ amount: signedAmount(1_000_000), reason }),
+  adjustCards: z.object({
+    cards: z
+      .array(z.object({
+        cardDefId: z.string().regex(/^[a-z0-9-]{1,100}$/, "cardDefId invalido"),
+        quantity: signedAmount(1000),
+      }))
+      .min(1)
+      .max(100),
+  }),
+  adjustStats: z.object({
+    field: z.enum(["normalWins", "normalLosses", "rankedWins", "rankedLosses", "draftWins", "draftLosses"]),
+    amount: signedAmount(100_000),
+  }),
+  grantCosmetic: z.object({
+    type: z.enum(["coin", "cardBack", "avatar", "skin", "playmat"]),
+    itemId: z.string().trim().min(1).max(100),
+  }),
+  ban: z.object({ banned: z.boolean(), reason: optionalReason }),
+  suspend: z.object({ hours: z.number().int().min(1).max(8760), reason: optionalReason }),
+  role: z.object({ role: z.enum(["user", "admin"]) }),
+};
+
+/** Parse req.body or throw a 400 (or 422 where the endpoint always used it) with the first issue. */
+function parseBody<S extends z.ZodTypeAny>(schema: S, body: unknown, status: 400 | 422 = 400): z.output<S> {
+  const res = schema.safeParse(body);
+  if (res.success) return res.data;
+  const issue = res.error.issues[0];
+  const field = issue?.path.length ? issue.path.join(".") : "body";
+  const message = `Datos invalidos (${field}): ${issue?.message ?? "formato incorrecto"}`;
+  throw status === 422 ? Errors.ValidationError(message) : Errors.BadRequest(message);
+}
+
 function preventSelfAction(req: Request, _res: Response, next: NextFunction) {
   if (req.user?.userId === req.params.userId) {
     throw Errors.Forbidden("No puedes realizar esta accion sobre tu propia cuenta");
@@ -175,14 +216,11 @@ router.post(
   preventSelfAction,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { amount, reason } = req.body;
-      if (amount === undefined || reason === undefined) {
-        throw Errors.BadRequest("amount y reason son requeridos");
-      }
+      const { amount, reason } = parseBody(adminBodies.adjustBalance, req.body);
       const result = await adminService.adjustCoins(
         req.params.userId,
-        Number(amount),
-        String(reason),
+        amount,
+        reason,
         req.user!.userId,
       );
       res.json(result);
@@ -203,14 +241,11 @@ router.post(
   preventSelfAction,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { amount, reason } = req.body;
-      if (amount === undefined || reason === undefined) {
-        throw Errors.BadRequest("amount y reason son requeridos");
-      }
+      const { amount, reason } = parseBody(adminBodies.adjustBalance, req.body);
       const result = await adminService.adjustCoupons(
         req.params.userId,
-        Number(amount),
-        String(reason),
+        amount,
+        reason,
         req.user!.userId,
       );
       res.json(result);
@@ -231,14 +266,11 @@ router.post(
   preventSelfAction,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { amount, reason } = req.body;
-      if (amount === undefined || reason === undefined) {
-        throw Errors.BadRequest("amount y reason son requeridos");
-      }
+      const { amount, reason } = parseBody(adminBodies.adjustBalance, req.body);
       const result = await adminService.adjustRareCandy(
         req.params.userId,
-        Number(amount),
-        String(reason),
+        amount,
+        reason,
         req.user!.userId,
       );
       res.json(result);
@@ -263,10 +295,7 @@ router.post(
   preventSelfAction,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { cards } = req.body;
-      if (!Array.isArray(cards) || cards.length === 0) {
-        throw Errors.BadRequest("cards debe ser un array no vacio");
-      }
+      const { cards } = parseBody(adminBodies.adjustCards, req.body);
       const result = await adminService.adjustCards(
         req.params.userId,
         cards,
@@ -294,14 +323,11 @@ router.post(
   preventSelfAction,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { field, amount } = req.body;
-      if (!field || amount === undefined) {
-        throw Errors.BadRequest("field y amount son requeridos");
-      }
+      const { field, amount } = parseBody(adminBodies.adjustStats, req.body);
       const result = await adminService.adjustStats(
         req.params.userId,
-        String(field),
-        Number(amount),
+        field,
+        amount,
         req.user!.userId,
       );
       res.json(result);
@@ -326,19 +352,12 @@ router.post(
   preventSelfAction,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { type, itemId } = req.body;
-      if (!type || !itemId) {
-        throw Errors.BadRequest("type y itemId son requeridos");
-      }
-      const validTypes = ["coin", "cardBack", "avatar", "skin", "playmat"];
-      if (!validTypes.includes(type)) {
-        throw Errors.BadRequest(`type debe ser uno de: ${validTypes.join(", ")}`);
-      }
+      const { type, itemId } = parseBody(adminBodies.grantCosmetic, req.body);
       const result = await adminService.grantCosmetic(
         req.user!.userId,
         req.params.userId,
         type,
-        String(itemId),
+        itemId,
       );
       res.json(result);
     } catch (err) {
@@ -362,10 +381,7 @@ router.patch(
   preventSelfAction,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { banned, reason } = req.body;
-      if (typeof banned !== "boolean") {
-        throw Errors.ValidationError("El campo 'banned' es requerido (true/false)");
-      }
+      const { banned, reason } = parseBody(adminBodies.ban, req.body, 422);
       const result = await adminService.toggleUserBan(req.params.userId, banned, reason);
       res.json(result);
     } catch (err) {
@@ -385,12 +401,8 @@ router.post(
   preventSelfAction,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { hours, reason } = req.body;
-      const h = Number(hours);
-      if (!h || h < 1 || h > 8760) {
-        throw Errors.ValidationError("Las horas deben estar entre 1 y 8760 (1 anio)");
-      }
-      const result = await adminService.suspendUser(req.params.userId, h, reason);
+      const { hours, reason } = parseBody(adminBodies.suspend, req.body, 422);
+      const result = await adminService.suspendUser(req.params.userId, hours, reason);
       res.json(result);
     } catch (err) {
       next(err);
@@ -463,8 +475,9 @@ router.delete(
       roomManager.forceDeleteRoom(roomId);
 
       // Notify players that the room was closed by an admin
+      const io = getIo();
       for (const socketId of socketIds) {
-        io.to(socketId).emit("gameClosed", {
+        io?.to(socketId).emit("gameClosed", {
           reason: "Mesa cerrada por un administrador",
         });
       }
@@ -491,10 +504,7 @@ router.patch(
   preventSelfAction,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { role } = req.body;
-      if (!role || (role !== "user" && role !== "admin")) {
-        throw Errors.BadRequest("role debe ser 'user' o 'admin'");
-      }
+      const { role } = parseBody(adminBodies.role, req.body);
       const result = await adminService.setUserRole(req.params.userId, role);
       res.json(result);
     } catch (err) {
