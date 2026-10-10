@@ -350,6 +350,16 @@ describe.each(["p1", "p2"] as const)("Fossil in multiplayer as %s", (actor) => {
     expect(t.mine().isPlayerTurn).toBe(false);
   });
 
+  it("a prize taken off-turn after a mid-turn Knock Out (Buzzap) doesn't end the turn", async () => {
+    const t = setupGame(actor, { myBench: [inPlay(cardAs("Electrode", "electrode"))] });
+    const res = await t.act("usePower", { pokemonId: "electrode", selections: [["lightning"], ["my-active"]] });
+    expect(res.success, res.error).toBe(true);
+    expect(t.mine().opponentCanTakePrize).toBe(true);
+    expect((await t.actAs(opp, "takePrize", { prizeIndex: 0 })).success).toBe(true);
+    expect(t.mine().isPlayerTurn).toBe(true);
+    expect(t.mine().turnNumber).toBe(5);
+  });
+
   it("a Knock Out in the between-turns checkup: prize, promotion, then the turn passes once", async () => {
     // The actor's own Active dies from Poison after endTurn: the opponent takes a prize, the
     // actor promotes, and only then the opponent's turn starts (endTurn of the actor's side)

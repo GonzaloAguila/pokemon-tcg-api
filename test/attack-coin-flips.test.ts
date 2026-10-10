@@ -1,5 +1,5 @@
 /**
- * Multiplayer attacks with coin flips: the server rolls exactly getAttackCoinFlipCount coins,
+ * Multiplayer attacks with coin flips: the server rolls exactly the coins of getAttackCoinPlan,
  * broadcasts them (coinFlipInfo → showCoinFlip) and the engine resolves every coin effect.
  * Each scenario runs for both players: P2 acts on a swapped copy of the state.
  */
