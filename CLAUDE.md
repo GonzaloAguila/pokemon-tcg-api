@@ -1,319 +1,81 @@
-# CLAUDE.md
+# CLAUDE.md — pokemon-tcg-api
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Backend for **Nostalgic TCG** (browser Pokémon TCG, Base Set + Jungle). Express + Socket.io + Prisma/PostgreSQL. Serves REST for accounts/economy/collection and runs authoritative multiplayer games and drafts over Socket.io.
 
-## Project Overview
+## Related repos (all siblings under `D:/Proyectos/`)
 
-**Pokemon TCG API** - Backend service for Pokemon Trading Card Game with real-time multiplayer.
+| Repo | Role |
+|------|------|
+| `pokemon-tcg-game-core` | Game engine. Consumed here via `"file:../pokemon-tcg-game-core"` — this API runs whatever is checked out/built there, NOT a published version. |
+| `pokemon-tcg` | Next.js frontend (Vercel). Talks to this API via `NEXT_PUBLIC_API_URL`. Holds the cross-repo orchestration notes and the VPS deploy skill (`.claude/skills/api-deploy/`). |
+| `pokemon-tcg-landing` | Astro landing; only uses `POST /api/waitlist`. |
 
-| Aspect | Details |
-|--------|---------|
-| Stack | Express.js + Socket.io + PostgreSQL + Prisma |
-| Game Logic | `@poke-tcg/game-core` (local package at `../pokemon-tcg-game-core`) |
-| Auth | OAuth (Google/Discord) - planned |
-| Deploy | Railway |
-| Scale | <100 CCU initially |
+Change order when work spans repos: game-core (build) → API → frontend.
 
 ## Commands
 
 ```bash
-npm run dev           # Development with hot reload
-npm run build         # Compile TypeScript
-npm run start         # Production server
-npm run db:push       # Push Prisma schema
-npm run db:migrate    # Create migration
-npm run db:studio     # Prisma GUI
-npm run lint          # ESLint
-npm run test          # Vitest (all tests)
-npm run test <file>   # Run single test file
-npx tsc --noEmit      # Type check only
+npm run dev          # tsx watch, port 3001
+npm run build        # tsc → dist/
+npx tsc --noEmit     # type check (the only working static check today)
+npm run db:push      # apply prisma/schema.prisma (no migrations folder exists)
+npm run db:generate  # regenerate Prisma client after schema edits
+npx tsx prisma/seed.ts   # superadmin seed
 ```
 
-## Project Structure
+`npm run lint` and `npm run test` are declared but **do not work**: eslint isn't installed/configured and there are no test files.
 
-```
-src/
-├── index.ts                 # Express + Socket.io entry
-├── modules/                 # REST API feature modules
-│   ├── catalog/             # Cards, sets, theme decks
-│   └── boosters/            # Pack opening + daily limits
-├── socket/                  # Real-time game logic
-│   ├── index.ts             # Socket exports
-│   ├── handlers.ts          # Socket event handlers
-│   ├── rooms.ts             # GameRoomManager (in-memory)
-│   └── state-masking.ts     # Perspective swap + state masking
-└── middleware/
-    └── error-handler.ts     # AppError class
+## Layout
 
-.claude/
-├── skills/                  # Claude Code skills
-│   ├── add-module.md        # How to add new modules
-│   ├── game-server.md       # Socket.io patterns
-│   └── deployment.md        # Railway deployment
-└── settings.local.json      # Allowed commands
-```
+- `src/index.ts` — Express app, router registration, Socket.io server, chat cleanup interval.
+- `src/modules/<feature>/` — `*.controller.ts` (Router) + `*.service.ts` (+ `*.types.ts`, `index.ts` barrel). Modules: achievements, admin, auth (local + Google + Discord OAuth), battle-pass, boosters, bug-report, catalog, chat, decks, market, messaging, users (+ rewards), waitlist, wheel. `game/` and `matchmaking/` are empty.
+- `src/socket/` — `handlers.ts` (socket auth + event wiring), `rooms.ts` (`GameRoomManager`, in-memory games, `executeAction` switch), `draft-handlers.ts` / `draft-rooms.ts`, `state-masking.ts` (perspective swap for player 2).
+- `src/middleware/` — `auth.ts` (`requireAuth`, `requireRole`, `requirePermission`, `optionalAuth`, `checkUserStatus`), `error-handler.ts` (`AppError`, `Errors.*`), `rate-limit.ts` (auth routes only).
+- `src/lib/` — `prisma.ts`, `jwt.ts`, `oauth.ts`, `password.ts`, `email.ts` (Resend).
+- `prisma/schema.prisma` — 24 models. `Match` / `GameRoom` exist but nothing writes to them.
 
-## REST API Reference
+## Conventions
 
-Base: `http://localhost:3001/api`
+- Validate request bodies with zod in the controller; throw `Errors.BadRequest/NotFound/Forbidden/...` (instances of `AppError`) so `errorHandler` maps the status. Plain `Error` objects become 500s.
+- Protect routes with `requireAuth` then `requireRole(...)` / `requirePermission(...)`. Superadmin bypasses permission checks.
+- Socket identity: always derive the user from the verified handshake JWT via `getAuthUserId(socket)` (`handlers.ts`); never trust a `userId` in the payload.
+- Any balance change must go through `users.service` (`addCoins`, `spendCoins`, …) so a `Transaction` row is written. Amounts must be validated positive integers before reaching it.
+- User-facing strings (errors, event log messages) are Spanish; code and comments English.
+- Card IDs: `{set-slug}-{3-digit-number}-{slug-name}`, e.g. `base-set-025-pikachu`, `jungle-002-electrode` (`Nidoran♀` → `nidoranf`, `Mr. Mime` → `mr-mime`).
 
-### Catalog Module
+## Multiplayer model
 
-```
-GET  /sets                    → { sets: SetInfo[] }
-GET  /sets/:setId             → SetInfo
-GET  /sets/:setId/cards       → { setId, total, cards: Card[] }
-     ?kind=pokemon|trainer|energy
-     ?type=fire|water|grass|lightning|psychic|fighting|colorless
-     ?rarity=common|uncommon|rare|rare-holo
-     ?stage=basic|stage-1|stage-2
-     ?search=<name>
-GET  /cards/:cardId           → Card
-GET  /cards/:cardId/image     → { cardId, imageUrl }
-GET  /decks                   → { decks: DeckListItem[] }
-GET  /decks/:deckId           → Deck
-GET  /decks/:deckId/resolved  → ResolvedDeck
-```
+- Game and draft rooms live in memory (Maps). A restart/PM2 reload drops every live game; reconnection only works within the same process. Single process only (no Redis adapter).
+- Server keeps state from player 1's perspective; player 2's actions run on a swapped copy and are swapped back. There are two swap implementations (`state-masking.ts` and a local one in `rooms.ts`) and they differ.
+- Coin flips are rolled server-side and sent via `showCoinFlip`; the client animates predetermined results.
+- Many rules (coin-flip effects, confusion, Metronome/Conversion flows) are re-implemented in `rooms.ts` instead of living in game-core. Prefer moving logic into game-core over adding more here.
 
-### Boosters Module
+## Environment
 
-```
-GET  /packs                      → { packs: BoosterPackListItem[] }
-GET  /packs/:packId              → BoosterPackType
-POST /packs                      → Create pack (admin)
-PUT  /packs/:packId              → Update pack (admin)
-DELETE /packs/:packId            → Delete pack (admin)
-POST /packs/:packId/open         → Open pack {userId} → PackOpeningResult
-POST /packs/:packId/preview      → Preview (no limit)
-GET  /packs/daily-limit/:userId  → DailyLimitStatus
-```
+See `.env.example`. Also used: `COOKIE_DOMAIN` (prod: `.nostalgic-tcg.online`, needed so Chrome sends the refresh cookie across subdomains). `CORS_ORIGIN` is comma-separated and must include the frontend and landing origins. `JWT_SECRET` is required in production (falls back to a dev secret otherwise).
 
-**Pack IDs:** `base-set-booster`, `base-set-theme-pack`
-**Daily limit:** 5 packs per user (resets at midnight)
+## Deploy
 
-## Socket.io Events
+Production: Hostinger VPS, `api.nostalgic-tcg.online`, Nginx (TLS via Certbot) → `127.0.0.1:3001`, PM2 process `pokemon-tcg-api`, Postgres on the same box. Code at `/var/www/pokemon-tcg-api`, engine at `/var/www/pokemon-tcg-game-core`. Claude has no SSH access; give the user commands to run. Full pipeline: frontend repo `.claude/skills/api-deploy/SKILL.md`.
 
-Connection: `http://localhost:3001`
+`file:` deps are copied at install time: after rebuilding game-core run `rm -rf node_modules/@gonzaloaguila && npm install`.
 
-### Client → Server
+## Admin data fixes
 
-| Event | Payload | Response Event |
-|-------|---------|----------------|
-| `getRooms` | `{}` | `roomList` |
-| `createRoom` | `{userId, deckId?}` | `roomCreated` |
-| `deleteRoom` | `{roomId}` | `roomDeleted` |
-| `joinRoom` | `{roomId, userId, deckId?}` | `roomJoined`, `gameStart` |
-| `leaveRoom` | `{roomId}` | `playerLeft` |
-| `ready` | `{roomId}` | `gameStart` |
-| `action` | `{roomId, action: PlayerAction}` | `gameState`, `actionResult` |
+For one-off grants (cards, currency) write a temporary `npx tsx` Prisma script, run it, then delete it. `userCard.upsert` with `update: { quantity }` *sets* the value; use `{ increment: n }` to add.
 
-### Server → Client
+## Known issues (as of 2026-10 review — verify before assuming fixed)
 
-| Event | Payload | When |
-|-------|---------|------|
-| `roomList` | `{rooms: Room[]}` | After `getRooms` |
-| `roomCreated` | `{roomId}` | Room created |
-| `roomJoined` | `{roomId, isPlayer1}` | Joined room |
-| `gameStart` | `{roomId, gameState, isPlayer1}` | Both players ready |
-| `gameState` | `{gameState}` | After any action |
-| `showCoinFlip` | `{attackName, results, count}` | Attack with coin flip |
-| `gameOver` | `{winner, reason}` | Game ended |
-| `error` | `{message}` | Any error |
+Security / economy:
+- `POST /market/buy-energy` does not validate `quantity`; a negative value increases the user's coins. Market endpoints have no zod.
+- `POST /wheel/claim` persists whatever prize the client sends (wheel and slots resolve prizes client-side).
+- `state-masking.ts` hides nothing: both clients (and spectators) receive the full hand, deck and prizes of both players.
+- Draft socket events trust `payload.userId` (admin check on `draft:create`, entry fee and identity on `draft:join`).
+- Discord OAuth ignores the `verified` flag and accounts are linked by email → account takeover risk. No OAuth `state` param.
+- `PATCH /users/:userId/permissions` only requires admin and has no self-check (privilege escalation).
+- Balance operations are read-then-write without atomic conditional updates; purchases aren't atomic with their grants.
+- No `app.set("trust proxy", 1)`: behind Nginx all clients share one IP for rate limiting. No limits on economy, chat or socket events.
+- Socket payloads are unvalidated casts; pending-choice actions (`deckSearch`, `forceSwitch`, …) don't check which player owns the pending state.
+- `prisma/seed.ts` (tracked) contains a plaintext superadmin password.
 
-### PlayerAction Types
-
-```typescript
-| attack          | { attackIndex: number }
-| endTurn         | {}
-| retreat         | { energyIdsToDiscard: string[], benchIndex: number }
-| playBasicToActive | { cardId: string }
-| playBasicToBench  | { cardId: string, benchIndex: number }
-| attachEnergy    | { cardId, pokemonId, isBench, benchIndex? }
-| evolve          | { cardId: string, targetIndex: number }
-| promote         | { benchIndex: number }
-| mulligan        | {}
-| playerReady     | {}
-| usePower        | { powerType, pokemonId, ...params }
-| playTrainer     | { cardId, trainerName, selections: string[][] }
-```
-
-## Core Patterns
-
-### Module Structure
-
-Each module follows:
-```
-modules/feature/
-├── feature.controller.ts   # Router with endpoints
-├── feature.service.ts      # Business logic (pure)
-├── feature.types.ts        # TypeScript interfaces
-└── index.ts                # Exports { featureRouter }
-```
-
-Register in `src/index.ts`:
-```typescript
-import { featureRouter } from './modules/feature/index.js';
-app.use('/api', featureRouter);
-```
-
-### Error Handling
-
-```typescript
-import { AppError, Errors } from './middleware/error-handler';
-
-throw new AppError('Custom message', 404);
-throw Errors.NotFound('Resource');
-throw Errors.BadRequest('Validation failed');
-throw Errors.Unauthorized();
-throw Errors.Forbidden();
-```
-
-### Perspective Swap (Multiplayer)
-
-Server stores GameState from Player 1's view. For Player 2:
-```typescript
-const executeForPlayer2 = (fn) => {
-  const swapped = swapPerspective(state);
-  const result = fn(swapped);
-  return swapPerspective(result);
-};
-```
-
-### Game Phases
-
-```typescript
-type GamePhase = "MULLIGAN" | "SETUP" | "PLAYING" | "GAME_OVER";
-```
-
-| Phase | Turn Validation | Allowed Actions |
-|-------|-----------------|-----------------|
-| MULLIGAN | Bypassed | `mulligan`, `playerReady`, `playBasicToActive` |
-| SETUP | Bypassed | `playBasicToActive`, `playBasicToBench`, `playerReady` |
-| PLAYING | Enforced | All actions |
-| GAME_OVER | N/A | None |
-
-### Using Game Core
-
-```typescript
-import {
-  // Game initialization
-  initializeMultiplayerGame, startGame, buildDeckFromEntries,
-
-  // Turn actions
-  executeAttack, endTurn, executeRetreat, doMulligan,
-
-  // Validation
-  canUseAttack, canRetreat, canEvolveInto,
-
-  // Trainers & Powers
-  playBill, playSwitch, attachEnergyWithRainDance, // etc.
-
-  // Catalog
-  baseSetCards, decks, getDeckById, resolveDeck,
-
-  // Type guards
-  isPokemonCard, isEnergyCard, isTrainerCard,
-} from '@poke-tcg/game-core';
-```
-
-## Environment Variables
-
-```env
-# Required
-DATABASE_URL=postgresql://user:pass@host:5432/db
-PORT=3001
-CORS_ORIGIN=http://localhost:3000
-
-# Future (OAuth)
-JWT_SECRET=random-secret-min-32-chars
-GOOGLE_CLIENT_ID=
-GOOGLE_CLIENT_SECRET=
-DISCORD_CLIENT_ID=
-DISCORD_CLIENT_SECRET=
-```
-
-## Skills
-
-Use `/skill <name>` for detailed guides:
-
-| Skill | Purpose |
-|-------|---------|
-| `add-module` | Create new feature module |
-| `game-server` | Socket.io and real-time patterns |
-| `deployment` | Deploy to Railway |
-
-## Key Notes
-
-1. **Server = Source of Truth** - Clients send actions, server validates and executes
-2. **Coin Flips Server-Side** - Prevents cheating, broadcast via `showCoinFlip`
-3. **In-Memory State** - Rooms/limits reset on restart (acceptable for MVP)
-4. **No Auth Yet** - Uses anonymous `userId` from client sessionStorage
-5. **Card ID Format** - `base-set-001-alakazam` (set-number-name, zero-padded)
-
-## Admin Operations
-
-### Add Cards to a User's Collection
-
-To add cards to a user, create and run a temporary Prisma script. The user will provide:
-- **Email or User ID** — to identify the account
-- **Card ID** — format: `{set}-{number}-{name}` (e.g., `jungle-002-electrode`, `base-set-025-pikachu`)
-- **Quantity** — how many copies to set
-
-**Card ID format:** `{set-slug}-{zero-padded-number}-{lowercase-name}`
-- Set slugs: `base-set`, `jungle`
-- Number: 3-digit zero-padded (e.g., `002`, `035`, `102`)
-- Name: lowercase, spaces→hyphens, accents stripped, special chars removed (`Nidoran♀`→`nidoranf`, `Mr. Mime`→`mr-mime`)
-
-**Script pattern:**
-```typescript
-// tmp-seed.ts — run with: npx tsx tmp-seed.ts
-import { PrismaClient } from "@prisma/client";
-const prisma = new PrismaClient();
-
-async function main() {
-  // Find user by email or ID
-  const user = await prisma.user.findUnique({
-    where: { email: "user@example.com" }, // or { id: "uuid-here" }
-    select: { id: true, username: true },
-  });
-  if (!user) { console.error("User not found"); process.exit(1); }
-  console.log(`User: ${user.username} (${user.id})`);
-
-  // Cards to add/set
-  const cards = [
-    { cardDefId: "jungle-002-electrode", quantity: 4 },
-    { cardDefId: "jungle-035-exeggutor", quantity: 4 },
-  ];
-
-  for (const card of cards) {
-    const result = await prisma.userCard.upsert({
-      where: { userId_cardDefId: { userId: user.id, cardDefId: card.cardDefId } },
-      update: { quantity: card.quantity },
-      create: { userId: user.id, cardDefId: card.cardDefId, quantity: card.quantity },
-    });
-    console.log(`  ${card.cardDefId}: qty=${result.quantity}`);
-  }
-
-  await prisma.$disconnect();
-}
-main();
-```
-
-**Important:** `upsert` with `update: { quantity }` **sets** the quantity (doesn't add). To increment instead, use `update: { quantity: { increment: N } }`. Delete the temp file after running.
-
-### Superadmin Seed
-
-A seed script at `prisma/seed.ts` creates the superadmin user. Run with:
-```bash
-npx tsx prisma/seed.ts
-```
-
-The `SUPERADMIN_EMAIL` env var also auto-assigns superadmin role on registration.
-
-## TODO
-
-- [x] ~~Implement state masking (hide opponent hand/deck)~~ - Done via `maskGameStateForPlayer`
-- [x] ~~Add OAuth authentication~~ - Google + Discord OAuth
-- [ ] Persist game state for reconnection
-- [x] ~~Add rate limiting~~ - Login, register, password reset
-- [ ] Add request logging
+Other: no migrations (db push only), `Match` never persisted, `betAmount` never charged, `console.*` logging only, `executeAction` in `rooms.ts` is ~970 lines.
