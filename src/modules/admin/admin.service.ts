@@ -181,6 +181,7 @@ export async function getUserDetail(userId: string) {
       description: true,
       amount: true,
       balanceAfter: true,
+      currency: true,
       createdAt: true,
     },
   });
@@ -698,6 +699,7 @@ export async function getUserTransactions(
         description: true,
         amount: true,
         balanceAfter: true,
+        currency: true,
         createdAt: true,
       },
     }),

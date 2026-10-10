@@ -1,166 +1,89 @@
 import { prisma } from "../../lib/prisma.js";
 import * as usersService from "../users/users.service.js";
-import * as boosterService from "../boosters/boosters.service.js";
 import type { PackOpeningResult } from "../boosters/boosters.types.js";
+import {
+  CardRarityPool,
+  grantPrize,
+  pickWeighted,
+  resolveAvatar,
+  resolveCard,
+  resolveCardBack,
+  resolveCoins,
+  resolveCollectibleCoin,
+  resolveRandomOverlay,
+  type ResolvedPrize,
+} from "../prizes/prizes.js";
+import { WHEEL_SEGMENTS, WHEEL_SPIN_COST, type WheelSegment } from "./wheel.config.js";
 
-const SPIN_COST = 100; // coins
-
-// ---------------------------------------------------------------------------
-// Prize type — mirrors frontend ResolvedPrize (only fields needed server-side)
-// ---------------------------------------------------------------------------
-
-interface ResolvedPrize {
-  type: string;
-  amount?: number;        // coins
-  cardDefId?: string;     // card
-  overlayId?: string;     // overlay
-  skinId?: string;        // overlay (skin record ID)
-  cardBackId?: string;    // card_back
-  coinId?: string;        // collectible_coin
-  avatarId?: string;      // avatar
-  playmatId?: string;     // playmat
-  bonusCoins?: number;    // spin_again
-  prizes?: ResolvedPrize[]; // jackpot sub-prizes
-}
-
-// ---------------------------------------------------------------------------
-// Pay for a wheel spin (deduct coins)
-// ---------------------------------------------------------------------------
-
-export async function payWheelSpin(userId: string) {
-  return usersService.spendCoins(
-    userId,
-    SPIN_COST,
-    "wheel_spin",
-    "Giro de ruleta",
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Claim a wheel prize — persist to user's collection
-// ---------------------------------------------------------------------------
-
-export interface ClaimResult {
-  success: boolean;
+export interface WheelSpinResult {
+  segmentId: string;
+  prize: ResolvedPrize;
   packResult?: PackOpeningResult;
+  usedFreeSpin: boolean;
+  freeSpins: number;
+  balances: { coins: number; coupons: number; rareCandy: number };
 }
 
-export async function claimWheelPrize(userId: string, prize: ResolvedPrize): Promise<ClaimResult> {
-  switch (prize.type) {
-    case "coins": {
-      if (!prize.amount) break;
-      await usersService.addCoins(
-        userId,
-        prize.amount,
-        "wheel_spin",
-        `Ruleta: +${prize.amount} monedas`,
-      );
-      break;
-    }
-
-    case "card": {
-      if (!prize.cardDefId) break;
-      await prisma.userCard.upsert({
-        where: { userId_cardDefId: { userId, cardDefId: prize.cardDefId } },
-        update: { quantity: { increment: 1 } },
-        create: { userId, cardDefId: prize.cardDefId, quantity: 1 },
-      });
-      break;
-    }
-
-    case "overlay": {
-      if (!prize.skinId) break;
-      await prisma.userCardSkin.upsert({
-        where: { userId_skinId: { userId, skinId: prize.skinId } },
-        update: {},
-        create: { userId, skinId: prize.skinId },
-      });
-      break;
-    }
-
-    case "card_back": {
-      if (!prize.cardBackId) break;
-      await prisma.userCardBack.upsert({
-        where: { userId_cardBackId: { userId, cardBackId: prize.cardBackId } },
-        update: {},
-        create: { userId, cardBackId: prize.cardBackId },
-      });
-      break;
-    }
-
-    case "playmat": {
-      if (!prize.playmatId) break;
-      await prisma.userPlaymat.upsert({
-        where: { userId_playmatId: { userId, playmatId: prize.playmatId } },
-        update: {},
-        create: { userId, playmatId: prize.playmatId },
-      });
-      break;
-    }
-
-    case "collectible_coin": {
-      if (!prize.coinId) break;
-      await prisma.userCoin.upsert({
-        where: { userId_coinId: { userId, coinId: prize.coinId } },
-        update: {},
-        create: { userId, coinId: prize.coinId },
-      });
-      break;
-    }
-
-    case "avatar": {
-      if (!prize.avatarId) break;
-      await prisma.userAvatar.upsert({
-        where: { userId_avatarId: { userId, avatarId: prize.avatarId } },
-        update: {},
-        create: { userId, avatarId: prize.avatarId },
-      });
-      break;
-    }
-
-    case "free_pack": {
-      // Pick a random booster pack (50/50 Base Set or Jungle)
-      const packId = Math.random() < 0.5 ? "base-set-booster" : "jungle-booster";
-
-      // Generate cards from the pack
-      const packResult = boosterService.openPack(packId);
-
-      // Persist cards to the user's collection
-      await prisma.$transaction(async (tx) => {
-        for (const pulled of packResult.cards) {
-          await tx.userCard.upsert({
-            where: { userId_cardDefId: { userId, cardDefId: pulled.card.id } },
-            update: { quantity: { increment: 1 } },
-            create: { userId, cardDefId: pulled.card.id, quantity: 1 },
-          });
-        }
-      });
-
-      return { success: true, packResult };
-    }
-
-    case "jackpot": {
-      if (!prize.prizes) break;
-      // Jackpot: 1 rare candy + 100 coupons + sub-prizes
-      await usersService.addRareCandy(userId, 1, "wheel_spin", "Ruleta: Jackpot — Rare Candy");
-      await usersService.addCoupons(userId, 100, "wheel_spin", "Ruleta: Jackpot — 100 cupones");
-      let jackpotPackResult: PackOpeningResult | undefined;
-      for (const subPrize of prize.prizes) {
-        const subResult = await claimWheelPrize(userId, subPrize);
-        if (subResult.packResult) {
-          jackpotPackResult = subResult.packResult;
-        }
-      }
-      if (jackpotPackResult) {
-        return { success: true, packResult: jackpotPackResult };
-      }
-      break;
-    }
-
-    // "nothing", "spin_again" — no persistent reward
-    default:
-      break;
+function resolveSegmentPrize(segment: WheelSegment): ResolvedPrize {
+  const { payload } = segment;
+  switch (payload.type) {
+    case "card":
+      return resolveCard(payload.rarityPool);
+    case "coins":
+      return resolveCoins(payload.amount);
+    case "card_back":
+      return resolveCardBack();
+    case "collectible_coin":
+      return resolveCollectibleCoin();
+    case "avatar":
+      return resolveAvatar();
+    case "free_pack":
+      return { type: "free_pack" };
+    case "spin_again":
+      return { type: "spin_again", bonusCoins: payload.bonusCoins };
+    case "jackpot":
+      // 1000 coins + a Rare Holo card + a random variant (plus candy/coupons in grantPrize)
+      return { type: "jackpot", prizes: [resolveCoins(1000), resolveCard(CardRarityPool.RareHolo), resolveRandomOverlay()] };
+    case "nothing":
+      return { type: "nothing" };
   }
+}
 
-  return { success: true };
+/**
+ * One wheel spin: consume a free spin or charge coins, roll the segment server-side,
+ * and grant the prize — all in one transaction.
+ */
+export async function spinWheel(userId: string): Promise<WheelSpinResult> {
+  const segment = pickWeighted(WHEEL_SEGMENTS.map((s) => ({ weight: s.weight, value: s })));
+  const prize = resolveSegmentPrize(segment);
+
+  return prisma.$transaction(async (tx) => {
+    const { count: usedFree } = await tx.user.updateMany({
+      where: { id: userId, freeWheelSpins: { gt: 0 } },
+      data: { freeWheelSpins: { decrement: 1 } },
+    });
+    const usedFreeSpin = usedFree === 1;
+    if (!usedFreeSpin) {
+      await usersService.spendCoins(userId, WHEEL_SPIN_COST, "wheel_spin", "Giro de ruleta", tx);
+    }
+
+    const { packResult } = await grantPrize(tx, userId, prize, { type: "wheel_spin", label: "Ruleta" });
+    if (prize.type === "spin_again") {
+      await tx.user.update({ where: { id: userId }, data: { freeWheelSpins: { increment: 1 } } });
+    }
+
+    const user = await tx.user.findUniqueOrThrow({
+      where: { id: userId },
+      select: { coins: true, coupons: true, rareCandy: true, freeWheelSpins: true },
+    });
+
+    return {
+      segmentId: segment.id,
+      prize,
+      packResult,
+      usedFreeSpin,
+      freeSpins: user.freeWheelSpins,
+      balances: { coins: user.coins, coupons: user.coupons, rareCandy: user.rareCandy },
+    };
+  });
 }

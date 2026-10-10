@@ -82,6 +82,7 @@ model User {
   // Daily rewards — server-side timestamps (UTC)
   lastDailyCoinsAt DateTime?
   lastWheelSpinAt  DateTime?
+  freeWheelSpins   Int       @default(0) // earned from "GIRO" segments; consumed before charging coins
   lastSlotSpinAt   DateTime?
 
   // Permissions / Restrictions (JSON array of permission strings)

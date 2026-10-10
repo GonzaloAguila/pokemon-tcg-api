@@ -16,6 +16,7 @@ import { decksRouter } from "./modules/decks/index.js";
 import { battlePassRouter } from "./modules/battle-pass/index.js";
 import { marketRouter } from "./modules/market/index.js";
 import { wheelRouter } from "./modules/wheel/index.js";
+import { slotsRouter } from "./modules/slots/index.js";
 import { achievementsRouter } from "./modules/achievements/index.js";
 import { chatRouter } from "./modules/chat/index.js";
 import { messagingRouter } from "./modules/messaging/index.js";
@@ -65,6 +66,7 @@ app.use(
   [
     "/api/market",
     "/api/wheel",
+    "/api/slots",
     "/api/packs",
     "/api/battle-pass",
     "/api/achievements",
@@ -85,6 +87,7 @@ app.use("/api/users", decksRouter);
 app.use("/api", battlePassRouter);
 app.use("/api", marketRouter);
 app.use("/api", wheelRouter);
+app.use("/api", slotsRouter);
 app.use("/api", achievementsRouter);
 app.use("/api", chatRouter);
 app.use("/api", messagingRouter);

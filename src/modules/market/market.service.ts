@@ -6,13 +6,19 @@ import {
   isTrainerCard,
   CardRarity,
   EnergyType,
-  getCardImageUrl,
 } from "@gonzaloaguila/game-core";
 import type { Card } from "@gonzaloaguila/game-core";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../../lib/prisma.js";
 import { Errors } from "../../middleware/error-handler.js";
 import * as usersService from "../users/users.service.js";
+import {
+  AVAILABLE_AVATARS,
+  AVAILABLE_CARD_BACKS,
+  AVAILABLE_COINS,
+  AVAILABLE_PLAYMATS,
+  MARKET_VARIANTS,
+} from "../prizes/catalog.js";
 import type {
   DailyCardOffer,
   DailyCosmeticOffer,
@@ -106,74 +112,6 @@ function seededPick<T>(arr: T[], seed: number, offset: number): T {
 }
 
 // ---------------------------------------------------------------------------
-// Available cosmetics (hardcoded list — extend as new items are added)
-// ---------------------------------------------------------------------------
-
-const AVAILABLE_COINS = [
-  { itemId: "charizard", name: "Charizard", imageUrl: "/coins/TCGP_Coin_Charizard.png" },
-  { itemId: "lucario", name: "Lucario", imageUrl: "/coins/TCGP_Coin_Lucario.png" },
-  { itemId: "venusaur", name: "Venusaur", imageUrl: "/coins/TCGP_Coin_Venusaur.png" },
-  { itemId: "vulpix-alola", name: "Vulpix Alola", imageUrl: "/coins/vulpix-alola-coin.png" },
-];
-
-const AVAILABLE_CARD_BACKS = [
-  { itemId: "haymaker", name: "Haymaker", imageUrl: "/card-backs/haymakerBKC.jpeg" },
-  { itemId: "draw", name: "Draw", imageUrl: "/card-backs/card-back-draw.jpg" },
-  { itemId: "pikachu", name: "Pikachu", imageUrl: "/card-backs/card-back-pikachu.jpg" },
-];
-
-const AVAILABLE_AVATARS = [
-  { itemId: "bellsprout", name: "Bellsprout", imageUrl: "/avatars/darius-dan/bellsprout.png" },
-  { itemId: "pikachu", name: "Pikachu", imageUrl: "/avatars/darius-dan/pikachu.png" },
-  { itemId: "poliwhirl", name: "Poliwhirl", imageUrl: "/avatars/darius-dan/poliwhirl.png" },
-  { itemId: "sandshrew", name: "Sandshrew", imageUrl: "/avatars/darius-dan/sandshew.png" },
-  { itemId: "snorlax", name: "Snorlax", imageUrl: "/avatars/darius-dan/snorlax.png" },
-  { itemId: "voltorb", name: "Voltorb", imageUrl: "/avatars/darius-dan/voltorb.png" },
-];
-
-// Variants — dynamically generated from all Rare Holo Pokemon × all overlays
-const OVERLAY_DEFS = [
-  { id: "holo-sparkle", label: "Holo" },
-  { id: "sepia", label: "Sepia" },
-  { id: "rainbow", label: "Arcoíris" },
-  { id: "negative", label: "Glitch" },
-  { id: "frost", label: "Hielo" },
-  { id: "galaxy", label: "Galaxia" },
-  { id: "gold", label: "Dorado" },
-  { id: "crystal", label: "Cristal" },
-  { id: "neon", label: "Neón" },
-  { id: "prism", label: "Prisma" },
-  { id: "fire", label: "Ígneo" },
-];
-
-// Only these overlays are purchasable in the market
-const MARKET_OVERLAY_IDS = ["holo-sparkle", "sepia", "rainbow"];
-
-const AVAILABLE_VARIANTS = rareCards.flatMap((card) => {
-  const pokeName = isPokemonCard(card) ? card.name : card.id;
-  return OVERLAY_DEFS
-    .filter((overlay) => MARKET_OVERLAY_IDS.includes(overlay.id))
-    .map((overlay) => {
-      // Build a slug: "alakazam-holo-sparkle", "charizard-rainbow", etc.
-      const slug = `${pokeName.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${overlay.id}`;
-      return {
-        itemId: slug,
-        name: `${pokeName} ${overlay.label}`,
-        cardDefId: card.id,
-        overlayId: overlay.id,
-        imageUrl: getCardImageUrl(card),
-      };
-    });
-});
-
-// Playmats — board backgrounds
-const AVAILABLE_PLAYMATS = [
-  { itemId: "eevee-evos", name: "Eevee Evoluciones", imageUrl: "/bg/bg-eevee-evos.jpg" },
-  { itemId: "street", name: "Calle Pokémon", imageUrl: "/bg/bg-street.png" },
-  { itemId: "stadium", name: "Estadio", imageUrl: "/bg/bg2.jpg" },
-];
-
-// ---------------------------------------------------------------------------
 // Get daily offers (with user-specific purchase/ownership status)
 // ---------------------------------------------------------------------------
 
@@ -230,7 +168,7 @@ export async function getDailyOffers(userId?: string): Promise<DailyOffersRespon
   const dailyCoin = seededPick(AVAILABLE_COINS, seed, 10);
   const dailyCardBack = seededPick(AVAILABLE_CARD_BACKS, seed, 11);
   const dailyAvatar = seededPick(AVAILABLE_AVATARS, seed, 12);
-  const dailyVariant = seededPick(AVAILABLE_VARIANTS, seed, 13);
+  const dailyVariant = seededPick(MARKET_VARIANTS, seed, 13);
   const dailyPlaymat = seededPick(AVAILABLE_PLAYMATS, seed, 14);
 
   const cosmeticOffers: DailyCosmeticOffer[] = [

@@ -19,6 +19,7 @@ const fullProfileSelect = {
   coins: true,
   coupons: true,
   rareCandy: true,
+  freeWheelSpins: true,
   level: true,
   experience: true,
   stats: {
@@ -408,6 +409,7 @@ export async function getUserTransactions(
       description: true,
       amount: true,
       balanceAfter: true,
+      currency: true,
       createdAt: true,
     },
   });

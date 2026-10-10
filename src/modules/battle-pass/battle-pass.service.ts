@@ -113,14 +113,11 @@ async function getOrCreateMonthlyPass(year: number, month: number) {
 // =============================================================================
 
 async function getOrCreateEnrollment(userId: string, passId: string) {
-  const existing = await prisma.userBattlePass.findUnique({
+  // upsert so concurrent first visits don't race on the unique (userId, battlePassId)
+  return prisma.userBattlePass.upsert({
     where: { userId_battlePassId: { userId, battlePassId: passId } },
-    include: { claimedRewards: true },
-  });
-  if (existing) return existing;
-
-  return prisma.userBattlePass.create({
-    data: { userId, battlePassId: passId },
+    update: {},
+    create: { userId, battlePassId: passId },
     include: { claimedRewards: true },
   });
 }
