@@ -52,7 +52,9 @@ npm test             # vitest integration suite (needs the ptcg-test-db containe
 - Game and draft rooms live in memory (Maps). A restart/PM2 reload drops every live game; reconnection only works within the same process. Single process only (no Redis adapter).
 - Server keeps state from player 1's perspective; player 2's actions run on a swapped copy and are swapped back. There are two swap implementations (`state-masking.ts` and a local one in `rooms.ts`) and they differ.
 - Every emitted state goes through `maskGameStateForPlayer(state, "player1" | "player2" | "spectator")`, which hides the opponent's hand/deck/prizes (same-length `{ id, hidden: true }` placeholders). Never emit `room.gameState` raw.
-- Coin flips are rolled server-side and sent via `showCoinFlip`; the client animates predetermined results.
+- Coin flips are rolled server-side and sent via `showCoinFlip`; the client animates predetermined results. Coins the client must show BEFORE acting (Poké Ball, Heal) come from `requestCoinFlip` (ack); the action consumes the stored result and ignores any client `coinResult`. Same-turn repeat requests return the same result (no re-rolls).
+- Confusion is resolved in the `attack` action: server flips, `resolveConfusionFlip` (game-core) applies tails.
+- Decks used in rooms must pass `checkDeckPlayable` (owned by the player, rules + collection ownership; basic energy is unlimited).
 - Many rules (coin-flip effects, confusion, Metronome/Conversion flows) are re-implemented in `rooms.ts` instead of living in game-core. Prefer moving logic into game-core over adding more here.
 
 ## Environment
