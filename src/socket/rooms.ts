@@ -7,6 +7,7 @@
 
 import { randomInt } from "crypto";
 import {
+  resolveConfusionFlip,
   type GameState,
   type GameCard,
   type PokemonInPlay,
@@ -888,12 +889,35 @@ export class GameRoomManager {
       }
     };
 
+    // Coin shown to both players for this action when it didn't come from attack effects (e.g. confusion)
+    let actionCoinFlipInfo: { attackName: string; results: Array<"heads" | "tails"> } | undefined;
+
     try {
       let newState = room.gameState;
 
       switch (action.type) {
         case "attack": {
           const attackIndex = action.payload.attackIndex as number;
+
+          // ── Confusion: the server flips (never the client). Tails: the attack fails, the
+          // engine applies the self-damage / KO / end of turn. Heads: the attack proceeds.
+          const actingActive = isPlayer1 ? room.gameState!.playerActivePokemon : room.gameState!.opponentActivePokemon;
+          if (actingActive?.statusConditions?.includes("confused")) {
+            const confusionCoin = serverCoin();
+            let canAttack = true as boolean;
+            usedExecuteForPlayer = true;
+            const afterFlip = executeForPlayer((state) => {
+              const resolved = resolveConfusionFlip(state, confusionCoin === "heads");
+              canAttack = resolved.canAttack;
+              return resolved.state;
+            });
+            if (!canAttack) {
+              newState = afterFlip;
+              actionCoinFlipInfo = { attackName: "Confusión", results: [confusionCoin] };
+              break;
+            }
+            room.gameState = afterFlip; // heads: continue the attack from the flipped state
+          }
 
           // ── Porygon Conversion 1 / Conversion 2 ──
           const conversionType = action.payload.conversionType as EnergyType | undefined;
@@ -1772,6 +1796,7 @@ export class GameRoomManager {
         gameOver,
         winner,
         winReason,
+        ...(actionCoinFlipInfo ? { coinFlipInfo: actionCoinFlipInfo } : {}),
         ...(setupTimerStarted ? { setupTimerStarted } : {}),
       };
     } catch (error) {
