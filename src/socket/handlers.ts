@@ -9,6 +9,7 @@ import {
 } from "@gonzaloaguila/game-core";
 import { GameRoomManager } from "./rooms.js";
 import { maskGameStateForPlayer } from "./state-masking.js";
+import { titleIdFromStats } from "../modules/users/titles.js";
 import {
   registerDraftEvents,
   draftRoomManager,
@@ -246,6 +247,70 @@ function getAuthUserId(socket: Socket): string | null {
   return socket.data.user?.userId ?? null;
 }
 
+interface PublicIdentity {
+  username: string;
+  avatarId: string | null;
+  titleId: string;
+}
+
+/**
+ * Display identity for game rooms, read from the DB (never from the client payload,
+ * which let players show any name/avatar/title, e.g. "superadmin").
+ * Returns an error message instead when the account can't play.
+ */
+async function getPlayableIdentity(userId: string): Promise<PublicIdentity | { error: string }> {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: {
+      username: true,
+      activeAvatarId: true,
+      role: true,
+      status: true,
+      suspendedUntil: true,
+      stats: {
+        select: {
+          normalWins: true, normalLosses: true, rankedWins: true, rankedLosses: true,
+          draftWins: true, draftLosses: true, bestStreak: true,
+        },
+      },
+    },
+  });
+  if (!user) return { error: "Usuario no encontrado" };
+  if (user.status === "banned") return { error: "Tu cuenta ha sido deshabilitada" };
+  if (user.status === "suspended" && user.suspendedUntil && user.suspendedUntil > new Date()) {
+    return { error: "Tu cuenta esta suspendida" };
+  }
+  return {
+    username: user.username,
+    avatarId: user.activeAvatarId ?? null,
+    titleId: titleIdFromStats(user.stats, user.role),
+  };
+}
+
+// Chat flood control: at most CHAT_MAX_PER_WINDOW messages per user per window (room + global chat)
+const CHAT_WINDOW_MS = 10_000;
+const CHAT_MAX_PER_WINDOW = 8;
+const chatTimestamps = new Map<string, number[]>();
+
+function allowChatMessage(userId: string): boolean {
+  const now = Date.now();
+  const recent = (chatTimestamps.get(userId) ?? []).filter((t) => now - t < CHAT_WINDOW_MS);
+  if (recent.length >= CHAT_MAX_PER_WINDOW) {
+    chatTimestamps.set(userId, recent);
+    return false;
+  }
+  recent.push(now);
+  chatTimestamps.set(userId, recent);
+  return true;
+}
+
+/** User decks (UUIDs) must belong to the player; theme deck ids are public. */
+async function ownsDeck(userId: string, deckId: string | undefined): Promise<boolean> {
+  if (!deckId || !UUID_RE.test(deckId)) return true;
+  const deck = await prisma.deck.findFirst({ where: { id: deckId, userId }, select: { id: true } });
+  return deck !== null;
+}
+
 export function setupSocketHandlers(io: Server): void {
   // Attach user data if token present, but always allow connection
   // (unauthenticated sockets can only view room list)
@@ -292,11 +357,14 @@ export function setupSocketHandlers(io: Server): void {
       try {
         const userId = getAuthUserId(socket);
         if (!userId) { socket.emit("error", { message: "Autenticacion requerida" }); return; }
-        const { deckId, prizeCount, betAmount, reservedUserId, friendly, username, avatarId, titleId } = payload;
+        const { deckId, prizeCount, betAmount, reservedUserId, friendly } = payload;
+        const identity = await getPlayableIdentity(userId);
+        if ("error" in identity) { socket.emit("error", { message: identity.error }); return; }
+        if (!(await ownsDeck(userId, deckId))) { socket.emit("error", { message: "Mazo no encontrado" }); return; }
         const room = roomManager.createRoom(
           undefined,
           { prizeCount, betAmount, reservedUserId: reservedUserId || null, friendly: friendly ?? false },
-          { username: username || null, avatarId: avatarId || null, titleId: titleId || null },
+          identity,
         );
         await roomManager.joinRoom(room.id, userId, socket.id);
 
@@ -355,7 +423,10 @@ export function setupSocketHandlers(io: Server): void {
       try {
         const userId = getAuthUserId(socket);
         if (!userId) { socket.emit("error", { message: "Autenticacion requerida" }); return; }
-        const { roomId, deckId, username, avatarId, titleId } = payload;
+        const { roomId, deckId } = payload;
+        const identity = await getPlayableIdentity(userId);
+        if ("error" in identity) { socket.emit("error", { message: identity.error }); return; }
+        if (!(await ownsDeck(userId, deckId))) { socket.emit("error", { message: "Mazo no encontrado" }); return; }
 
         // Auto-close any waiting room the user owns before joining another
         const existingWaitingRoom = roomManager.findWaitingRoomByUser(userId);
@@ -367,11 +438,7 @@ export function setupSocketHandlers(io: Server): void {
         }
 
         console.log(`[joinRoom] Attempting to join room ${roomId} as ${userId}`);
-        const room = await roomManager.joinRoom(roomId, userId, socket.id, {
-          username: username || null,
-          avatarId: avatarId || null,
-          titleId: titleId || null,
-        });
+        const room = await roomManager.joinRoom(roomId, userId, socket.id, identity);
         console.log(`[joinRoom] Room state after join:`, {
           player1Id: room.player1Id,
           player2Id: room.player2Id,
@@ -708,12 +775,17 @@ export function setupSocketHandlers(io: Server): void {
     // ==========================================================================
 
     socket.on("chatMessage", async (payload: { roomId: string; message: ChatMessage }) => {
-      const { roomId, message } = payload;
+      const { roomId, message } = payload ?? {};
       const tokenUser = socket.data.user;
       if (!tokenUser) return;
 
-      const content = message.content?.trim();
-      if (!content || content.length === 0 || content.length > 500) return;
+      // Only game rooms this socket is actually in (as player or spectator); otherwise a client
+      // could emit into any socket.io room, e.g. another user's private "user:<id>" room.
+      if (typeof roomId !== "string" || !socket.rooms.has(roomId) || !roomManager.getRoom(roomId)) return;
+      if (!allowChatMessage(tokenUser.userId)) return;
+
+      const content = typeof message?.content === "string" ? message.content.trim() : "";
+      if (!content || content.length > 500) return;
 
       // Fetch username from DB (not in JWT)
       const dbUser = await prisma.user.findUnique({
@@ -747,16 +819,19 @@ export function setupSocketHandlers(io: Server): void {
       const user = socket.data.user;
       if (!user) return;
 
-      const { content, type = "text" } = payload;
+      const { content, type = "text" } = payload ?? {};
+      if (typeof content !== "string") return;
+      if (type !== "text" && type !== "sticker") return;
+      if (!allowChatMessage(user.userId)) return;
 
       // Validate text messages
       if (type === "text") {
-        if (!content || content.trim().length === 0 || content.length > 500) return;
+        if (content.trim().length === 0 || content.length > 500) return;
       }
 
       // Validate sticker messages
       if (type === "sticker") {
-        if (!content || content.length > 100) return;
+        if (content.length === 0 || content.length > 100) return;
       }
 
       try {

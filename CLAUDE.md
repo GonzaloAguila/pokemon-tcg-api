@@ -69,14 +69,13 @@ For one-off grants (cards, currency) write a temporary `npx tsx` Prisma script, 
 
 ## Known issues (as of 2026-10 review — verify before assuming fixed)
 
-Fixed on 2026-10-10 (branch security/economy-hardening): atomic economy + market validation, server-side wheel/slots, hidden-information masking, OAuth verified-email + state, draft socket identity, pending-choice turn checks, permissions route removal, trust proxy + rate limits, seed password from env. Prod infra: Postgres no longer public, DB password rotated, ufw allows only 22/80/443.
+Fixed on 2026-10-10 (branches security/economy-hardening, security/socket-hardening): room identity (name/avatar/title) from DB + banned/suspended can't create/join, deck ownership check, chat limited to rooms the socket is in + flood limit; atomic economy + market validation, server-side wheel/slots, hidden-information masking, OAuth verified-email + state, draft socket identity, pending-choice turn checks, permissions route removal, trust proxy + rate limits, seed password from env. Prod infra: Postgres no longer public, DB password rotated, ufw allows only 22/80/443.
 
 Still open:
 - Own deck order and prizes are sent to their owner (search UIs read `playerDeck`).
 - Pending flags aren't swapped for player 2; turn checks cover ownership for now.
 - Sockets are authenticated only at handshake: a banned user / expired token keeps the socket. Access tokens don't check `tokenVersion`; bans apply when the 15-min token expires.
-- Game room `username`/`avatarId`/`titleId` come from the client payload (cosmetic impersonation). `resolveDeckCards` doesn't check deck ownership; deck saves don't check the collection.
-- `chatMessage` can target any room name; socket payloads are unvalidated casts.
+- Deck saves don't check the user's collection (anyone can build a deck with cards they don't own). Game action payloads are unvalidated casts.
 - Discord/Google accounts with the same email both log into one account (by design, verified emails only).
 - No migrations (db push only; prod has `_prisma_migrations` with `0001_init` and an untracked `prisma/migrations/` on the VPS), `Match` never persisted, `betAmount` never charged, `console.*` logging only, `executeAction` in `rooms.ts` is ~970 lines.
 - Daily free wheel/slot spin endpoints (`/users/me/claim-wheel-spin`, `claim-slot-spin`) only stamp a date; not wired to `freeWheelSpins` or the UI.
