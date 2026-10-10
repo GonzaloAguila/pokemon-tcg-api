@@ -12,7 +12,6 @@ import {
   type GameCard,
   type PokemonInPlay,
   type EnergyType,
-  type AttackEffect,
   type Attack,
   GamePhase,
   initializeMultiplayerGame,
@@ -20,6 +19,7 @@ import {
   shuffle,
   executeAttack,
   executeMetronome,
+  getAttackCoinFlipCount,
   endTurn,
   executeRetreat,
   doMulligan,
@@ -34,7 +34,6 @@ import {
   takePrize,
   createGameEvent,
   AttackEffectType,
-  applyStatusCondition,
   // Pending state handlers
   executeDeckSearch,
   executeBenchDamage,
@@ -147,6 +146,9 @@ interface PendingCoinFlip {
   turnNumber: number;
 }
 
+/** A coin flip rolled by the server (CSPRNG). Every multiplayer coin comes from here. */
+export type CoinSource = () => "heads" | "tails";
+
 function serverCoin(): "heads" | "tails" {
   return randomInt(2) === 0 ? "heads" : "tails";
 }
@@ -160,167 +162,6 @@ interface ActionResult {
   coinFlipInfo?: { attackName: string; results: Array<"heads" | "tails"> };
   winReason?: string;
   setupTimerStarted?: number; // timestamp when setup timer started (ms)
-}
-
-/**
- * Apply coin flip effects that executeAttack skips.
- * executeAttack skips all effects with coinFlip property, expecting the caller to handle them.
- */
-function applyCoinFlipEffects(
-  state: GameState,
-  results: Array<"heads" | "tails">,
-  effects: AttackEffect[],
-  isPlayer1: boolean,
-  skipCoinLog = false
-): GameState {
-  let newState = state;
-  const headsCount = results.filter(r => r === "heads").length;
-  const tailsCount = results.filter(r => r === "tails").length;
-
-  const statusMessages: Record<string, string> = {
-    paralyzed: "paralizado",
-    asleep: "dormido",
-    confused: "confundido",
-    poisoned: "envenenado",
-    cannotAttack: "bloqueado para atacar",
-  };
-
-  // Log coin flip results (skip if already logged before executeAttack)
-  if (!skipCoinLog) {
-    const coinTokens = results.map(r => `[coin:${r}]`).join(" ");
-    const coinResultText = results.length === 1 ? `Moneda: ${coinTokens}` : `Monedas: ${coinTokens}`;
-    newState = {
-      ...newState,
-      events: [...newState.events, createGameEvent(coinResultText, "info")],
-    };
-  }
-
-  for (const effect of effects) {
-    if (!effect.coinFlip) continue;
-
-    // ApplyStatus on heads (e.g., Magnemite's Thundershock -> Paralyze, Venomoth Venom Powder -> Confused+Poisoned)
-    if (effect.type === AttackEffectType.ApplyStatus) {
-      // Status can be in effect.status (no-coinFlip attacks handled by engine) or in coinFlip.onHeads/onTails
-      let statusToApply: string | null = null;
-      if (headsCount > 0 && effect.coinFlip.onHeads && effect.coinFlip.onHeads !== "damage" && effect.coinFlip.onHeads !== "protection") {
-        statusToApply = effect.coinFlip.onHeads;
-      } else if (tailsCount > 0 && headsCount === 0 && effect.coinFlip.onTails && effect.coinFlip.onTails !== "damage" && effect.coinFlip.onTails !== "protection") {
-        statusToApply = effect.coinFlip.onTails;
-      }
-      // Fallback: if effect.status is set and we got heads, use it
-      if (!statusToApply && effect.status && headsCount > 0) {
-        statusToApply = effect.status;
-      }
-
-      if (statusToApply) {
-        const isSelfTarget = effect.target === "self";
-        const defenderKey = isSelfTarget
-          ? (isPlayer1 ? "playerActivePokemon" : "opponentActivePokemon")
-          : (isPlayer1 ? "opponentActivePokemon" : "playerActivePokemon");
-        const target = newState[defenderKey as keyof GameState] as PokemonInPlay | null;
-
-        if (target) {
-          // Apply primary status + any additional statuses (e.g. Venom Powder: confused + poisoned)
-          const allStatuses = [statusToApply, ...((effect as { additionalStatuses?: string[] }).additionalStatuses || [])];
-          for (const st of allStatuses) {
-            const currentTarget = newState[defenderKey as keyof GameState] as PokemonInPlay | null;
-            if (!currentTarget) break;
-            const updated = applyStatusCondition(currentTarget, st as "paralyzed" | "poisoned" | "confused" | "asleep" | "cannotAttack", newState.turnNumber);
-            if (updated !== currentTarget) {
-              newState = {
-                ...newState,
-                [defenderKey]: updated,
-                events: [
-                  ...newState.events,
-                  createGameEvent(`¡${currentTarget.pokemon.name} está ${statusMessages[st] || st}!`, "action"),
-                ],
-              };
-              console.log(`[coinFlip] Applied ${st} to ${isSelfTarget ? "attacker" : "defender"}`);
-            }
-          }
-        }
-      }
-    }
-
-    // Extra damage on heads (e.g., Electabuzz Thunder Punch +10 on heads)
-    if (effect.coinFlip.onHeads === "damage" && effect.amount && headsCount > 0) {
-      const extraDamage = effect.amount * headsCount;
-      const target = effect.target === "self"
-        ? (isPlayer1 ? newState.playerActivePokemon : newState.opponentActivePokemon)
-        : (isPlayer1 ? newState.opponentActivePokemon : newState.playerActivePokemon);
-      if (target) {
-        const updatedTarget = { ...target, currentDamage: (target.currentDamage || 0) + extraDamage };
-        if (effect.target === "self") {
-          if (isPlayer1) { newState = { ...newState, playerActivePokemon: updatedTarget }; }
-          else { newState = { ...newState, opponentActivePokemon: updatedTarget }; }
-        } else {
-          if (isPlayer1) { newState = { ...newState, opponentActivePokemon: updatedTarget }; }
-          else { newState = { ...newState, playerActivePokemon: updatedTarget }; }
-        }
-        newState = {
-          ...newState,
-          events: [...newState.events, createGameEvent(`${target.pokemon.name} recibió +${extraDamage} de daño bonus`, "action")],
-        };
-        console.log(`[coinFlip] Applied ${extraDamage} extra damage (${headsCount} heads)`);
-      }
-    }
-
-    // Self-damage on tails (e.g., Electabuzz Thunder Punch 10 self-damage on tails)
-    if (effect.coinFlip.onTails === "damage" && effect.amount && tailsCount > 0) {
-      const selfDamage = effect.amount * tailsCount;
-      const attacker = isPlayer1 ? newState.playerActivePokemon : newState.opponentActivePokemon;
-      if (attacker) {
-        const updatedAttacker = { ...attacker, currentDamage: (attacker.currentDamage || 0) + selfDamage };
-        if (isPlayer1) { newState = { ...newState, playerActivePokemon: updatedAttacker }; }
-        else { newState = { ...newState, opponentActivePokemon: updatedAttacker }; }
-        newState = {
-          ...newState,
-          events: [...newState.events, createGameEvent(`${attacker.pokemon.name} se hizo ${selfDamage} de daño a sí mismo`, "action")],
-        };
-        console.log(`[coinFlip] Applied ${selfDamage} self-damage (${tailsCount} tails)`);
-      }
-    }
-
-    // Protection on heads (e.g., Chansey's Scrunch, threshold protection)
-    if (effect.type === AttackEffectType.Protection && effect.coinFlip.onHeads === "protection" && headsCount > 0) {
-      const attacker = isPlayer1 ? newState.playerActivePokemon : newState.opponentActivePokemon;
-      if (attacker) {
-        const protType = effect.protectionType || "damageAndEffects";
-        const updatedAttacker: PokemonInPlay = {
-          ...attacker,
-          protection: {
-            type: protType as "damageOnly" | "damageAndEffects",
-            expiresAfterTurn: newState.turnNumber + 1,
-            ...(effect.amount !== undefined && { threshold: effect.amount }),
-          },
-        };
-        if (isPlayer1) { newState = { ...newState, playerActivePokemon: updatedAttacker }; }
-        else { newState = { ...newState, opponentActivePokemon: updatedAttacker }; }
-        newState = {
-          ...newState,
-          events: [...newState.events, createGameEvent(`¡${attacker.pokemon.name} se protegió! El daño será prevenido durante el próximo turno del rival.`, "action")],
-        };
-        console.log(`[coinFlip] Applied protection (${protType}${effect.amount ? `, threshold: ${effect.amount}` : ""})`);
-      }
-    }
-
-    // Prevent Retreat on heads (e.g., Victreebel's Acid)
-    if (effect.coinFlip.onHeads === "preventRetreat" && headsCount > 0) {
-      const defender = isPlayer1 ? newState.opponentActivePokemon : newState.playerActivePokemon;
-      if (defender) {
-        const updatedDefender = { ...defender, retreatPrevented: true, retreatPreventedOnTurn: newState.turnNumber };
-        if (isPlayer1) { newState = { ...newState, opponentActivePokemon: updatedDefender }; }
-        else { newState = { ...newState, playerActivePokemon: updatedDefender }; }
-        newState = {
-          ...newState,
-          events: [...newState.events, createGameEvent(`¡${defender.pokemon.name} no puede retirarse durante el próximo turno!`, "action")],
-        };
-        console.log(`[coinFlip] Applied preventRetreat to defender`);
-      }
-    }
-  }
-
-  return newState;
 }
 
 /**
@@ -441,6 +282,9 @@ export class GameRoomManager {
   private setupTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private setupTimerStartTimes: Map<string, number> = new Map(); // roomId → Date.now()
   private onForfeitCallback: ForfeitCallback | null = null;
+
+  /** @param flipCoin - where every coin of this manager's games comes from (tests pass a scripted one) */
+  constructor(private readonly flipCoin: CoinSource = serverCoin) {}
 
   /**
    * Set the callback for when a player forfeits due to disconnect timeout.
@@ -782,7 +626,7 @@ export class GameRoomManager {
     if (existing && existing.purpose === purpose && existing.turnNumber === turnNumber) {
       return { success: true, result: existing.result };
     }
-    const result = serverCoin();
+    const result = this.flipCoin();
     room.pendingCoinFlips = { ...room.pendingCoinFlips, [key]: { purpose, result, turnNumber } };
     return { success: true, result };
   }
@@ -794,7 +638,7 @@ export class GameRoomManager {
     if (stored && stored.purpose === purpose && stored.turnNumber === room.gameState?.turnNumber) {
       return stored.result;
     }
-    return serverCoin();
+    return this.flipCoin();
   }
 
   /**
@@ -906,7 +750,7 @@ export class GameRoomManager {
           // engine applies the self-damage / KO / end of turn. Heads: the attack proceeds.
           const actingActive = isPlayer1 ? room.gameState!.playerActivePokemon : room.gameState!.opponentActivePokemon;
           if (actingActive?.statusConditions?.includes("confused")) {
-            const confusionCoin = serverCoin();
+            const confusionCoin = this.flipCoin();
             let canAttack = true as boolean;
             usedExecuteForPlayer = true;
             const afterFlip = executeForPlayer((state) => {
@@ -966,16 +810,26 @@ export class GameRoomManager {
             break;
           }
 
+          // ── Attack (or Metronome copying the Defending Pokémon's attack) ──
+          // The server flips exactly the coins the engine asks for (getAttackCoinFlipCount) and
+          // passes them in; the engine resolves every coin effect (coin damage before
+          // weakness/resistance, statuses, self-damage, protection, Pay Day...), the KO/prize
+          // flow and the end of the turn. skipDefenderPromotion: the defender picks its new
+          // active (`promote`), which then ends the attacker's turn.
           const metronomePayload = action.payload.metronomeAttack;
-
-          // Determine which attack to check for coin flips
-          const activePokemon = isPlayer1 ? room.gameState!.playerActivePokemon : room.gameState!.opponentActivePokemon;
-          let coinFlipInfo: { attackName: string; results: Array<"heads" | "tails"> } | null = null;
-          let coinFlipEffects: AttackEffect[] = [];
+          const actorView = isPlayer1 ? room.gameState! : swapPerspective(room.gameState!);
+          let attackToUse: number | Attack = attackIndex;
+          let attackName = "";
 
           if (metronomePayload) {
-            // ── Metronome: find the copied attack from opponent's active Pokemon ──
-            const opponentActive = isPlayer1 ? room.gameState!.opponentActivePokemon : room.gameState!.playerActivePokemon;
+            const metronomeUser = actorView.playerActivePokemon;
+            const ownAttack = metronomeUser && isPokemonCard(metronomeUser.pokemon)
+              ? metronomeUser.pokemon.attacks[attackIndex]
+              : undefined;
+            if (!ownAttack?.effects?.some((e) => e.type === AttackEffectType.CopyAttack)) {
+              return { success: false, error: "Ese ataque no puede copiar ataques" };
+            }
+            const opponentActive = actorView.opponentActivePokemon;
             if (!opponentActive || !isPokemonCard(opponentActive.pokemon)) {
               return { success: false, error: "Opponent has no active Pokemon to copy attack from" };
             }
@@ -983,117 +837,32 @@ export class GameRoomManager {
             if (!copiedAttack) {
               return { success: false, error: "Copied attack not found on opponent's active Pokemon" };
             }
-
             console.log(`[attack] Metronome copying ${copiedAttack.name} from opponent's ${opponentActive.pokemon.name}`);
-
-            // Check coin flip effects on the COPIED attack (not the original Metronome)
-            coinFlipEffects = (copiedAttack.effects || []).filter(e => e.coinFlip);
-            if (coinFlipEffects.length > 0) {
-              const count = coinFlipEffects[0].coinFlip!.count;
-              const results: Array<"heads" | "tails"> = [];
-              for (let i = 0; i < count; i++) {
-                results.push(Math.random() < 0.5 ? "heads" : "tails");
-              }
-              coinFlipInfo = { attackName: copiedAttack.name, results };
-              console.log(`[attack] Metronome coin flip for ${copiedAttack.name}: ${results.join(", ")}`);
-            }
-
-            // Insert coin result event BEFORE executeMetronome
-            if (coinFlipInfo) {
-              const coinTokens = coinFlipInfo.results.map(r => `[coin:${r}]`).join(" ");
-              const coinResultText = coinFlipInfo.results.length === 1 ? `Moneda: ${coinTokens}` : `Monedas: ${coinTokens}`;
-              room.gameState = {
-                ...room.gameState,
-                events: [...room.gameState.events, createGameEvent(coinResultText, "info")],
-              };
-            }
-
-            // Execute Metronome via game-core
-            // If the copied attack has coin flip effects, skip endTurn so we can apply them first
-            const metronomeHasCoinEffects = coinFlipInfo && coinFlipEffects.length > 0;
-            usedExecuteForPlayer = true;
-            newState = executeForPlayer((state) => executeMetronome(state, copiedAttack, !!metronomeHasCoinEffects, true));
+            attackToUse = copiedAttack;
+            attackName = copiedAttack.name;
           } else {
-            // ── Normal attack ──
-            if (activePokemon && isPokemonCard(activePokemon.pokemon)) {
-              const attack = activePokemon.pokemon.attacks[attackIndex];
-              if (attack) {
-                coinFlipEffects = (attack.effects || []).filter(e => e.coinFlip);
-                if (coinFlipEffects.length > 0) {
-                  const count = coinFlipEffects[0].coinFlip!.count;
-                  const results: Array<"heads" | "tails"> = [];
-                  for (let i = 0; i < count; i++) {
-                    results.push(Math.random() < 0.5 ? "heads" : "tails");
-                  }
-                  coinFlipInfo = { attackName: attack.name, results };
-                  console.log(`[attack] Coin flip for ${attack.name}: ${results.join(", ")}`);
-                }
-              }
-            }
-
-            // Insert coin result event BEFORE executeAttack so it appears before damage/KO events
-            if (coinFlipInfo) {
-              const coinTokens = coinFlipInfo.results.map(r => `[coin:${r}]`).join(" ");
-              const coinResultText = coinFlipInfo.results.length === 1 ? `Moneda: ${coinTokens}` : `Monedas: ${coinTokens}`;
-              room.gameState = {
-                ...room.gameState,
-                events: [...room.gameState.events, createGameEvent(coinResultText, "info")],
-              };
-            }
-
-            // If there are coin flip effects, skip endTurn so we can apply effects first
-            // (e.g., Venomoth's Venom Powder applies Poisoned via coin flip — poison damage
-            //  must be dealt during endTurn AFTER the status is applied)
-            const hasCoinEffects = coinFlipInfo && coinFlipEffects.length > 0;
-            usedExecuteForPlayer = true;
-            newState = executeForPlayer((state) => executeAttack(state, attackIndex, !!hasCoinEffects, true));
-          }
-
-          // Apply coin flip effects (status, extra damage, protection) — skip re-logging coin result
-          if (coinFlipInfo && coinFlipEffects.length > 0) {
-            newState = applyCoinFlipEffects(newState, coinFlipInfo.results, coinFlipEffects, isPlayer1, true);
-            console.log(`[attack] Applied coin flip effects for ${coinFlipInfo.attackName}`);
-
-            // Now call endTurn since we skipped it during executeAttack.
-            // Only if the game isn't already over (e.g., the attack KO'd the last opponent Pokemon).
-            // NOTE: We can't use executeForPlayer() here because it reads from room.gameState
-            // which hasn't been updated yet. We swap perspective manually using newState.
-            if (newState.gamePhase !== "GAME_OVER") {
-              if (isPlayer1) {
-                newState = endTurn(newState);
-              } else {
-                newState = swapPerspective(endTurn(swapPerspective(newState)));
-              }
+            const attacker = actorView.playerActivePokemon;
+            if (attacker && isPokemonCard(attacker.pokemon)) {
+              attackName = attacker.pokemon.attacks[attackIndex]?.name ?? "";
             }
           }
 
-          // Return coin flip info for handlers to broadcast to both players
-          if (coinFlipInfo) {
-            // Neutralize events before early return
-            const selfName = isPlayer1 ? "Jugador 1" : "Jugador 2";
-            const opponentName = isPlayer1 ? "Jugador 2" : "Jugador 1";
-            newState = { ...newState, events: neutralizeEvents(newState.events, eventCountBefore, selfName, opponentName) };
-            room.gameState = newState;
+          const coinResults = Array.from(
+            { length: getAttackCoinFlipCount(actorView, attackToUse) },
+            () => this.flipCoin()
+          );
+          const attackOptions = { coinResults, skipDefenderPromotion: true };
+          usedExecuteForPlayer = true;
+          newState = executeForPlayer((state) =>
+            typeof attackToUse === "number"
+              ? executeAttack(state, attackToUse, attackOptions)
+              : executeMetronome(state, attackToUse, attackOptions)
+          );
 
-            // Check for game over
-            const gameOver = newState.gamePhase === "GAME_OVER";
-            let winner: "player1" | "player2" | undefined;
-            let winReason: string | undefined;
-
-            if (gameOver) {
-              room.status = "finished";
-              winner = newState.gameResult === "victory" ? "player1" : "player2";
-              winReason = newState.gameResult === "victory" ? "Player 1 wins!" : "Player 2 wins!";
-            }
-
-            return {
-              success: true,
-              gameState: room.gameState,
-              gameOver,
-              winner,
-              winReason,
-              coinFlipInfo,
-            };
+          // Both clients animate the real coins (showCoinFlip)
+          if (coinResults.length > 0) {
+            console.log(`[attack] Coin flip for ${attackName}: ${coinResults.join(", ")}`);
+            actionCoinFlipInfo = { attackName, results: coinResults };
           }
           break;
         }
@@ -1516,7 +1285,7 @@ export class GameRoomManager {
           if (p1Ready && p2Ready && newState.gamePhase === "MULLIGAN") {
             // Both players ready - cancel setup timer and start game
             this.cancelSetupTimer(roomId);
-            const coinFlipResult = Math.random() < 0.5 ? "heads" : "tails";
+            const coinFlipResult = this.flipCoin();
             console.log(`[playerReady] Both players ready! Coin flip: ${coinFlipResult}`);
             newState = startPlayingPhase(newState, coinFlipResult);
             console.log(`[playerReady] Game started! New phase: ${newState.gamePhase}`);
