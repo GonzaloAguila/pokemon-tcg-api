@@ -66,6 +66,55 @@ export function validateDeckCards(cards: DeckCardEntry[]): {
   return { valid: errors.length === 0, errors };
 }
 
+/**
+ * Cards the user doesn't own enough copies of (basic energy is unlimited).
+ * Entries can repeat a cardDefId with different variants, so quantities are summed.
+ */
+async function findCollectionShortfalls(userId: string, cards: DeckCardEntry[]): Promise<string[]> {
+  const needed = new Map<string, number>();
+  for (const entry of cards) {
+    if (BASIC_ENERGY_IDS.has(entry.cardDefId)) continue;
+    needed.set(entry.cardDefId, (needed.get(entry.cardDefId) ?? 0) + entry.quantity);
+  }
+  if (needed.size === 0) return [];
+
+  const owned = await prisma.userCard.findMany({
+    where: { userId, cardDefId: { in: [...needed.keys()] } },
+    select: { cardDefId: true, quantity: true },
+  });
+  const ownedById = new Map(owned.map((c) => [c.cardDefId, c.quantity]));
+
+  const errors: string[] = [];
+  for (const [cardDefId, quantity] of needed) {
+    const have = ownedById.get(cardDefId) ?? 0;
+    if (have < quantity) errors.push(`No tienes suficientes copias de "${cardDefId}" (${have}/${quantity})`);
+  }
+  return errors;
+}
+
+/** Deck rules plus collection ownership. */
+export async function validateDeckForUser(userId: string, cards: DeckCardEntry[]) {
+  const rules = validateDeckCards(cards);
+  const shortfalls = await findCollectionShortfalls(userId, cards);
+  const errors = [...rules.errors, ...shortfalls];
+  return { valid: errors.length === 0, errors };
+}
+
+/**
+ * Whether `deckId` can be used by `userId` in a game. Theme decks (non-UUID ids) are
+ * public; user decks must belong to the player and pass validation against the
+ * current collection. Returns an error message, or null when playable.
+ */
+export async function checkDeckPlayable(userId: string, deckId: string | undefined | null): Promise<string | null> {
+  if (!deckId || !UUID_RE.test(deckId)) return null;
+  const deck = await prisma.deck.findFirst({ where: { id: deckId, userId }, select: { cards: true } });
+  if (!deck) return "Mazo no encontrado";
+  const validation = await validateDeckForUser(userId, (deck.cards ?? []) as unknown as DeckCardEntry[]);
+  return validation.valid ? null : `Mazo invalido: ${validation.errors[0]}`;
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 // ---------------------------------------------------------------------------
 // Deck select shape
 // ---------------------------------------------------------------------------
@@ -120,8 +169,8 @@ export async function createDeck(
     );
   }
 
-  // Validate deck
-  const validation = validateDeckCards(data.cards);
+  // Validate deck (rules + collection ownership)
+  const validation = await validateDeckForUser(userId, data.cards);
 
   return prisma.deck.create({
     data: {
@@ -149,7 +198,7 @@ export async function updateDeck(
   if (data.name !== undefined) updateData.name = data.name;
 
   if (data.cards !== undefined) {
-    const validation = validateDeckCards(data.cards);
+    const validation = await validateDeckForUser(userId, data.cards);
     updateData.cards = JSON.parse(JSON.stringify(data.cards)) as Prisma.InputJsonValue;
     updateData.isValid = validation.valid;
   }

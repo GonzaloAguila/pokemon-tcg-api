@@ -474,33 +474,20 @@ export async function getUserPlaymats(userId: string) {
 type StarterColor = "fire" | "water" | "grass" | "electric" | "psychic" | "fighting";
 
 export async function setStarterDeck(userId: string, starterColor: StarterColor) {
-  // Verify user exists and hasn't already picked
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { starterColor: true },
-  });
-  if (!user) throw Errors.NotFound("Usuario");
-  if (user.starterColor) {
-    throw Errors.BadRequest("Ya elegiste tu color de inicio");
-  }
-
   // Get starter deck definition
   const starter = getStarterDeck(starterColor);
 
-  // Update user's starterColor
-  await prisma.user.update({
-    where: { id: userId },
-    data: { starterColor },
-  });
-
-  // Create the deck
-  const deck = await createDeck(userId, { name: starter.name, cards: starter.cards });
-
-  // Set it as active
-  await setActiveDeck(userId, deck.id);
-
-  // Add all cards to the user's collection (single transaction)
+  // Atomically claim the one-time starter pick and grant its cards; a concurrent
+  // second pick matches nothing (starterColor already set) and grants nothing.
   await prisma.$transaction(async (tx) => {
+    const { count } = await tx.user.updateMany({
+      where: { id: userId, starterColor: null },
+      data: { starterColor },
+    });
+    if (count === 0) {
+      const exists = await tx.user.findUnique({ where: { id: userId }, select: { id: true } });
+      throw exists ? Errors.BadRequest("Ya elegiste tu color de inicio") : Errors.NotFound("Usuario");
+    }
     for (const entry of starter.cards) {
       await tx.userCard.upsert({
         where: { userId_cardDefId: { userId, cardDefId: entry.cardDefId } },
@@ -509,6 +496,10 @@ export async function setStarterDeck(userId: string, starterColor: StarterColor)
       });
     }
   });
+
+  // Create the deck after the cards are in the collection, so it validates
+  const deck = await createDeck(userId, { name: starter.name, cards: starter.cards });
+  await setActiveDeck(userId, deck.id);
 
   // Return updated profile
   return getUserProfile(userId);

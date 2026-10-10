@@ -10,6 +10,7 @@ import {
 import { GameRoomManager } from "./rooms.js";
 import { maskGameStateForPlayer } from "./state-masking.js";
 import { titleIdFromStats } from "../modules/users/titles.js";
+import { checkDeckPlayable } from "../modules/decks/decks.service.js";
 import {
   registerDraftEvents,
   draftRoomManager,
@@ -304,12 +305,6 @@ function allowChatMessage(userId: string): boolean {
   return true;
 }
 
-/** User decks (UUIDs) must belong to the player; theme deck ids are public. */
-async function ownsDeck(userId: string, deckId: string | undefined): Promise<boolean> {
-  if (!deckId || !UUID_RE.test(deckId)) return true;
-  const deck = await prisma.deck.findFirst({ where: { id: deckId, userId }, select: { id: true } });
-  return deck !== null;
-}
 
 export function setupSocketHandlers(io: Server): void {
   // Attach user data if token present, but always allow connection
@@ -360,7 +355,8 @@ export function setupSocketHandlers(io: Server): void {
         const { deckId, prizeCount, betAmount, reservedUserId, friendly } = payload;
         const identity = await getPlayableIdentity(userId);
         if ("error" in identity) { socket.emit("error", { message: identity.error }); return; }
-        if (!(await ownsDeck(userId, deckId))) { socket.emit("error", { message: "Mazo no encontrado" }); return; }
+        const deckError = await checkDeckPlayable(userId, deckId);
+        if (deckError) { socket.emit("error", { message: deckError }); return; }
         const room = roomManager.createRoom(
           undefined,
           { prizeCount, betAmount, reservedUserId: reservedUserId || null, friendly: friendly ?? false },
@@ -426,7 +422,8 @@ export function setupSocketHandlers(io: Server): void {
         const { roomId, deckId } = payload;
         const identity = await getPlayableIdentity(userId);
         if ("error" in identity) { socket.emit("error", { message: identity.error }); return; }
-        if (!(await ownsDeck(userId, deckId))) { socket.emit("error", { message: "Mazo no encontrado" }); return; }
+        const deckError = await checkDeckPlayable(userId, deckId);
+        if (deckError) { socket.emit("error", { message: deckError }); return; }
 
         // Auto-close any waiting room the user owns before joining another
         const existingWaitingRoom = roomManager.findWaitingRoomByUser(userId);
