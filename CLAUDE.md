@@ -15,7 +15,7 @@ Change order when work spans repos: game-core (build, bump, publish) → API and
 ## Commands
 
 ```bash
-npm run dev          # tsx watch, port 3001
+npm run dev          # tsx watch; PORT from .env (5001 on the dev machine, 3001 in prod/.env.example)
 npm run build        # tsc → dist/
 npx tsc --noEmit     # type check (the only working static check today)
 npm run db:push      # apply prisma/schema.prisma (no migrations folder exists)
