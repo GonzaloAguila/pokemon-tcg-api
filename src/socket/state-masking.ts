@@ -71,6 +71,16 @@ export function getGameStateForPlayer(
     // Swap turn perspective
     isPlayerTurn: !state.isPlayerTurn,
 
+    // PlusPower/Defender owner ("player"/"opponent"), so P2's UI shows them on the right side
+    ...(Array.isArray(state.activeModifiers)
+      ? {
+          activeModifiers: (state.activeModifiers as Array<{ playerId?: string }>).map((m) => ({
+            ...m,
+            playerId: m.playerId === "player" ? "opponent" : m.playerId === "opponent" ? "player" : m.playerId,
+          })),
+        }
+      : {}),
+
     // Swap starting player perspective
     startingPlayer: state.startingPlayer === "player"
       ? "opponent"

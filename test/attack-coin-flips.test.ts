@@ -15,6 +15,7 @@ import {
   type PokemonInPlay,
 } from "@gonzaloaguila/game-core";
 import { GameRoomManager } from "../src/socket/rooms.js";
+import { getGameStateForPlayer } from "../src/socket/state-masking.js";
 
 type Coin = "heads" | "tails";
 type Side = "p1" | "p2";
@@ -36,6 +37,7 @@ const RATTATA = "base-set-061-rattata"; // 30 HP
 const LIGHTNING = "base-set-100-lightning-energy";
 const chansey = allCards.find((c) => c.name === "Chansey")!; // 120 HP, no weakness to Lightning/Colorless
 const plusPower = allCards.find((c) => c.name === "PlusPower")!;
+const defenderCard = allCards.find((c) => c.name === "Defender")!;
 
 function inPlay(cardId: GameCard | string, id: string, energy = 4): PokemonInPlay {
   const base = typeof cardId === "string" ? card(cardId) : cardId;
@@ -253,5 +255,50 @@ describe.each(["p1", "p2"] as const)("attack coin flips as %s", (actor) => {
     expect(result.success).toBe(false);
     expect(t.get<PokemonInPlay>(t.f.theirActive).currentDamage).toBe(0);
     expect(t.isActorTurn()).toBe(true);
+  });
+
+  it("own PlusPower (played through the server) adds 10 to the attack", async () => {
+    const t = setupRoom(actor, {
+      attacker: inPlay(JOLTEON, "atk"),
+      defender: inPlay(chansey, "def"),
+      coins: ["tails"],
+      myHandExtra: [{ ...plusPower, id: "my-pluspower" } as GameCard],
+    });
+    const played = await t.manager.executeAction(t.room.id, t.actorSocket, {
+      type: "playTrainer",
+      payload: { cardId: "my-pluspower", trainerName: "PlusPower", selections: [] },
+    });
+    expect(played.success).toBe(true);
+    // Stored from P1's perspective: P2's PlusPower belongs to "opponent"
+    expect(t.room.gameState!.activeModifiers.map((m) => m.playerId)).toEqual([actor === "p1" ? "player" : "opponent"]);
+
+    expect((await t.attack({ attackIndex: 0 })).success).toBe(true);
+    expect(t.get<PokemonInPlay>(t.f.theirActive).currentDamage).toBe(20); // 10 (tails) + 10
+  });
+
+  it("the other player's PlusPower doesn't boost this attack; their Defender reduces it", async () => {
+    const otherSide = actor === "p1" ? "opponent" : "player";
+    const t = setupRoom(actor, {
+      attacker: inPlay(JOLTEON, "atk"),
+      defender: inPlay(chansey, "def"),
+      coins: ["heads"],
+      modifiers: [
+        { id: "m1", source: "plusPower", card: plusPower, amount: 10, expiresAfterTurn: 6, playerId: otherSide },
+        { id: "m2", source: "defender", card: defenderCard, targetPokemonId: "def", amount: 20, expiresAfterTurn: 6, playerId: otherSide },
+      ],
+    });
+    expect((await t.attack({ attackIndex: 0 })).success).toBe(true);
+    expect(t.get<PokemonInPlay>(t.f.theirActive).currentDamage).toBe(10); // 30 - 20, no PlusPower
+    // The swap back keeps ownership as stored
+    expect(t.room.gameState!.activeModifiers.map((m) => m.playerId)).toEqual([otherSide, otherSide]);
+  });
+});
+
+describe("P2 view of modifiers", () => {
+  it("getGameStateForPlayer swaps PlusPower/Defender ownership for player 2", () => {
+    const state = { activeModifiers: [{ id: "m", playerId: "player" }, { id: "n", playerId: "opponent" }] };
+    const view = getGameStateForPlayer(state, "player2") as typeof state;
+    expect(view.activeModifiers.map((m) => m.playerId)).toEqual(["opponent", "player"]);
+    expect(getGameStateForPlayer(state, "player1")).toBe(state);
   });
 });

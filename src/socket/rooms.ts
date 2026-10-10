@@ -719,6 +719,12 @@ export class GameRoomManager {
       opponentCanTakePrize: state.playerCanTakePrize,
       opponentNeedsToPromote: state.playerNeedsToPromote,
       isPlayerTurn: !state.isPlayerTurn,
+      // PlusPower/Defender belong to a side: without this, P2's PlusPower would boost P1's
+      // attacks and P2's Defender would protect P1 (same as game-core's AI swapSides)
+      activeModifiers: state.activeModifiers.map((m) => ({
+        ...m,
+        playerId: m.playerId === "player" ? "opponent" as const : "player" as const,
+      })),
       // Swap game result perspective so it stays correct after double-swap
       gameResult: state.gameResult === "victory" ? "defeat"
         : state.gameResult === "defeat" ? "victory"
