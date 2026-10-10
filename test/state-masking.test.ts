@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { maskGameStateForPlayer } from "../src/socket/state-masking.js";
+import { REVEAL_RULES, maskGameStateForPlayer, type RevealRule } from "../src/socket/state-masking.js";
 
 const card = (id: string) => ({ id, name: `Card ${id}`, kind: "pokemon" });
 
@@ -50,5 +50,40 @@ describe("maskGameStateForPlayer", () => {
   it("does not mutate the stored state", () => {
     maskGameStateForPlayer(state, "spectator");
     expect(ids(state.opponentHand)).toEqual(["p2-h1"]);
+  });
+});
+
+describe("pending choices and reveal rules", () => {
+  const pendingState = {
+    ...state,
+    isPlayerTurn: false, // player 2's turn
+    pendingDeckSearch: { filter: { basicOnly: true } },
+    pendingPeek: { peekType: "playerDeck", revealedCards: [card("p2-d1")] },
+  };
+
+  it("pending choices only reach the side whose turn it is", () => {
+    const p2 = maskGameStateForPlayer(pendingState, "player2");
+    expect(p2.pendingDeckSearch).toBeDefined();
+    expect(ids((p2.pendingPeek as { revealedCards: unknown }).revealedCards)).toEqual(["p2-d1"]);
+    for (const viewer of ["player1", "spectator"] as const) {
+      const view = maskGameStateForPlayer(pendingState, viewer);
+      expect(view.pendingDeckSearch).toBeUndefined();
+      expect(view.pendingPeek).toBeUndefined();
+    }
+    expect(pendingState.pendingPeek).toBeDefined(); // stored state untouched
+  });
+
+  it("a reveal rule can show a hidden zone to one viewer", () => {
+    const rule: RevealRule = (view, viewer) => (viewer === "player1" && view.isPlayerTurn ? ["opponentHand"] : []);
+    REVEAL_RULES.push(rule);
+    try {
+      expect(ids(maskGameStateForPlayer(state, "player1").opponentHand)).toEqual(["p2-h1"]);
+      expect(isHidden(maskGameStateForPlayer(state, "player1").opponentDeck)).toBe(true);
+      expect(isHidden(maskGameStateForPlayer(state, "player2").opponentHand)).toBe(true);
+      expect(isHidden(maskGameStateForPlayer(state, "spectator").opponentHand)).toBe(true);
+    } finally {
+      REVEAL_RULES.splice(REVEAL_RULES.indexOf(rule), 1);
+    }
+    expect(isHidden(maskGameStateForPlayer(state, "player1").opponentHand)).toBe(true);
   });
 });
