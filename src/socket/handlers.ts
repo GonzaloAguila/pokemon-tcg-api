@@ -600,7 +600,7 @@ export function setupSocketHandlers(io: Server): void {
 
           // Send state to spectators (player1 perspective)
           if (room.spectators && room.spectators.size > 0) {
-            const spectatorState = maskGameStateForPlayer(result.gameState, "player1");
+            const spectatorState = maskGameStateForPlayer(result.gameState, "spectator");
             for (const specSocketId of room.spectators) {
               io.to(specSocketId).emit("gameState", {
                 gameState: spectatorState,
@@ -863,7 +863,7 @@ export function setupSocketHandlers(io: Server): void {
         if (room.gameState) {
           socket.emit("gameStart", {
             roomId,
-            gameState: maskGameStateForPlayer(room.gameState, "player1"),
+            gameState: maskGameStateForPlayer(room.gameState, "spectator"),
             isPlayer1: true, // spectator sees from P1 perspective
             isSpectator: true,
             opponentInfo: room.joiner,

@@ -1,8 +1,15 @@
 /**
- * State Perspective Swap
+ * State Perspective Swap + Hidden-Information Masking
  *
- * Swaps the game state perspective for player 2 so they see themselves as "player".
- * This allows reusing the same UI components on the frontend.
+ * Swaps the game state perspective for player 2 so they see themselves as "player"
+ * (so the frontend reuses the same UI), and replaces cards a viewer must not see
+ * with placeholders: the opponent's hand, deck and prizes keep their length (the UI
+ * only renders counts/card backs) but carry no card data. Spectators get both
+ * sides masked.
+ *
+ * Still visible to the owner: their own deck order and prizes (the client needs the
+ * deck contents for search effects); hiding those needs search UIs to get a sorted
+ * copy instead — tracked as a follow-up.
  */
 
 // Use Record for now - will properly type when game-core types are integrated
@@ -80,10 +87,36 @@ export function getGameStateForPlayer(
   };
 }
 
-// Legacy export for backwards compatibility
+type HiddenZoneSide = "player" | "opponent";
+
+const HIDDEN_ZONES = ["Hand", "Deck", "Prizes"] as const;
+
+/** Same length, no card data: { id: "hidden-opponent-hand-3", hidden: true } */
+function hideZones(state: GameState, sides: HiddenZoneSide[]): GameState {
+  const masked: GameState = { ...state };
+  for (const side of sides) {
+    for (const zone of HIDDEN_ZONES) {
+      const key = `${side}${zone}`;
+      const cards = state[key];
+      if (Array.isArray(cards)) {
+        masked[key] = cards.map((_, i) => ({ id: `hidden-${side}-${zone.toLowerCase()}-${i}`, hidden: true }));
+      }
+    }
+  }
+  return masked;
+}
+
+/**
+ * The state a given viewer may receive: perspective-swapped for player 2, with the
+ * opponent's hidden zones masked. Spectators see player 1's perspective with both
+ * sides masked.
+ */
 export function maskGameStateForPlayer(
   state: GameState,
-  forPlayer: "player1" | "player2"
+  forPlayer: "player1" | "player2" | "spectator"
 ): GameState {
-  return getGameStateForPlayer(state, forPlayer);
+  if (forPlayer === "spectator") {
+    return hideZones(state, ["player", "opponent"]);
+  }
+  return hideZones(getGameStateForPlayer(state, forPlayer), ["opponent"]);
 }

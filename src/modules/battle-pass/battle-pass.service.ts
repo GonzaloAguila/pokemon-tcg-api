@@ -6,6 +6,7 @@
  * Premium is a monthly purchase that expires with the month.
  */
 
+import { Prisma } from "@prisma/client";
 import { prisma } from "../../lib/prisma.js";
 import { Errors } from "../../middleware/error-handler.js";
 import * as usersService from "../users/users.service.js";
@@ -113,13 +114,22 @@ async function getOrCreateMonthlyPass(year: number, month: number) {
 // =============================================================================
 
 async function getOrCreateEnrollment(userId: string, passId: string) {
-  // upsert so concurrent first visits don't race on the unique (userId, battlePassId)
-  return prisma.userBattlePass.upsert({
-    where: { userId_battlePassId: { userId, battlePassId: passId } },
-    update: {},
-    create: { userId, battlePassId: passId },
-    include: { claimedRewards: true },
-  });
+  const where = { userId_battlePassId: { userId, battlePassId: passId } };
+  const existing = await prisma.userBattlePass.findUnique({ where, include: { claimedRewards: true } });
+  if (existing) return existing;
+
+  try {
+    return await prisma.userBattlePass.create({
+      data: { userId, battlePassId: passId },
+      include: { claimedRewards: true },
+    });
+  } catch (err) {
+    // A concurrent first visit created it between our read and insert
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      return prisma.userBattlePass.findUniqueOrThrow({ where, include: { claimedRewards: true } });
+    }
+    throw err;
+  }
 }
 
 // =============================================================================
