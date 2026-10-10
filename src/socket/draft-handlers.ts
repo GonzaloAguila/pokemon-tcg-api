@@ -11,6 +11,7 @@ import { GameRoomManager } from "./rooms.js";
 import { maskGameStateForPlayer } from "./state-masking.js";
 import type { DraftConfig } from "./draft-rooms.js";
 import { prisma } from "../lib/prisma.js";
+import * as usersService from "../modules/users/users.service.js";
 
 // Singleton draft room manager (exported for game-over reporting)
 export const draftRoomManager = new DraftRoomManager();
@@ -304,15 +305,17 @@ export function registerDraftEvents(
 
       if (entryFee > 0) {
         const kicked: string[] = [];
+        const charged: string[] = [];
 
-        // Check all non-admin players can pay
+        // Charge each non-admin player atomically; anyone who can't pay is removed
         for (const player of [...room.players]) {
           if (player.isAdmin) continue; // admin doesn't pay
-          const dbUser = await prisma.user.findUnique({
-            where: { id: player.id },
-            select: { coins: true },
-          });
-          if (!dbUser || dbUser.coins < entryFee) {
+          const paid = await usersService
+            .spendCoins(player.id, entryFee, "draft_entry", `Inscripcion a draft (${entryFee} monedas)`)
+            .then(() => true, () => false);
+          if (paid) {
+            charged.push(player.id);
+          } else {
             kicked.push(player.id);
             const removedPlayer = draftRoomManager.removePlayer(roomId, player.id);
             // Notify kicked player
@@ -331,21 +334,16 @@ export function registerDraftEvents(
         // Re-check minimum players after kicks
         const remainingRoom = draftRoomManager.getRoom(roomId);
         if (!remainingRoom || remainingRoom.players.length < 2) {
+          // Not starting after all: refund whoever already paid
+          for (const playerId of charged) {
+            await usersService.addCoins(playerId, entryFee, "draft_refund", "Reintegro de inscripcion a draft");
+          }
           socket.emit("draft:error", {
             message: "No hay suficientes jugadores con fondos para iniciar.",
           });
           // Broadcast updated state so clients see the kicked players removed
           broadcastDraftState(io, roomId);
           return;
-        }
-
-        // Charge remaining non-admin players
-        for (const player of remainingRoom.players) {
-          if (player.isAdmin) continue;
-          await prisma.user.update({
-            where: { id: player.id },
-            data: { coins: { decrement: entryFee } },
-          });
         }
       }
 

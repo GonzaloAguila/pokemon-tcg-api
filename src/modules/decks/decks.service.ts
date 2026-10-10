@@ -200,20 +200,20 @@ export async function setActiveDeck(userId: string, deckId: string) {
 // ---------------------------------------------------------------------------
 
 export async function purchaseDeckSlot(userId: string) {
-  // Spend coins (atomic with transaction log)
-  await usersService.spendCoins(
-    userId,
-    DECK_SLOT_PRICE,
-    "deck_slot_purchase",
-    "Compra de slot de mazo adicional",
-  );
+  // Charge and grant in one transaction so a failure can't take coins without the slot.
+  return prisma.$transaction(async (tx) => {
+    await usersService.spendCoins(
+      userId,
+      DECK_SLOT_PRICE,
+      "deck_slot_purchase",
+      "Compra de slot de mazo adicional",
+      tx,
+    );
 
-  // Increment max slots
-  const user = await prisma.user.update({
-    where: { id: userId },
-    data: { maxDeckSlots: { increment: 1 } },
-    select: { maxDeckSlots: true, coins: true },
+    return tx.user.update({
+      where: { id: userId },
+      data: { maxDeckSlots: { increment: 1 } },
+      select: { maxDeckSlots: true, coins: true },
+    });
   });
-
-  return user;
 }

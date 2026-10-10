@@ -1,5 +1,6 @@
 import { prisma } from "../../lib/prisma.js";
 import { Errors } from "../../middleware/error-handler.js";
+import { creditBalance, type Db } from "./users.service.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -16,6 +17,27 @@ function isSameUTCDay(d1: Date, d2: Date): boolean {
 function isAvailableToday(lastClaimAt: Date | null): boolean {
   if (!lastClaimAt) return true;
   return !isSameUTCDay(lastClaimAt, new Date());
+}
+
+type DailyClaimField = "lastDailyCoinsAt" | "lastWheelSpinAt" | "lastSlotSpinAt";
+
+function startOfTodayUtc(): Date {
+  const now = new Date();
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+}
+
+/** Sets `field` to now only if it wasn't already set today (UTC). Returns whether this call won the claim. */
+async function markClaimedToday(tx: Db, userId: string, field: DailyClaimField): Promise<boolean> {
+  const { count } = await tx.user.updateMany({
+    where: { id: userId, OR: [{ [field]: null }, { [field]: { lt: startOfTodayUtc() } }] },
+    data: { [field]: new Date() },
+  });
+  return count === 1;
+}
+
+async function assertUserExists(tx: Db, userId: string) {
+  const user = await tx.user.findUnique({ where: { id: userId }, select: { id: true } });
+  if (!user) throw Errors.NotFound("Usuario");
 }
 
 // ---------------------------------------------------------------------------
@@ -50,49 +72,31 @@ const SUNDAY_BONUS_COINS = 500;
 const SUNDAY_BONUS_COUPONS = 5;
 
 export async function claimDailyCoins(userId: string) {
+  const isSunday = new Date().getUTCDay() === 0;
+  const totalCoins = DAILY_COINS_AMOUNT + (isSunday ? SUNDAY_BONUS_COINS : 0);
+  const totalCoupons = isSunday ? SUNDAY_BONUS_COUPONS : 0;
+
   return prisma.$transaction(async (tx) => {
-    const user = await tx.user.findUnique({
-      where: { id: userId },
-      select: { lastDailyCoinsAt: true, coins: true, coupons: true },
-    });
-
-    if (!user) throw Errors.NotFound("Usuario");
-
-    if (!isAvailableToday(user.lastDailyCoinsAt)) {
+    // Atomically mark today's claim; a concurrent request re-checks the WHERE and matches nothing.
+    const claimed = await markClaimedToday(tx, userId, "lastDailyCoinsAt");
+    if (!claimed) {
+      const user = await tx.user.findUnique({ where: { id: userId }, select: { coins: true, coupons: true } });
+      if (!user) throw Errors.NotFound("Usuario");
       return { coins: user.coins, coupons: user.coupons, awardedCoins: 0, awardedCoupons: 0, alreadyClaimed: true };
     }
 
-    const isSunday = new Date().getUTCDay() === 0;
-    const totalCoins = DAILY_COINS_AMOUNT + (isSunday ? SUNDAY_BONUS_COINS : 0);
-    const totalCoupons = isSunday ? SUNDAY_BONUS_COUPONS : 0;
-
-    const newCoinBalance = user.coins + totalCoins;
-    const newCouponBalance = user.coupons + totalCoupons;
-
-    await tx.user.update({
-      where: { id: userId },
-      data: {
-        coins: newCoinBalance,
-        coupons: newCouponBalance,
-        lastDailyCoinsAt: new Date(),
-      },
-    });
-
-    await tx.transaction.create({
-      data: {
-        userId,
-        type: "daily_login",
-        description: isSunday
-          ? `Recompensa diaria: ${totalCoins} monedas + ${totalCoupons} cupones (bonus domingo)`
-          : `Recompensa diaria: ${totalCoins} monedas`,
-        amount: totalCoins,
-        balanceAfter: newCoinBalance,
-      },
-    });
+    const description = isSunday
+      ? `Recompensa diaria: ${totalCoins} monedas + ${totalCoupons} cupones (bonus domingo)`
+      : `Recompensa diaria: ${totalCoins} monedas`;
+    const coins = await creditBalance(userId, "coins", totalCoins, "daily_login", description, tx);
+    const coupons =
+      totalCoupons > 0
+        ? await creditBalance(userId, "coupons", totalCoupons, "daily_login", description, tx)
+        : (await tx.user.findUniqueOrThrow({ where: { id: userId }, select: { coupons: true } })).coupons;
 
     return {
-      coins: newCoinBalance,
-      coupons: newCouponBalance,
+      coins,
+      coupons,
       awardedCoins: totalCoins,
       awardedCoupons: totalCoupons,
       isSunday,
@@ -107,23 +111,9 @@ export async function claimDailyCoins(userId: string) {
 
 export async function claimFreeWheelSpin(userId: string) {
   return prisma.$transaction(async (tx) => {
-    const user = await tx.user.findUnique({
-      where: { id: userId },
-      select: { lastWheelSpinAt: true },
-    });
-
-    if (!user) throw Errors.NotFound("Usuario");
-
-    if (!isAvailableToday(user.lastWheelSpinAt)) {
-      return { available: false };
-    }
-
-    await tx.user.update({
-      where: { id: userId },
-      data: { lastWheelSpinAt: new Date() },
-    });
-
-    return { available: true };
+    const claimed = await markClaimedToday(tx, userId, "lastWheelSpinAt");
+    if (!claimed) await assertUserExists(tx, userId);
+    return { available: claimed };
   });
 }
 
@@ -133,22 +123,8 @@ export async function claimFreeWheelSpin(userId: string) {
 
 export async function claimFreeSlotSpin(userId: string) {
   return prisma.$transaction(async (tx) => {
-    const user = await tx.user.findUnique({
-      where: { id: userId },
-      select: { lastSlotSpinAt: true },
-    });
-
-    if (!user) throw Errors.NotFound("Usuario");
-
-    if (!isAvailableToday(user.lastSlotSpinAt)) {
-      return { available: false };
-    }
-
-    await tx.user.update({
-      where: { id: userId },
-      data: { lastSlotSpinAt: new Date() },
-    });
-
-    return { available: true };
+    const claimed = await markClaimedToday(tx, userId, "lastSlotSpinAt");
+    if (!claimed) await assertUserExists(tx, userId);
+    return { available: claimed };
   });
 }

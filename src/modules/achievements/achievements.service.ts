@@ -1,5 +1,6 @@
 import { prisma } from "../../lib/prisma.js";
 import * as usersService from "../users/users.service.js";
+import { Errors } from "../../middleware/error-handler.js";
 
 // ---------------------------------------------------------------------------
 // Tier rewards
@@ -221,38 +222,38 @@ export async function checkAndUpdateProgress(userId: string): Promise<ClaimableA
 
 export async function claimAchievement(userId: string, achievementId: string): Promise<ClaimResult> {
   const def = ACHIEVEMENT_DEFS.find((d) => d.id === achievementId);
-  if (!def) throw Object.assign(new Error("Achievement not found"), { status: 404 });
+  if (!def) throw Errors.NotFound("Logro");
 
-  const record = await prisma.userAchievement.findUnique({
-    where: { userId_achievementId: { userId, achievementId } },
+  return prisma.$transaction(async (tx) => {
+    // Mark as claimed only if complete and unclaimed; concurrent claims match nothing.
+    const { count } = await tx.userAchievement.updateMany({
+      where: { userId, achievementId, unlockedAt: null, progress: { gte: def.progressTarget } },
+      data: { unlockedAt: new Date() },
+    });
+    if (count === 0) {
+      const record = await tx.userAchievement.findUnique({
+        where: { userId_achievementId: { userId, achievementId } },
+      });
+      if (record?.unlockedAt) throw Errors.Conflict("Este logro ya fue reclamado");
+      throw Errors.BadRequest("Este logro todavia no esta completo");
+    }
+
+    return grantReward(tx, userId, def);
   });
-
-  if (!record) throw Object.assign(new Error("No progress for this achievement"), { status: 400 });
-  if (record.progress < def.progressTarget) throw Object.assign(new Error("Achievement not yet complete"), { status: 400 });
-  if (record.unlockedAt !== null) throw Object.assign(new Error("Achievement already claimed"), { status: 400 });
-
-  // Mark as claimed
-  await prisma.userAchievement.update({
-    where: { userId_achievementId: { userId, achievementId } },
-    data: { unlockedAt: new Date() },
-  });
-
-  // Grant reward
-  return grantReward(userId, def);
 }
 
 // ---------------------------------------------------------------------------
 // Grant reward for an achievement
 // ---------------------------------------------------------------------------
 
-async function grantReward(userId: string, def: AchievementDef): Promise<ClaimResult> {
+async function grantReward(tx: usersService.Db, userId: string, def: AchievementDef): Promise<ClaimResult> {
   const reward = TIER_REWARDS[def.tier] ?? { coins: 0, coupons: 0 };
 
   if (reward.coins > 0) {
-    await usersService.addCoins(userId, reward.coins, "achievement", `Logro: ${def.name}`);
+    await usersService.addCoins(userId, reward.coins, "achievement", `Logro: ${def.name}`, tx);
   }
   if (reward.coupons > 0) {
-    await usersService.addCoupons(userId, reward.coupons, "achievement", `Logro: ${def.name}`);
+    await usersService.addCoupons(userId, reward.coupons, "achievement", `Logro: ${def.name}`, tx);
   }
 
   return {

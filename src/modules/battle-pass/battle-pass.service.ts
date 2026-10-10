@@ -267,19 +267,24 @@ export async function upgradeToPremium(passId: string, userId: string) {
   const enrollment = await getOrCreateEnrollment(userId, pass.id);
   if (enrollment.isPremium) throw Errors.Conflict("Ya tienes el pase premium");
 
-  await usersService.spendRareCandy(
-    userId,
-    pass.premiumPrice,
-    "battle_pass_upgrade",
-    `Mejora a Premium: ${pass.name}`,
-  );
+  return prisma.$transaction(async (tx) => {
+    // Flip to premium only if still standard; concurrent upgrades match nothing and pay nothing.
+    const { count } = await tx.userBattlePass.updateMany({
+      where: { id: enrollment.id, isPremium: false },
+      data: { isPremium: true, upgradedAt: new Date() },
+    });
+    if (count === 0) throw Errors.Conflict("Ya tienes el pase premium");
 
-  await prisma.userBattlePass.update({
-    where: { id: enrollment.id },
-    data: { isPremium: true, upgradedAt: new Date() },
+    await usersService.spendRareCandy(
+      userId,
+      pass.premiumPrice,
+      "battle_pass_upgrade",
+      `Mejora a Premium: ${pass.name}`,
+      tx,
+    );
+
+    return { isPremium: true };
   });
-
-  return { isPremium: true };
 }
 
 // =============================================================================
@@ -360,34 +365,19 @@ async function grantReward(
   switch (reward.rewardType) {
     case "coins": {
       const amount = reward.amount ?? 0;
-      const user = await tx.user.findUnique({
-        where: { id: userId },
-        select: { coins: true },
-      });
-      if (!user) throw Errors.NotFound("Usuario");
-      const newBalance = user.coins + amount;
-      await tx.user.update({
-        where: { id: userId },
-        data: { coins: newBalance },
-      });
-      await tx.transaction.create({
-        data: {
-          userId,
-          type: "battle_pass_reward",
-          description: `Pase de batalla: ${reward.label}`,
-          amount,
-          balanceAfter: newBalance,
-        },
-      });
+      const { coins: newBalance } = await usersService.addCoins(
+        userId,
+        amount,
+        "battle_pass_reward",
+        `Pase de batalla: ${reward.label}`,
+        tx,
+      );
       return { type: "coins", amount, newBalance };
     }
 
     case "ticket": {
       const amount = reward.amount ?? 1;
-      await tx.user.update({
-        where: { id: userId },
-        data: { coupons: { increment: amount } },
-      });
+      await usersService.addCoupons(userId, amount, "battle_pass_reward", `Pase de batalla: ${reward.label}`, tx);
       return { type: "ticket", amount };
     }
 

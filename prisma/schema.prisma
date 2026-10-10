@@ -241,6 +241,7 @@ model Transaction {
   userId       String
   type         String // "victory", "daily_login", "achievement", "pack_purchase", "trade", "wheel_spin", "slot_spin"
   description  String
+  currency     String   @default("coins") // "coins" | "coupons" | "rareCandy" (rows before 2026-10 are all "coins")
   amount       Int // positive = income, negative = expense
   balanceAfter Int // snapshot of balance after transaction
   createdAt    DateTime @default(now())

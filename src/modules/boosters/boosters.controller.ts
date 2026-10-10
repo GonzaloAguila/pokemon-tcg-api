@@ -119,21 +119,20 @@ router.post(
     const price = pack.price ?? 0;
 
     try {
-      // Charge coins (throws if insufficient balance)
-      if (price > 0) {
-        await usersService.spendCoins(
-          userId,
-          price,
-          "pack_purchase",
-          `Apertura de sobre: ${pack.name}`,
-        );
-      }
-
       // Generate cards
       const result = boosterService.openPack(packId);
 
-      // Persist to user's collection (single transaction)
+      // Charge and persist in one transaction: no coins lost without cards, no cards without paying
       await prisma.$transaction(async (tx) => {
+        if (price > 0) {
+          await usersService.spendCoins(
+            userId,
+            price,
+            "pack_purchase",
+            `Apertura de sobre: ${pack.name}`,
+            tx,
+          );
+        }
         for (const pulled of result.cards) {
           await tx.userCard.upsert({
             where: { userId_cardDefId: { userId, cardDefId: pulled.card.id } },

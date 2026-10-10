@@ -9,6 +9,7 @@ import {
   getCardImageUrl,
 } from "@gonzaloaguila/game-core";
 import type { Card } from "@gonzaloaguila/game-core";
+import { Prisma } from "@prisma/client";
 import { prisma } from "../../lib/prisma.js";
 import { Errors } from "../../middleware/error-handler.js";
 import * as usersService from "../users/users.service.js";
@@ -60,6 +61,7 @@ const COSMETIC_PRICES: Record<string, number> = {
 };
 
 const ENERGY_PRICE = 10;
+export const MAX_ENERGY_PER_PURCHASE = 99;
 
 // Rare Candy conversion rates
 const CANDY_TO_COINS = 2000;
@@ -72,6 +74,21 @@ const CANDY_TO_COUPONS = 50;
 function getUtcDateString(): string {
   const now = new Date();
   return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}-${String(now.getUTCDate()).padStart(2, "0")}`;
+}
+
+/**
+ * Claims today's purchase slot for `itemKey`. The unique (userId, itemKey, date)
+ * constraint makes a concurrent duplicate fail, rolling back its whole transaction.
+ */
+async function recordDailyPurchase(tx: usersService.Db, userId: string, itemKey: string, alreadyBoughtMessage: string) {
+  try {
+    await tx.dailyPurchase.create({ data: { userId, itemKey, date: getUtcDateString() } });
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      throw Errors.BadRequest(alreadyBoughtMessage);
+    }
+    throw err;
+  }
 }
 
 function getDailySeed(): number {
@@ -301,27 +318,15 @@ export async function buyDailyCard(userId: string, cardDefId: string) {
     throw Errors.BadRequest("Esta carta no esta disponible en la tienda hoy");
   }
 
-  // Check if already purchased today
-  const today = getUtcDateString();
   const itemKey = `card:${cardDefId}`;
-  const existing = await prisma.dailyPurchase.findUnique({
-    where: { userId_itemKey_date: { userId, itemKey, date: today } },
-  });
-  if (existing) {
-    throw Errors.BadRequest("Ya compraste esta carta hoy");
-  }
-
-  await usersService.spendCoins(userId, offer.price, "card_purchase", `Compra de carta: ${offer.name}`);
-
-  await prisma.userCard.upsert({
-    where: { userId_cardDefId: { userId, cardDefId } },
-    update: { quantity: { increment: 1 } },
-    create: { userId, cardDefId, quantity: 1 },
-  });
-
-  // Record the daily purchase
-  await prisma.dailyPurchase.create({
-    data: { userId, itemKey, date: today },
+  await prisma.$transaction(async (tx) => {
+    await recordDailyPurchase(tx, userId, itemKey, "Ya compraste esta carta hoy");
+    await usersService.spendCoins(userId, offer.price, "card_purchase", `Compra de carta: ${offer.name}`, tx);
+    await tx.userCard.upsert({
+      where: { userId_cardDefId: { userId, cardDefId } },
+      update: { quantity: { increment: 1 } },
+      create: { userId, cardDefId, quantity: 1 },
+    });
   });
 
   // For mystery card, reveal the real card info
@@ -356,62 +361,42 @@ export async function buyCosmetic(
     throw Errors.BadRequest("Este cosmetico no esta disponible en la tienda hoy");
   }
 
-  // Check if already purchased today
-  const today = getUtcDateString();
   const itemKey = `cosmetic:${type}:${itemId}`;
-  const existingPurchase = await prisma.dailyPurchase.findUnique({
-    where: { userId_itemKey_date: { userId, itemKey, date: today } },
-  });
-  if (existingPurchase) {
-    throw Errors.BadRequest("Ya compraste este cosmetico hoy");
-  }
+  await prisma.$transaction(async (tx) => {
+    await recordDailyPurchase(tx, userId, itemKey, "Ya compraste este cosmetico hoy");
 
-  // Check if already owned (for coins and card backs)
-  if (type === "coin") {
-    const existing = await prisma.userCoin.findUnique({
-      where: { userId_coinId: { userId, coinId: itemId } },
-    });
-    if (existing) throw Errors.BadRequest("Ya posees esta moneda");
+    // Ownership rows have unique (userId, itemId) constraints, so a duplicate create also rolls back the charge.
+    const charge = (label: string) =>
+      usersService.spendCoupons(userId, offer.price, "cosmetic_purchase", `Compra de ${label}: ${offer.name}`, tx);
 
-    await usersService.spendCoupons(userId, offer.price, "cosmetic_purchase", `Compra de moneda: ${offer.name}`);
-    await prisma.userCoin.create({ data: { userId, coinId: itemId } });
-  } else if (type === "cardBack") {
-    const existing = await prisma.userCardBack.findUnique({
-      where: { userId_cardBackId: { userId, cardBackId: itemId } },
-    });
-    if (existing) throw Errors.BadRequest("Ya posees este reverso de carta");
-
-    await usersService.spendCoupons(userId, offer.price, "cosmetic_purchase", `Compra de card back: ${offer.name}`);
-    await prisma.userCardBack.create({ data: { userId, cardBackId: itemId } });
-  } else if (type === "avatar") {
-    const existing = await prisma.userAvatar.findUnique({
-      where: { userId_avatarId: { userId, avatarId: itemId } },
-    });
-    if (existing) throw Errors.BadRequest("Ya posees este avatar");
-
-    await usersService.spendCoupons(userId, offer.price, "cosmetic_purchase", `Compra de avatar: ${offer.name}`);
-    await prisma.userAvatar.create({ data: { userId, avatarId: itemId } });
-  } else if (type === "variant") {
-    const existing = await prisma.userCardSkin.findUnique({
-      where: { userId_skinId: { userId, skinId: itemId } },
-    });
-    if (existing) throw Errors.BadRequest("Ya posees esta variante");
-
-    await usersService.spendCoupons(userId, offer.price, "cosmetic_purchase", `Compra de variante: ${offer.name}`);
-    await prisma.userCardSkin.create({ data: { userId, skinId: itemId } });
-  } else if (type === "playmat") {
-    const existing = await prisma.userPlaymat.findUnique({
-      where: { userId_playmatId: { userId, playmatId: itemId } },
-    });
-    if (existing) throw Errors.BadRequest("Ya posees este tapete");
-
-    await usersService.spendCoupons(userId, offer.price, "cosmetic_purchase", `Compra de tapete: ${offer.name}`);
-    await prisma.userPlaymat.create({ data: { userId, playmatId: itemId } });
-  }
-
-  // Record the daily purchase
-  await prisma.dailyPurchase.create({
-    data: { userId, itemKey, date: today },
+    if (type === "coin") {
+      const existing = await tx.userCoin.findUnique({ where: { userId_coinId: { userId, coinId: itemId } } });
+      if (existing) throw Errors.BadRequest("Ya posees esta moneda");
+      await charge("moneda");
+      await tx.userCoin.create({ data: { userId, coinId: itemId } });
+    } else if (type === "cardBack") {
+      const existing = await tx.userCardBack.findUnique({ where: { userId_cardBackId: { userId, cardBackId: itemId } } });
+      if (existing) throw Errors.BadRequest("Ya posees este reverso de carta");
+      await charge("card back");
+      await tx.userCardBack.create({ data: { userId, cardBackId: itemId } });
+    } else if (type === "avatar") {
+      const existing = await tx.userAvatar.findUnique({ where: { userId_avatarId: { userId, avatarId: itemId } } });
+      if (existing) throw Errors.BadRequest("Ya posees este avatar");
+      await charge("avatar");
+      await tx.userAvatar.create({ data: { userId, avatarId: itemId } });
+    } else if (type === "variant") {
+      const existing = await tx.userCardSkin.findUnique({ where: { userId_skinId: { userId, skinId: itemId } } });
+      if (existing) throw Errors.BadRequest("Ya posees esta variante");
+      await charge("variante");
+      await tx.userCardSkin.create({ data: { userId, skinId: itemId } });
+    } else if (type === "playmat") {
+      const existing = await tx.userPlaymat.findUnique({ where: { userId_playmatId: { userId, playmatId: itemId } } });
+      if (existing) throw Errors.BadRequest("Ya posees este tapete");
+      await charge("tapete");
+      await tx.userPlaymat.create({ data: { userId, playmatId: itemId } });
+    } else {
+      throw Errors.BadRequest("Tipo de cosmetico invalido");
+    }
   });
 
   return { type, itemId, name: offer.name };
@@ -432,13 +417,18 @@ export async function buyEnergy(
     throw Errors.BadRequest("Tipo de energia no valido");
   }
 
-  const totalPrice = offer.price * quantity;
-  await usersService.spendCoins(userId, totalPrice, "energy_purchase", `Compra de ${quantity}x ${offer.name}`);
+  if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > MAX_ENERGY_PER_PURCHASE) {
+    throw Errors.BadRequest(`La cantidad debe ser un entero entre 1 y ${MAX_ENERGY_PER_PURCHASE}`);
+  }
 
-  await prisma.userCard.upsert({
-    where: { userId_cardDefId: { userId, cardDefId: offer.cardDefId } },
-    update: { quantity: { increment: quantity } },
-    create: { userId, cardDefId: offer.cardDefId, quantity },
+  const totalPrice = offer.price * quantity;
+  await prisma.$transaction(async (tx) => {
+    await usersService.spendCoins(userId, totalPrice, "energy_purchase", `Compra de ${quantity}x ${offer.name}`, tx);
+    await tx.userCard.upsert({
+      where: { userId_cardDefId: { userId, cardDefId: offer.cardDefId } },
+      update: { quantity: { increment: quantity } },
+      create: { userId, cardDefId: offer.cardDefId, quantity },
+    });
   });
 
   return { cardDefId: offer.cardDefId, energyType, quantity };
@@ -452,13 +442,14 @@ export async function convertRareCandy(
   userId: string,
   target: "coins" | "coupons",
 ) {
-  await usersService.spendRareCandy(userId, 1, "rare_candy_conversion", `Conversion de Caramelo Raro a ${target}`);
+  return prisma.$transaction(async (tx) => {
+    await usersService.spendRareCandy(userId, 1, "rare_candy_conversion", `Conversion de Caramelo Raro a ${target}`, tx);
 
-  if (target === "coins") {
-    const result = await usersService.addCoins(userId, CANDY_TO_COINS, "rare_candy_conversion", `Conversion: 1 Caramelo Raro → ${CANDY_TO_COINS} monedas`);
-    return { target, amount: CANDY_TO_COINS, newBalance: result.coins };
-  } else {
-    const result = await usersService.addCoupons(userId, CANDY_TO_COUPONS, "rare_candy_conversion", `Conversion: 1 Caramelo Raro → ${CANDY_TO_COUPONS} cupones`);
+    if (target === "coins") {
+      const result = await usersService.addCoins(userId, CANDY_TO_COINS, "rare_candy_conversion", `Conversion: 1 Caramelo Raro → ${CANDY_TO_COINS} monedas`, tx);
+      return { target, amount: CANDY_TO_COINS, newBalance: result.coins };
+    }
+    const result = await usersService.addCoupons(userId, CANDY_TO_COUPONS, "rare_candy_conversion", `Conversion: 1 Caramelo Raro → ${CANDY_TO_COUPONS} cupones`, tx);
     return { target, amount: CANDY_TO_COUPONS, newBalance: result.coupons };
-  }
+  });
 }

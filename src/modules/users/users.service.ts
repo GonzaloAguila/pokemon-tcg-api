@@ -1,3 +1,4 @@
+import type { Prisma } from "@prisma/client";
 import { prisma } from "../../lib/prisma.js";
 import { Errors } from "../../middleware/error-handler.js";
 import { getStarterDeck } from "../decks/starter-decks.js";
@@ -165,237 +166,109 @@ export async function updateCosmetics(
 }
 
 // ---------------------------------------------------------------------------
-// Coins — add / spend (atomic with transaction log)
+// Balances — coins / coupons / rare candy
+//
+// Every change is a single atomic UPDATE (increment, or decrement guarded by
+// `balance >= amount`) plus a Transaction row, so concurrent requests can't
+// lose updates or overspend. Pass `db` (an interactive transaction client) to
+// make the balance change part of a larger purchase; otherwise each call runs
+// in its own transaction.
 // ---------------------------------------------------------------------------
 
-export async function addCoins(
+export type Currency = "coins" | "coupons" | "rareCandy";
+export type Db = Prisma.TransactionClient;
+
+const INSUFFICIENT_FUNDS: Record<Currency, string> = {
+  coins: "No tienes suficientes monedas",
+  coupons: "No tienes suficientes cupones",
+  rareCandy: "No tienes suficientes Caramelos Raros",
+};
+
+const balanceSelect = { coins: true, coupons: true, rareCandy: true } as const;
+
+function assertPositiveAmount(amount: number) {
+  if (!Number.isSafeInteger(amount) || amount <= 0) {
+    throw Errors.BadRequest("Cantidad invalida");
+  }
+}
+
+function inTransaction<T>(db: Db | undefined, fn: (tx: Db) => Promise<T>): Promise<T> {
+  return db ? fn(db) : prisma.$transaction(fn);
+}
+
+export function creditBalance(
   userId: string,
+  currency: Currency,
   amount: number,
   type: string,
   description: string,
+  db?: Db,
 ) {
-  return prisma.$transaction(async (tx) => {
-    const user = await tx.user.findUnique({
+  assertPositiveAmount(amount);
+  return inTransaction(db, async (tx) => {
+    const { count } = await tx.user.updateMany({
       where: { id: userId },
-      select: { coins: true },
+      data: { [currency]: { increment: amount } },
     });
+    if (count === 0) throw Errors.NotFound("Usuario");
 
-    if (!user) throw Errors.NotFound("Usuario");
-
-    const newBalance = user.coins + amount;
-
-    await tx.user.update({
-      where: { id: userId },
-      data: { coins: newBalance },
-    });
-
+    const balances = await tx.user.findUniqueOrThrow({ where: { id: userId }, select: balanceSelect });
     await tx.transaction.create({
-      data: {
-        userId,
-        type,
-        description,
-        amount,
-        balanceAfter: newBalance,
-      },
+      data: { userId, type, description, currency, amount, balanceAfter: balances[currency] },
     });
-
-    return { coins: newBalance };
+    return balances[currency];
   });
 }
 
-export async function spendCoins(
+export function debitBalance(
   userId: string,
+  currency: Currency,
   amount: number,
   type: string,
   description: string,
+  db?: Db,
 ) {
-  return prisma.$transaction(async (tx) => {
-    const user = await tx.user.findUnique({
-      where: { id: userId },
-      select: { coins: true },
+  assertPositiveAmount(amount);
+  return inTransaction(db, async (tx) => {
+    const { count } = await tx.user.updateMany({
+      where: { id: userId, [currency]: { gte: amount } },
+      data: { [currency]: { decrement: amount } },
     });
-
-    if (!user) throw Errors.NotFound("Usuario");
-
-    if (user.coins < amount) {
-      throw Errors.BadRequest("No tienes suficientes monedas");
+    if (count === 0) {
+      const exists = await tx.user.findUnique({ where: { id: userId }, select: { id: true } });
+      throw exists ? Errors.BadRequest(INSUFFICIENT_FUNDS[currency]) : Errors.NotFound("Usuario");
     }
 
-    const newBalance = user.coins - amount;
-
-    await tx.user.update({
-      where: { id: userId },
-      data: { coins: newBalance },
-    });
-
+    const balances = await tx.user.findUniqueOrThrow({ where: { id: userId }, select: balanceSelect });
     await tx.transaction.create({
-      data: {
-        userId,
-        type,
-        description,
-        amount: -amount,
-        balanceAfter: newBalance,
-      },
+      data: { userId, type, description, currency, amount: -amount, balanceAfter: balances[currency] },
     });
-
-    return { coins: newBalance };
+    return balances[currency];
   });
 }
 
-// ---------------------------------------------------------------------------
-// Coupons — add / spend (atomic with transaction log)
-// ---------------------------------------------------------------------------
-
-export async function addCoupons(
-  userId: string,
-  amount: number,
-  type: string,
-  description: string,
-) {
-  return prisma.$transaction(async (tx) => {
-    const user = await tx.user.findUnique({
-      where: { id: userId },
-      select: { coupons: true },
-    });
-
-    if (!user) throw Errors.NotFound("Usuario");
-
-    const newBalance = user.coupons + amount;
-
-    await tx.user.update({
-      where: { id: userId },
-      data: { coupons: newBalance },
-    });
-
-    await tx.transaction.create({
-      data: {
-        userId,
-        type,
-        description,
-        amount,
-        balanceAfter: newBalance,
-      },
-    });
-
-    return { coupons: newBalance };
-  });
+export async function addCoins(userId: string, amount: number, type: string, description: string, db?: Db) {
+  return { coins: await creditBalance(userId, "coins", amount, type, description, db) };
 }
 
-export async function spendCoupons(
-  userId: string,
-  amount: number,
-  type: string,
-  description: string,
-) {
-  return prisma.$transaction(async (tx) => {
-    const user = await tx.user.findUnique({
-      where: { id: userId },
-      select: { coupons: true },
-    });
-
-    if (!user) throw Errors.NotFound("Usuario");
-
-    if (user.coupons < amount) {
-      throw Errors.BadRequest("No tienes suficientes cupones");
-    }
-
-    const newBalance = user.coupons - amount;
-
-    await tx.user.update({
-      where: { id: userId },
-      data: { coupons: newBalance },
-    });
-
-    await tx.transaction.create({
-      data: {
-        userId,
-        type,
-        description,
-        amount: -amount,
-        balanceAfter: newBalance,
-      },
-    });
-
-    return { coupons: newBalance };
-  });
+export async function spendCoins(userId: string, amount: number, type: string, description: string, db?: Db) {
+  return { coins: await debitBalance(userId, "coins", amount, type, description, db) };
 }
 
-// ---------------------------------------------------------------------------
-// Rare Candy — add / spend (atomic with transaction log)
-// ---------------------------------------------------------------------------
-
-export async function addRareCandy(
-  userId: string,
-  amount: number,
-  type: string,
-  description: string,
-) {
-  return prisma.$transaction(async (tx) => {
-    const user = await tx.user.findUnique({
-      where: { id: userId },
-      select: { rareCandy: true },
-    });
-
-    if (!user) throw Errors.NotFound("Usuario");
-
-    const newBalance = user.rareCandy + amount;
-
-    await tx.user.update({
-      where: { id: userId },
-      data: { rareCandy: newBalance },
-    });
-
-    await tx.transaction.create({
-      data: {
-        userId,
-        type,
-        description,
-        amount,
-        balanceAfter: newBalance,
-      },
-    });
-
-    return { rareCandy: newBalance };
-  });
+export async function addCoupons(userId: string, amount: number, type: string, description: string, db?: Db) {
+  return { coupons: await creditBalance(userId, "coupons", amount, type, description, db) };
 }
 
-export async function spendRareCandy(
-  userId: string,
-  amount: number,
-  type: string,
-  description: string,
-) {
-  return prisma.$transaction(async (tx) => {
-    const user = await tx.user.findUnique({
-      where: { id: userId },
-      select: { rareCandy: true },
-    });
+export async function spendCoupons(userId: string, amount: number, type: string, description: string, db?: Db) {
+  return { coupons: await debitBalance(userId, "coupons", amount, type, description, db) };
+}
 
-    if (!user) throw Errors.NotFound("Usuario");
+export async function addRareCandy(userId: string, amount: number, type: string, description: string, db?: Db) {
+  return { rareCandy: await creditBalance(userId, "rareCandy", amount, type, description, db) };
+}
 
-    if (user.rareCandy < amount) {
-      throw Errors.BadRequest("No tienes suficientes Caramelos Raros");
-    }
-
-    const newBalance = user.rareCandy - amount;
-
-    await tx.user.update({
-      where: { id: userId },
-      data: { rareCandy: newBalance },
-    });
-
-    await tx.transaction.create({
-      data: {
-        userId,
-        type,
-        description,
-        amount: -amount,
-        balanceAfter: newBalance,
-      },
-    });
-
-    return { rareCandy: newBalance };
-  });
+export async function spendRareCandy(userId: string, amount: number, type: string, description: string, db?: Db) {
+  return { rareCandy: await debitBalance(userId, "rareCandy", amount, type, description, db) };
 }
 
 // ---------------------------------------------------------------------------
