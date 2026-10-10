@@ -18,7 +18,8 @@ Change order when work spans repos: game-core (build, bump, publish) → API and
 npm run dev          # tsx watch; PORT from .env (5001 on the dev machine, 3001 in prod/.env.example)
 npm run build        # tsc → dist/
 npx tsc --noEmit     # type check (the only working static check today)
-npm run db:push      # apply prisma/schema.prisma (no migrations folder exists)
+npm run db:push      # apply prisma/schema.prisma to a throwaway DB (prod still uses db push until the baseline is adopted, see docs/migrations.md)
+npm run db:migrate   # prisma migrate dev: new migration from schema edits (local ptcg-dev-db only)
 npm run db:generate  # regenerate Prisma client after schema edits
 SUPERADMIN_EMAIL=... SUPERADMIN_PASSWORD=... npx tsx prisma/seed.ts   # create/promote superadmin
 npm test             # vitest integration suite (needs the ptcg-test-db container, see test/README.md)
@@ -32,16 +33,17 @@ npm test             # vitest integration suite (needs the ptcg-test-db containe
 
 - `src/index.ts` — Express app, router registration, Socket.io server, chat cleanup interval.
 - `src/modules/<feature>/` — `*.controller.ts` (Router) + `*.service.ts` (+ `*.types.ts`, `index.ts` barrel). Modules: achievements, admin, auth (local + Google + Discord OAuth), battle-pass, boosters, bug-report, catalog, chat, decks, market, messaging, users (+ rewards), waitlist, wheel. `game/` and `matchmaking/` are empty.
-- `src/socket/` — `handlers.ts` (socket auth + event wiring), `rooms.ts` (`GameRoomManager`, in-memory games, `executeAction` switch), `draft-handlers.ts` / `draft-rooms.ts`, `state-masking.ts` (perspective swap for player 2).
+- `src/socket/` — `handlers.ts` (socket auth + event wiring), `rooms.ts` (`GameRoomManager`, in-memory games, `executeAction` switch), `draft-handlers.ts` / `draft-rooms.ts`, `state-masking.ts` (perspective swap for player 2), `schemas.ts` (zod schemas for every socket payload and game action), `session-guard.ts` (handshake auth + per-event account check), `io-registry.ts` (Socket.io server handle for HTTP code, e.g. kicking banned users).
 - `src/middleware/` — `auth.ts` (`requireAuth`, `requireRole`, `requirePermission`, `optionalAuth`, `checkUserStatus`), `error-handler.ts` (`AppError`, `Errors.*`), `rate-limit.ts` (auth routes only).
-- `src/lib/` — `prisma.ts`, `jwt.ts`, `oauth.ts`, `password.ts`, `email.ts` (Resend).
-- `prisma/schema.prisma` — 24 models. `Match` / `GameRoom` exist but nothing writes to them.
+- `src/lib/` — `prisma.ts`, `jwt.ts`, `oauth.ts`, `password.ts`, `email.ts` (Resend), `account-state.ts` (15s cache of tokenVersion/role/status used by HTTP auth and sockets; admin moderation invalidates it).
+- `prisma/schema.prisma` — 22 models. `Match` / `GameRoom` exist but nothing writes to them. `prisma/migrations/` holds a baseline that is NOT yet applied in prod (`docs/migrations.md`); `test/migrations.test.ts` fails if the schema changes without a migration.
 
 ## Conventions
 
 - Validate request bodies with zod in the controller; throw `Errors.BadRequest/NotFound/Forbidden/...` (instances of `AppError`) so `errorHandler` maps the status. Plain `Error` objects become 500s.
 - Protect routes with `requireAuth` then `requireRole(...)` / `requirePermission(...)`. Superadmin bypasses permission checks.
-- Socket identity: always derive the user from the verified handshake JWT via `getAuthUserId(socket)` (`handlers.ts`); never trust a `userId` in the payload.
+- Socket identity: always derive the user from the verified handshake JWT via `getAuthUserId(socket)` (`handlers.ts`); never trust a `userId` in the payload. New socket events: parse the payload with a schema from `schemas.ts` (`parsePayload`) and, if it acts on games/rooms/chat/drafts, gate it with `requireSocketUser`/`checkSocketSession` (`session-guard.ts`). New game actions: add them to `gameActionSchema`; `executeAction` rejects anything the schema doesn't know.
+- HTTP identity: `requireAuth` checks the token against `account-state` (tokenVersion, ban/suspension, current role). To revoke sessions, bump `tokenVersion` and call `invalidateAccountState(userId)` (+ `disconnectUserSockets`).
 - Any balance change must go through `users.service` (`creditBalance`/`debitBalance` or the `addCoins`/`spendCoins`/… wrappers): they do one atomic UPDATE (debits guarded by `balance >= amount`), reject non-positive amounts and log a `Transaction` row with its `currency`. Pass the transaction client (`db`/`tx` arg) so a purchase charges and grants in ONE `prisma.$transaction`. One-time claims use conditional `updateMany` (e.g. `unlockedAt: null`) and check `count`.
 - Prize games (wheel, slots) roll and grant server-side (`src/modules/prizes/`, CSPRNG); never accept a prize or outcome from the client.
 - User-facing strings (errors, event log messages) are Spanish; code and comments English.
@@ -71,13 +73,16 @@ For one-off grants (cards, currency) write a temporary `npx tsx` Prisma script, 
 
 ## Known issues (as of 2026-10 review — verify before assuming fixed)
 
-Fixed on 2026-10-10 (branches security/economy-hardening, security/socket-hardening): room identity (name/avatar/title) from DB + banned/suspended can't create/join, deck ownership check, chat limited to rooms the socket is in + flood limit; atomic economy + market validation, server-side wheel/slots, hidden-information masking, OAuth verified-email + state, draft socket identity, pending-choice turn checks, permissions route removal, trust proxy + rate limits, seed password from env. Prod infra: Postgres no longer public, DB password rotated, ufw allows only 22/80/443.
+Fixed on 2026-10-10 (branch hardening/socket-validation, not deployed yet): zod validation for every socket event, draft event and `executeAction` action type (invalid payloads return errors instead of throwing); per-event account check on sockets (deleted/banned/suspended users are rejected and disconnected; admin ban/suspend/delete kick them at once; token expiry alone doesn't kick); HTTP access tokens honor `tokenVersion`, status and the DB role; admin endpoint bodies validated with zod; `playTrainer` runs the card actually in hand (a Potion could be played as "Computer Search"); Heal (`usePower healFlip`) checks the source really has an unused Heal; Prisma migrations baseline in the repo.
+
+Fixed earlier on 2026-10-10 (branches security/economy-hardening, security/socket-hardening): room identity (name/avatar/title) from DB + banned/suspended can't create/join, deck ownership check, chat limited to rooms the socket is in + flood limit; atomic economy + market validation, server-side wheel/slots, hidden-information masking, OAuth verified-email + state, draft socket identity, pending-choice turn checks, permissions route removal, trust proxy + rate limits, seed password from env. Prod infra: Postgres no longer public, DB password rotated, ufw allows only 22/80/443.
 
 Still open:
 - Own deck order and prizes are sent to their owner (search UIs read `playerDeck`).
 - Pending flags aren't swapped for player 2; turn checks cover ownership for now.
-- Sockets are authenticated only at handshake: a banned user / expired token keeps the socket. Access tokens don't check `tokenVersion`; bans apply when the 15-min token expires.
-- Deck saves don't check the user's collection (anyone can build a deck with cards they don't own). Game action payloads are unvalidated casts.
+- Deck saves don't reject cards the user doesn't own: the deck is saved with `isValid: false` and `checkDeckPlayable` blocks it from rooms.
+- game-core gaps worked around in `rooms.ts` (should move into the engine): `canPlayTrainer` doesn't check the card's name matches the trainer being executed; `executeHealFlip` trusts its `sourcePokemonId`, and `canUseHealFlip` calls `canUsePower` without `usedPowersThisTurn`. Other powers (`rainDance`, `energyTrans`, ...) check themselves but return the unchanged state + an info event instead of an error.
+- Bets aren't validated against the creator's title tier on the server (schema caps `betAmount` at 1000; it's never charged anyway). `attack.selectedEnergyIds` is accepted but ignored: the engine auto-picks the energy to discard, so the player’s choice isn’t honored in multiplayer. Don’t just pass it to `executeAttack`, which discards whatever ids it gets without checking count/type (a client could under-pay). Validate it in game-core first.
 - Discord/Google accounts with the same email both log into one account (by design, verified emails only).
-- No migrations (db push only; prod has `_prisma_migrations` with `0001_init` and an untracked `prisma/migrations/` on the VPS), `Match` never persisted, `betAmount` never charged, `console.*` logging only, `executeAction` in `rooms.ts` is ~970 lines.
+- Migrations baseline exists in the repo but prod still runs `db push` until someone follows `docs/migrations.md` (prod has `_prisma_migrations` with `0001_init` and an untracked `prisma/migrations/` on the VPS). `Match` never persisted, `betAmount` never charged, `console.*` logging only, `executeAction` in `rooms.ts` is ~970 lines.
 - Daily free wheel/slot spin endpoints (`/users/me/claim-wheel-spin`, `claim-slot-spin`) only stamp a date; not wired to `freeWheelSpins` or the UI.
