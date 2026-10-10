@@ -2,6 +2,7 @@ import { type UserRole, Prisma } from "@prisma/client";
 import { prisma } from "../../lib/prisma.js";
 import { Errors } from "../../middleware/error-handler.js";
 import { ALL_PERMISSIONS } from "./permissions.js";
+import * as usersService from "../users/users.service.js";
 
 // =============================================================================
 // User Management
@@ -393,21 +394,13 @@ export async function adjustCoins(userId: string, amount: number, reason: string
       throw Errors.BadRequest(`Saldo insuficiente. Tiene ${user.coins} monedas`);
     }
 
-    const updated = await tx.user.update({
-      where: { id: userId },
-      data: { coins: { increment: amount } },
-      select: { coins: true },
-    });
-
-    await tx.transaction.create({
-      data: {
-        userId,
-        type: "admin_adjustment",
-        description: `[Admin: ${adminId}] Coins: ${amount > 0 ? "+" : ""}${amount}. Razon: ${reason.trim()}`,
-        amount,
-        balanceAfter: updated.coins,
-      },
-    });
+    // Atomic change + Transaction row (debit is guarded against going negative)
+    const description = `[Admin: ${adminId}] Coins: ${amount > 0 ? "+" : ""}${amount}. Razon: ${reason.trim()}`;
+    const updated = {
+      coins: amount > 0
+        ? await usersService.creditBalance(userId, "coins", amount, "admin_adjustment", description, tx)
+        : await usersService.debitBalance(userId, "coins", -amount, "admin_adjustment", description, tx),
+    };
 
     // Auto-send system notification to user
     await tx.systemMessage.create({
@@ -448,21 +441,13 @@ export async function adjustCoupons(userId: string, amount: number, reason: stri
       throw Errors.BadRequest(`Saldo insuficiente. Tiene ${user.coupons} cupones`);
     }
 
-    const updated = await tx.user.update({
-      where: { id: userId },
-      data: { coupons: { increment: amount } },
-      select: { coupons: true },
-    });
-
-    await tx.transaction.create({
-      data: {
-        userId,
-        type: "admin_adjustment",
-        description: `[Admin: ${adminId}] Coupons: ${amount > 0 ? "+" : ""}${amount}. Razon: ${reason.trim()}`,
-        amount,
-        balanceAfter: updated.coupons,
-      },
-    });
+    // Atomic change + Transaction row (debit is guarded against going negative)
+    const description = `[Admin: ${adminId}] Coupons: ${amount > 0 ? "+" : ""}${amount}. Razon: ${reason.trim()}`;
+    const updated = {
+      coupons: amount > 0
+        ? await usersService.creditBalance(userId, "coupons", amount, "admin_adjustment", description, tx)
+        : await usersService.debitBalance(userId, "coupons", -amount, "admin_adjustment", description, tx),
+    };
 
     // Auto-send system notification to user
     await tx.systemMessage.create({
@@ -503,21 +488,13 @@ export async function adjustRareCandy(userId: string, amount: number, reason: st
       throw Errors.BadRequest(`Saldo insuficiente. Tiene ${user.rareCandy} rare candy`);
     }
 
-    const updated = await tx.user.update({
-      where: { id: userId },
-      data: { rareCandy: { increment: amount } },
-      select: { rareCandy: true },
-    });
-
-    await tx.transaction.create({
-      data: {
-        userId,
-        type: "admin_adjustment",
-        description: `[Admin: ${adminId}] RareCandy: ${amount > 0 ? "+" : ""}${amount}. Razon: ${reason.trim()}`,
-        amount,
-        balanceAfter: updated.rareCandy,
-      },
-    });
+    // Atomic change + Transaction row (debit is guarded against going negative)
+    const description = `[Admin: ${adminId}] RareCandy: ${amount > 0 ? "+" : ""}${amount}. Razon: ${reason.trim()}`;
+    const updated = {
+      rareCandy: amount > 0
+        ? await usersService.creditBalance(userId, "rareCandy", amount, "admin_adjustment", description, tx)
+        : await usersService.debitBalance(userId, "rareCandy", -amount, "admin_adjustment", description, tx),
+    };
 
     // Auto-send system notification to user
     await tx.systemMessage.create({

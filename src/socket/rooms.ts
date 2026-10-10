@@ -765,7 +765,10 @@ export class GameRoomManager {
 
     // Validate turn - player1 plays when isPlayerTurn is true
     // During MULLIGAN/SETUP, both players can place Pokemon regardless of turn
-    const turnFreeActions = ["ready", "mulligan", "playerReady", "takePrize", "promote", "deckSearch", "forceSwitch", "selfSwitch", "skipSwitch", "benchDamage", "clearPeek", "surrender"];
+    // Pending attack choices (deckSearch, forceSwitch, selfSwitch, skipSwitch, benchDamage) are NOT here:
+    // they belong to the attacker, and endTurn() doesn't advance while one is pending, so they
+    // require it to be the acting player's turn. Otherwise the opponent could resolve your choice.
+    const turnFreeActions = ["ready", "mulligan", "playerReady", "takePrize", "promote", "clearPeek", "surrender"];
     const setupActions = ["playBasicToActive", "playBasicToBench"];
     const isSetupPhase = room.gameState.gamePhase === "MULLIGAN" || room.gameState.gamePhase === "SETUP";
     const isMyTurn = isPlayer1 ? room.gameState.isPlayerTurn : !room.gameState.isPlayerTurn;

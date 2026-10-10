@@ -2,7 +2,7 @@ import { Router, type Request, type Response, type NextFunction } from "express"
 import { z } from "zod";
 import * as usersService from "./users.service.js";
 import * as rewardsService from "./rewards.service.js";
-import { requireAuth, requireRole, checkUserStatus } from "../../middleware/auth.js";
+import { requireAuth, checkUserStatus } from "../../middleware/auth.js";
 import { Errors } from "../../middleware/error-handler.js";
 
 const router = Router();
@@ -31,10 +31,6 @@ const updateCosmeticsSchema = z.object({
   activeCardBackId: z.string().optional(),
   activeAvatarId: z.string().optional(),
   activePlaymatId: z.string().optional(),
-});
-
-const updatePermissionsSchema = z.object({
-  permissions: z.array(z.string()),
 });
 
 // ---------------------------------------------------------------------------
@@ -292,34 +288,6 @@ router.get(
         usersService.getUserPlaymats(req.user!.userId),
       ]);
       res.json({ coins, cardBacks, avatars, cardSkins, playmats });
-    } catch (err) {
-      next(err);
-    }
-  },
-);
-
-// ---------------------------------------------------------------------------
-// PATCH /:userId/permissions — Admin: update user permissions
-// ---------------------------------------------------------------------------
-
-router.patch(
-  "/:userId/permissions",
-  requireAuth,
-  requireRole("admin", "superadmin"),
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const parsed = updatePermissionsSchema.safeParse(req.body);
-      if (!parsed.success) {
-        throw Errors.ValidationError(
-          parsed.error.errors.map((e) => e.message).join(". "),
-        );
-      }
-
-      const result = await usersService.updatePermissions(
-        req.params.userId,
-        parsed.data.permissions,
-      );
-      res.json(result);
     } catch (err) {
       next(err);
     }

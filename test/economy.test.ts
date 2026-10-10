@@ -116,3 +116,18 @@ describe("one-time rewards", () => {
     expect(after).toEqual({ maxDeckSlots: before.maxDeckSlots + 1, coins: 0 });
   });
 });
+
+describe("admin adjustments", () => {
+  it("log the right currency and never overdraw", async () => {
+    const { adjustCoupons } = await import("../src/modules/admin/admin.service.js");
+    const admin = await createUser();
+    const user = await createUser({ coupons: 10 });
+    await adjustCoupons(user.id, 5, "bonus", admin.id);
+    await expect(adjustCoupons(user.id, -100, "penalty", admin.id)).rejects.toThrow();
+    const { fulfilled } = await race(4, () => adjustCoupons(user.id, -15, "penalty", admin.id));
+    expect(fulfilled).toHaveLength(1);
+    expect((await getBalances(user.id)).coupons).toBe(0);
+    const rows = await prisma.transaction.findMany({ where: { userId: user.id }, orderBy: { createdAt: "asc" } });
+    expect(rows.map((r) => [r.currency, r.amount])).toEqual([["coupons", 5], ["coupons", -15]]);
+  });
+});

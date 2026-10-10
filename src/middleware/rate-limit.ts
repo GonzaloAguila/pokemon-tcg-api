@@ -50,3 +50,38 @@ export const passwordResetRateLimiter = rateLimit({
     },
   },
 });
+
+/**
+ * Baseline limiter for the whole REST API (per client IP).
+ * Requires `app.set("trust proxy", 1)` behind Nginx so req.ip is the real client.
+ */
+export const apiRateLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    error: {
+      message: "Demasiadas solicitudes. Espera un momento.",
+      code: "RATE_LIMITED",
+    },
+  },
+});
+
+/**
+ * Stricter limiter for state-changing economy endpoints (purchases, claims, spins).
+ * GETs are not counted.
+ */
+export const economyRateLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 40,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => req.method === "GET",
+  message: {
+    error: {
+      message: "Demasiadas operaciones seguidas. Espera un momento.",
+      code: "RATE_LIMITED",
+    },
+  },
+});

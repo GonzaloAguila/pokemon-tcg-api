@@ -17,6 +17,8 @@ const DISCORD_REDIRECT_URI =
 export interface OAuthUser {
   id: string;
   email: string;
+  /** Whether the provider has verified the user owns this email. Accounts are linked by email, so unverified emails are rejected. */
+  emailVerified: boolean;
   name: string;
   avatar?: string;
 }
@@ -25,7 +27,7 @@ export interface OAuthUser {
 // Google
 // ============================================================================
 
-export function getGoogleAuthUrl(): string {
+export function getGoogleAuthUrl(state: string): string {
   if (!GOOGLE_CLIENT_ID) {
     throw Errors.BadRequest("Google OAuth no configurado");
   }
@@ -37,6 +39,7 @@ export function getGoogleAuthUrl(): string {
     scope: "openid email profile",
     access_type: "offline",
     prompt: "consent",
+    state,
   });
 
   return `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
@@ -81,6 +84,7 @@ export async function getGoogleUserFromCode(code: string): Promise<OAuthUser> {
   const userData = (await userRes.json()) as {
     id: string;
     email: string;
+    verified_email?: boolean;
     name: string;
     picture?: string;
   };
@@ -88,6 +92,7 @@ export async function getGoogleUserFromCode(code: string): Promise<OAuthUser> {
   return {
     id: userData.id,
     email: userData.email,
+    emailVerified: userData.verified_email === true,
     name: userData.name,
     avatar: userData.picture,
   };
@@ -97,7 +102,7 @@ export async function getGoogleUserFromCode(code: string): Promise<OAuthUser> {
 // Discord
 // ============================================================================
 
-export function getDiscordAuthUrl(): string {
+export function getDiscordAuthUrl(state: string): string {
   if (!DISCORD_CLIENT_ID) {
     throw Errors.BadRequest("Discord OAuth no configurado");
   }
@@ -107,6 +112,7 @@ export function getDiscordAuthUrl(): string {
     redirect_uri: DISCORD_REDIRECT_URI,
     response_type: "code",
     scope: "identify email",
+    state,
   });
 
   return `https://discord.com/api/oauth2/authorize?${params}`;
@@ -149,14 +155,20 @@ export async function getDiscordUserFromCode(
 
   const userData = (await userRes.json()) as {
     id: string;
-    email: string;
+    email: string | null;
+    verified?: boolean;
     username: string;
     avatar?: string;
   };
 
+  if (!userData.email) {
+    throw Errors.BadRequest("Tu cuenta de Discord no tiene un email asociado");
+  }
+
   return {
     id: userData.id,
     email: userData.email,
+    emailVerified: userData.verified === true,
     name: userData.username,
     avatar: userData.avatar
       ? `https://cdn.discordapp.com/avatars/${userData.id}/${userData.avatar}.png`

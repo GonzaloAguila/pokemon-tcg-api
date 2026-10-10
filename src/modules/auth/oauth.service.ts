@@ -45,6 +45,12 @@ async function handleOAuthCallback(
   oauthUser: OAuthUser,
   provider: AuthProvider,
 ) {
+  // Accounts are matched by email, so only accept emails the provider has verified.
+  // Otherwise anyone could register an unverified provider account with a victim's email and log in as them.
+  if (!oauthUser.emailVerified) {
+    throw Errors.Forbidden("Verifica tu email en el proveedor antes de ingresar");
+  }
+
   const email = oauthUser.email.toLowerCase();
 
   // Check if user exists with this email
@@ -60,6 +66,7 @@ async function handleOAuthCallback(
         data: {
           provider,
           providerId: oauthUser.id,
+          emailVerified: true,
         },
       });
       user = (await prisma.user.findUnique({ where: { id: user.id } }))!;

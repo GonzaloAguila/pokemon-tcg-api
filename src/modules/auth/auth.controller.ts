@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import { Router, type Request, type Response, type NextFunction } from "express";
 import * as authService from "./auth.service.js";
 import {
@@ -253,12 +254,63 @@ router.post(
 // OAuth Routes
 // ============================================================================
 
+// OAuth CSRF protection: a random `state` is stored in a short-lived httpOnly cookie
+// when the auth URL is requested, and must come back unchanged on the callback.
+const OAUTH_STATE_COOKIE = "oauthState";
+const OAUTH_STATE_COOKIE_OPTIONS: import("express").CookieOptions = {
+  httpOnly: true,
+  secure: IS_PROD,
+  sameSite: IS_PROD ? ("none" as const) : ("lax" as const),
+  path: "/api/auth",
+  maxAge: 10 * 60 * 1000, // 10 minutes
+  ...(COOKIE_DOMAIN ? { domain: COOKIE_DOMAIN } : {}),
+};
+
+function issueOAuthState(res: Response): string {
+  const state = crypto.randomBytes(24).toString("base64url");
+  res.cookie(OAUTH_STATE_COOKIE, state, OAUTH_STATE_COOKIE_OPTIONS);
+  return state;
+}
+
+function consumeOAuthState(req: Request, res: Response): boolean {
+  const expected = req.cookies?.[OAUTH_STATE_COOKIE];
+  const received = req.query.state;
+  res.clearCookie(OAUTH_STATE_COOKIE, { ...OAUTH_STATE_COOKIE_OPTIONS, maxAge: undefined });
+  if (typeof expected !== "string" || typeof received !== "string" || expected.length !== received.length) {
+    return false;
+  }
+  return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(received));
+}
+
+type OAuthResult = { accessToken: string; refreshToken: string; isNewUser: boolean };
+
+function oauthCallback(handle: (code: string) => Promise<OAuthResult>) {
+  return async (req: Request, res: Response) => {
+    const code = req.query.code;
+    if (typeof code !== "string" || !consumeOAuthState(req, res)) {
+      return res.redirect(`${FRONTEND_URL}/login?error=oauth-failed`);
+    }
+    try {
+      const result = await handle(code);
+      setRefreshCookie(res, result.refreshToken);
+      const params = new URLSearchParams({
+        token: result.accessToken,
+        isNewUser: String(result.isNewUser),
+      });
+      res.redirect(`${FRONTEND_URL}/auth/callback#${params}`);
+    } catch (err) {
+      console.error("OAuth callback failed:", (err as Error).message);
+      res.redirect(`${FRONTEND_URL}/login?error=oauth-failed`);
+    }
+  };
+}
+
 // GET /google
 router.get(
   "/google",
   (_req: Request, res: Response, next: NextFunction) => {
     try {
-      const url = getGoogleAuthUrl();
+      const url = getGoogleAuthUrl(issueOAuthState(res));
       res.json({ url });
     } catch (err) {
       next(err);
@@ -267,35 +319,14 @@ router.get(
 );
 
 // GET /google/callback
-router.get(
-  "/google/callback",
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const code = req.query.code as string;
-      if (!code) {
-        return res.redirect(`${FRONTEND_URL}/login?error=oauth-failed`);
-      }
-
-      const result = await oauthService.handleGoogleCallback(code);
-      setRefreshCookie(res, result.refreshToken);
-
-      const params = new URLSearchParams({
-        token: result.accessToken,
-        isNewUser: String(result.isNewUser),
-      });
-      res.redirect(`${FRONTEND_URL}/auth/callback#${params}`);
-    } catch (err) {
-      next(err);
-    }
-  },
-);
+router.get("/google/callback", oauthCallback(oauthService.handleGoogleCallback));
 
 // GET /discord
 router.get(
   "/discord",
   (_req: Request, res: Response, next: NextFunction) => {
     try {
-      const url = getDiscordAuthUrl();
+      const url = getDiscordAuthUrl(issueOAuthState(res));
       res.json({ url });
     } catch (err) {
       next(err);
@@ -304,27 +335,6 @@ router.get(
 );
 
 // GET /discord/callback
-router.get(
-  "/discord/callback",
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const code = req.query.code as string;
-      if (!code) {
-        return res.redirect(`${FRONTEND_URL}/login?error=oauth-failed`);
-      }
-
-      const result = await oauthService.handleDiscordCallback(code);
-      setRefreshCookie(res, result.refreshToken);
-
-      const params = new URLSearchParams({
-        token: result.accessToken,
-        isNewUser: String(result.isNewUser),
-      });
-      res.redirect(`${FRONTEND_URL}/auth/callback#${params}`);
-    } catch (err) {
-      next(err);
-    }
-  },
-);
+router.get("/discord/callback", oauthCallback(oauthService.handleDiscordCallback));
 
 export const authRouter = router;

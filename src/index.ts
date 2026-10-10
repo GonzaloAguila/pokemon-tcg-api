@@ -7,6 +7,7 @@ import dotenv from "dotenv";
 import cookieParser from "cookie-parser";
 import { setupSocketHandlers } from "./socket/handlers.js";
 import { errorHandler } from "./middleware/error-handler.js";
+import { apiRateLimiter, economyRateLimiter } from "./middleware/rate-limit.js";
 import { catalogRouter } from "./modules/catalog/index.js";
 import { boostersRouter } from "./modules/boosters/index.js";
 import { authRouter } from "./modules/auth/index.js";
@@ -42,6 +43,9 @@ const io = new Server(httpServer, {
   },
 });
 
+// Behind Nginx (one hop): use X-Forwarded-For so req.ip / rate limits see the real client
+app.set("trust proxy", 1);
+
 // Middleware
 app.use(cors({
   origin: corsOrigin,
@@ -54,6 +58,23 @@ app.use(cookieParser());
 app.get("/health", (_req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
+
+// Rate limits
+app.use("/api", apiRateLimiter);
+app.use(
+  [
+    "/api/market",
+    "/api/wheel",
+    "/api/packs",
+    "/api/battle-pass",
+    "/api/achievements",
+    "/api/users/me/claim-daily-coins",
+    "/api/users/me/claim-wheel-spin",
+    "/api/users/me/claim-slot-spin",
+    "/api/users/me/deck-slots",
+  ],
+  economyRateLimiter,
+);
 
 // API Routes
 app.use("/api", catalogRouter);

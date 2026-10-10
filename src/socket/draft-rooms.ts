@@ -476,7 +476,8 @@ export class DraftRoomManager {
   // Draft Flow
   // --------------------------------------------------------------------------
 
-  startDraft(roomId: string, socketId: string): DraftRoom {
+  /** Throws unless `socketId` is the room admin and the room can start. Does not mutate. */
+  assertCanStart(roomId: string, socketId: string): DraftRoom {
     const room = this.rooms.get(roomId);
     if (!room) throw new Error("Sala no encontrada");
 
@@ -488,6 +489,11 @@ export class DraftRoomManager {
     if (room.players.length < 2)
       throw new Error("Se necesitan al menos 2 jugadores");
     if (room.phase !== "lobby") throw new Error("El draft ya comenzó");
+    return room;
+  }
+
+  startDraft(roomId: string, socketId: string): DraftRoom {
+    const room = this.assertCanStart(roomId, socketId);
 
     room.phase = "drafting";
     room.currentRound = 1;

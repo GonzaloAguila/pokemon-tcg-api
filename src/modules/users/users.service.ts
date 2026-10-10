@@ -377,18 +377,6 @@ export async function grantMedal(userId: string, medalId: string) {
 }
 
 // ---------------------------------------------------------------------------
-// Permissions (admin-only)
-// ---------------------------------------------------------------------------
-
-export async function updatePermissions(userId: string, permissions: string[]) {
-  return prisma.user.update({
-    where: { id: userId },
-    data: { permissions },
-    select: { id: true, username: true, permissions: true },
-  });
-}
-
-// ---------------------------------------------------------------------------
 // Collection
 // ---------------------------------------------------------------------------
 

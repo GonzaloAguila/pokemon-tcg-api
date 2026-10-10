@@ -146,6 +146,22 @@ export async function createMatchGames(
 /**
  * Register draft socket events on a connected socket.
  */
+/** Authenticated userId from the socket handshake (set by the io.use auth middleware), or null. */
+/** Rooms whose start (and entry-fee charging) is in flight, to ignore duplicate start requests. */
+const startingRooms = new Set<string>();
+
+/** Refunds and removes each id from `playerIds` as it goes, so a retry never refunds anyone twice. */
+async function refundDraftEntry(playerIds: string[], entryFee: number) {
+  while (playerIds.length > 0) {
+    await usersService.addCoins(playerIds[0], entryFee, "draft_refund", "Reintegro de inscripcion a draft");
+    playerIds.shift();
+  }
+}
+
+function getSocketUserId(socket: Socket): string | null {
+  return (socket.data.user?.userId as string | undefined) ?? null;
+}
+
 export function registerDraftEvents(
   io: Server,
   socket: Socket,
@@ -164,14 +180,20 @@ export function registerDraftEvents(
 
   socket.on(
     "draft:create",
-    async (payload: { userId: string; name: string; config?: Partial<DraftConfig> }) => {
+    async (payload: { config?: Partial<DraftConfig> }) => {
       try {
-        const { userId, name, config } = payload;
+        // Identity comes from the verified handshake JWT, never from the payload
+        const userId = getSocketUserId(socket);
+        if (!userId) {
+          socket.emit("draft:error", { message: "Autenticacion requerida" });
+          return;
+        }
+        const config = payload?.config;
 
         // Only admins and superadmins can create draft rooms
         const user = await prisma.user.findUnique({
           where: { id: userId },
-          select: { role: true },
+          select: { role: true, username: true },
         });
         if (!user || (user.role !== "admin" && user.role !== "superadmin")) {
           socket.emit("draft:error", {
@@ -180,6 +202,7 @@ export function registerDraftEvents(
           return;
         }
 
+        const name = user.username;
         const room = draftRoomManager.createRoom(
           config ?? {},
           userId,
@@ -201,9 +224,23 @@ export function registerDraftEvents(
 
   socket.on(
     "draft:join",
-    async (payload: { roomId: string; userId: string; name: string }) => {
+    async (payload: { roomId: string }) => {
       try {
-        const { roomId, userId, name } = payload;
+        const userId = getSocketUserId(socket);
+        if (!userId) {
+          socket.emit("draft:error", { message: "Autenticacion requerida" });
+          return;
+        }
+        const roomId = payload?.roomId;
+        const account = await prisma.user.findUnique({
+          where: { id: userId },
+          select: { username: true },
+        });
+        if (!account || typeof roomId !== "string") {
+          socket.emit("draft:error", { message: "Solicitud invalida" });
+          return;
+        }
+        const name = account.username;
 
         // Check if the player has enough coins for the entry fee (new players only)
         const existingRoom = draftRoomManager.getRoom(roomId);
@@ -291,22 +328,17 @@ export function registerDraftEvents(
   // --------------------------------------------------------------------------
 
   socket.on("draft:start", async (payload: { roomId: string }) => {
+    const roomId = payload?.roomId;
+    if (startingRooms.has(roomId)) return; // a start (and its charging) is already in progress
+    const charged: string[] = [];
+    let entryFee = 0;
     try {
-      const { roomId } = payload;
-
-      // Entry fee logic: check and charge players before starting
-      const room = draftRoomManager.getRoom(roomId);
-      if (!room) {
-        socket.emit("draft:error", { message: "Sala no encontrada" });
-        return;
-      }
-
-      const entryFee = room.config.entryFee;
+      // Authorize and validate BEFORE charging anyone (throws -> draft:error)
+      const room = draftRoomManager.assertCanStart(roomId, socket.id);
+      startingRooms.add(roomId);
+      entryFee = room.config.entryFee;
 
       if (entryFee > 0) {
-        const kicked: string[] = [];
-        const charged: string[] = [];
-
         // Charge each non-admin player atomically; anyone who can't pay is removed
         for (const player of [...room.players]) {
           if (player.isAdmin) continue; // admin doesn't pay
@@ -315,29 +347,21 @@ export function registerDraftEvents(
             .then(() => true, () => false);
           if (paid) {
             charged.push(player.id);
-          } else {
-            kicked.push(player.id);
-            const removedPlayer = draftRoomManager.removePlayer(roomId, player.id);
-            // Notify kicked player
-            if (removedPlayer?.socketId) {
-              const kickedSocket = io.sockets.sockets.get(removedPlayer.socketId);
-              if (kickedSocket) {
-                kickedSocket.emit("draft:error", {
-                  message: "No tienes suficientes monedas. Fuiste removido del draft.",
-                });
-                kickedSocket.leave(roomId);
-              }
-            }
+            continue;
+          }
+          const removedPlayer = draftRoomManager.removePlayer(roomId, player.id);
+          const kickedSocket = removedPlayer?.socketId ? io.sockets.sockets.get(removedPlayer.socketId) : undefined;
+          if (kickedSocket) {
+            kickedSocket.emit("draft:error", {
+              message: "No tienes suficientes monedas. Fuiste removido del draft.",
+            });
+            kickedSocket.leave(roomId);
           }
         }
 
-        // Re-check minimum players after kicks
         const remainingRoom = draftRoomManager.getRoom(roomId);
         if (!remainingRoom || remainingRoom.players.length < 2) {
-          // Not starting after all: refund whoever already paid
-          for (const playerId of charged) {
-            await usersService.addCoins(playerId, entryFee, "draft_refund", "Reintegro de inscripcion a draft");
-          }
+          await refundDraftEntry(charged, entryFee);
           socket.emit("draft:error", {
             message: "No hay suficientes jugadores con fondos para iniciar.",
           });
@@ -347,14 +371,17 @@ export function registerDraftEvents(
         }
       }
 
-      // Now proceed with starting the draft
       draftRoomManager.startDraft(roomId, socket.id);
       broadcastDraftState(io, roomId);
       broadcastRoomList(io); // room no longer visible in lobby
 
       console.log(`🎴 Draft started in room ${roomId}`);
     } catch (error) {
+      // If anything failed after charging, give the entry fees back
+      await refundDraftEntry(charged, entryFee).catch((e) => console.error("Draft refund failed:", e));
       socket.emit("draft:error", { message: (error as Error).message });
+    } finally {
+      startingRooms.delete(roomId);
     }
   });
 

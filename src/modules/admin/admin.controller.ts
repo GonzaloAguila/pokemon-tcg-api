@@ -1,6 +1,8 @@
 import { Router, type Request, type Response, type NextFunction } from "express";
 import { requireAuth, requireRole, requirePermission } from "../../middleware/auth.js";
+import { z } from "zod";
 import { Errors } from "../../middleware/error-handler.js";
+import { ALL_PERMISSIONS, type AdminPermission } from "./permissions.js";
 import * as adminService from "./admin.service.js";
 import { roomManager } from "../../socket/handlers.js";
 import { io } from "../../index.js";
@@ -512,10 +514,11 @@ router.patch(
   preventSelfAction,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { permissions } = req.body;
-      if (!Array.isArray(permissions)) {
-        throw Errors.BadRequest("permissions debe ser un array");
+      const parsed = z.object({ permissions: z.array(z.enum(ALL_PERMISSIONS as [AdminPermission, ...AdminPermission[]])).max(ALL_PERMISSIONS.length) }).safeParse(req.body);
+      if (!parsed.success) {
+        throw Errors.BadRequest("permissions debe ser un array de permisos validos");
       }
+      const { permissions } = parsed.data;
       const result = await adminService.setPermissions(
         req.params.userId,
         permissions,
