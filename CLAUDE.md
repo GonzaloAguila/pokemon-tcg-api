@@ -20,10 +20,13 @@ npm run build        # tsc → dist/
 npx tsc --noEmit     # type check (the only working static check today)
 npm run db:push      # apply prisma/schema.prisma (no migrations folder exists)
 npm run db:generate  # regenerate Prisma client after schema edits
-npx tsx prisma/seed.ts   # superadmin seed
+SUPERADMIN_EMAIL=... SUPERADMIN_PASSWORD=... npx tsx prisma/seed.ts   # create/promote superadmin
+npm test             # vitest integration suite (needs the ptcg-test-db container, see test/README.md)
 ```
 
-`npm run lint` and `npm run test` are declared but **do not work**: eslint isn't installed/configured and there are no test files. CI (`.github/workflows/ci.yml`) runs `npm ci`, `prisma generate`, `tsc --noEmit` and `build`; it needs the `NPM_TOKEN` repo secret.
+`npm run lint` is declared but doesn't work (eslint isn't installed/configured). CI (`.github/workflows/ci.yml`) runs `npm ci`, `prisma generate`, `tsc --noEmit` and `build`; it needs the `NPM_TOKEN` repo secret.
+
+**Local database:** local dev uses the Docker container `ptcg-dev-db` (`postgresql://ptcg:ptcg@127.0.0.1:55433/pokemontcg_dev`). Never point local `.env` at production — prod Postgres only listens on localhost on the VPS.
 
 ## Layout
 
@@ -39,7 +42,8 @@ npx tsx prisma/seed.ts   # superadmin seed
 - Validate request bodies with zod in the controller; throw `Errors.BadRequest/NotFound/Forbidden/...` (instances of `AppError`) so `errorHandler` maps the status. Plain `Error` objects become 500s.
 - Protect routes with `requireAuth` then `requireRole(...)` / `requirePermission(...)`. Superadmin bypasses permission checks.
 - Socket identity: always derive the user from the verified handshake JWT via `getAuthUserId(socket)` (`handlers.ts`); never trust a `userId` in the payload.
-- Any balance change must go through `users.service` (`addCoins`, `spendCoins`, …) so a `Transaction` row is written. Amounts must be validated positive integers before reaching it.
+- Any balance change must go through `users.service` (`creditBalance`/`debitBalance` or the `addCoins`/`spendCoins`/… wrappers): they do one atomic UPDATE (debits guarded by `balance >= amount`), reject non-positive amounts and log a `Transaction` row with its `currency`. Pass the transaction client (`db`/`tx` arg) so a purchase charges and grants in ONE `prisma.$transaction`. One-time claims use conditional `updateMany` (e.g. `unlockedAt: null`) and check `count`.
+- Prize games (wheel, slots) roll and grant server-side (`src/modules/prizes/`, CSPRNG); never accept a prize or outcome from the client.
 - User-facing strings (errors, event log messages) are Spanish; code and comments English.
 - Card IDs: `{set-slug}-{3-digit-number}-{slug-name}`, e.g. `base-set-025-pikachu`, `jungle-002-electrode` (`Nidoran♀` → `nidoranf`, `Mr. Mime` → `mr-mime`).
 
@@ -47,6 +51,7 @@ npx tsx prisma/seed.ts   # superadmin seed
 
 - Game and draft rooms live in memory (Maps). A restart/PM2 reload drops every live game; reconnection only works within the same process. Single process only (no Redis adapter).
 - Server keeps state from player 1's perspective; player 2's actions run on a swapped copy and are swapped back. There are two swap implementations (`state-masking.ts` and a local one in `rooms.ts`) and they differ.
+- Every emitted state goes through `maskGameStateForPlayer(state, "player1" | "player2" | "spectator")`, which hides the opponent's hand/deck/prizes (same-length `{ id, hidden: true }` placeholders). Never emit `room.gameState` raw.
 - Coin flips are rolled server-side and sent via `showCoinFlip`; the client animates predetermined results.
 - Many rules (coin-flip effects, confusion, Metronome/Conversion flows) are re-implemented in `rooms.ts` instead of living in game-core. Prefer moving logic into game-core over adding more here.
 
@@ -60,20 +65,18 @@ Production: Hostinger VPS, `api.nostalgic-tcg.online`, Nginx (TLS via Certbot) �
 
 ## Admin data fixes
 
-For one-off grants (cards, currency) write a temporary `npx tsx` Prisma script, run it, then delete it. `userCard.upsert` with `update: { quantity }` *sets* the value; use `{ increment: n }` to add.
+For one-off grants (cards, currency) write a temporary `npx tsx` Prisma script, run it **on the VPS** from `/var/www/pokemon-tcg-api` (prod Postgres is localhost-only), then delete it. Prefer the atomic balance helpers so a Transaction row is logged. `userCard.upsert` with `update: { quantity }` *sets* the value; use `{ increment: n }` to add.
 
 ## Known issues (as of 2026-10 review — verify before assuming fixed)
 
-Security / economy:
-- `POST /market/buy-energy` does not validate `quantity`; a negative value increases the user's coins. Market endpoints have no zod.
-- `POST /wheel/claim` persists whatever prize the client sends (wheel and slots resolve prizes client-side).
-- `state-masking.ts` hides nothing: both clients (and spectators) receive the full hand, deck and prizes of both players.
-- Draft socket events trust `payload.userId` (admin check on `draft:create`, entry fee and identity on `draft:join`).
-- Discord OAuth ignores the `verified` flag and accounts are linked by email → account takeover risk. No OAuth `state` param.
-- `PATCH /users/:userId/permissions` only requires admin and has no self-check (privilege escalation).
-- Balance operations are read-then-write without atomic conditional updates; purchases aren't atomic with their grants.
-- No `app.set("trust proxy", 1)`: behind Nginx all clients share one IP for rate limiting. No limits on economy, chat or socket events.
-- Socket payloads are unvalidated casts; pending-choice actions (`deckSearch`, `forceSwitch`, …) don't check which player owns the pending state.
-- `prisma/seed.ts` (tracked) contains a plaintext superadmin password.
+Fixed on 2026-10-10 (branch security/economy-hardening): atomic economy + market validation, server-side wheel/slots, hidden-information masking, OAuth verified-email + state, draft socket identity, pending-choice turn checks, permissions route removal, trust proxy + rate limits, seed password from env. Prod infra: Postgres no longer public, DB password rotated, ufw allows only 22/80/443.
 
-Other: no migrations (db push only), `Match` never persisted, `betAmount` never charged, `console.*` logging only, `executeAction` in `rooms.ts` is ~970 lines.
+Still open:
+- Own deck order and prizes are sent to their owner (search UIs read `playerDeck`).
+- Pending flags aren't swapped for player 2; turn checks cover ownership for now.
+- Sockets are authenticated only at handshake: a banned user / expired token keeps the socket. Access tokens don't check `tokenVersion`; bans apply when the 15-min token expires.
+- Game room `username`/`avatarId`/`titleId` come from the client payload (cosmetic impersonation). `resolveDeckCards` doesn't check deck ownership; deck saves don't check the collection.
+- `chatMessage` can target any room name; socket payloads are unvalidated casts.
+- Discord/Google accounts with the same email both log into one account (by design, verified emails only).
+- No migrations (db push only; prod has `_prisma_migrations` with `0001_init` and an untracked `prisma/migrations/` on the VPS), `Match` never persisted, `betAmount` never charged, `console.*` logging only, `executeAction` in `rooms.ts` is ~970 lines.
+- Daily free wheel/slot spin endpoints (`/users/me/claim-wheel-spin`, `claim-slot-spin`) only stamp a date; not wired to `freeWheelSpins` or the UI.
