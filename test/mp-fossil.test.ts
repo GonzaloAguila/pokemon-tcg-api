@@ -203,6 +203,11 @@ describe.each(["p1", "p2"] as const)("Fossil in multiplayer as %s", (actor) => {
     expect(chooserView.context).toBeDefined();
     expectWaitingStub(t.masked(actor).pendingAttackChoice, "opponent");
     expectWaitingStub(t.masked("spectator").pendingAttackChoice, "opponent");
+    // Wording: the answerer gets stepForAnswerer's text, the waiting attacker the step's own
+    expect(pending.step.answererDescription).toBeDefined();
+    expect(chooserView.step.description).toBe(pending.step.answererDescription);
+    expect(chooserView.step.title).toBe(pending.step.answererTitle ?? pending.step.title);
+    expect(t.masked(actor).pendingAttackChoice!.step.description).toBe(pending.step.description);
 
     // Nothing else moves while the choice is pending
     await expectRejected(t, t.act("endTurn"), /resolver la elección/);

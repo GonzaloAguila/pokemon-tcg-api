@@ -280,11 +280,17 @@ describe.each(["p1", "p2"] as const)("Team Rocket in multiplayer as %s", (actor)
     expect(ask).toMatchObject({ cardId: "challenge-h", trainerName: "Challenge!", chooser: "opponent" });
     expect(ask.waiting).toBeUndefined();
     expect(ask.step.options.map((o) => o.id)).toEqual(["accept", "decline"]);
+    // Wording: the opponent (answerer) gets stepForAnswerer's text, the waiting player the step's own
+    const rawStep = (t.room.gameState as GameState & { pendingTrainerChoice: { step: Step } }).pendingTrainerChoice.step;
+    expect(rawStep.answererDescription).toBeDefined();
+    expect(ask.step.description).toBe(rawStep.answererDescription);
+    expect(ask.step.title).toBe(rawStep.answererTitle ?? rawStep.title);
     for (const viewer of [actor, "spectator"] as const) {
       const stub = t.masked(viewer).pendingTrainerChoice!;
       expect(stub.waiting).toBe(true);
       expect(stub.chooser).toBe("opponent");
       expectStrippedStep(stub.step);
+      expect(stub.step.description).toBe(rawStep.description);
     }
     // Only the opponent answers; nothing else moves meanwhile (surrender aside)
     await expectRejected(t, t.act("answerTrainerChoice", { selection: ["accept"] }), /No te corresponde elegir/);

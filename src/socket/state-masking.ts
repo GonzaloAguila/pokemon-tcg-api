@@ -31,6 +31,7 @@ import {
   type PendingAttackChoice,
   type PendingPowerChoice,
   type SelectionStep,
+  stepForAnswerer,
 } from "@gonzaloaguila/game-core";
 import type { PendingTrainerChoice } from "./rooms.js";
 
@@ -194,7 +195,7 @@ function maskAttackChoice(state: GameState, viewer: Viewer): GameState {
   const viewerIsAttacker = state.isPlayerTurn === true;
   const chooser = choice.step.chooser ?? "self";
   const viewerChooses = viewer !== "spectator" && (chooser === "opponent" ? !viewerIsAttacker : viewerIsAttacker);
-  if (viewerChooses) return state;
+  if (viewerChooses) return withAnswererStep(state, "pendingAttackChoice", choice);
   const { title, description, maxSelections, minSelections } = choice.step;
   return {
     ...state,
@@ -204,6 +205,17 @@ function maskAttackChoice(state: GameState, viewer: Viewer): GameState {
       waiting: true,
     },
   };
+}
+
+/**
+ * The pending choice in full for the player who answers it. A step the other player answers
+ * (`chooser: "opponent"`: Terror Strike, Knock Back, Challenge!) goes out as game-core's
+ * stepForAnswerer(step): `title` / `description` replaced by `answererTitle` /
+ * `answererDescription`, worded for the answerer. Any other step is sent as is.
+ */
+function withAnswererStep<C extends { step: SelectionStep }>(state: GameState, field: string, choice: C): GameState {
+  const step = stepForAnswerer(choice.step);
+  return step === choice.step ? state : { ...state, [field]: { ...choice, step } };
 }
 
 /** A step without anything to choose from (no options, cards, ordering cards, thumbnails). */
@@ -237,7 +249,7 @@ function maskTrainerChoice(state: GameState, viewer: Viewer): GameState {
   if (!choice) return state;
   const viewerIsTrainerPlayer = state.isPlayerTurn === true;
   const viewerAnswers = viewer !== "spectator" && (choice.chooser === "opponent" ? !viewerIsTrainerPlayer : viewerIsTrainerPlayer);
-  if (viewerAnswers) return state;
+  if (viewerAnswers) return withAnswererStep(state, "pendingTrainerChoice", choice);
   return {
     ...state,
     pendingTrainerChoice: {
