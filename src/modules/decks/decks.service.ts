@@ -5,6 +5,7 @@
  */
 
 import type { Prisma } from "@prisma/client";
+import { findCardById, isLimitedInDeck } from "@gonzaloaguila/game-core";
 import { prisma } from "../../lib/prisma.js";
 import { Errors } from "../../middleware/error-handler.js";
 import * as usersService from "../users/users.service.js";
@@ -23,15 +24,15 @@ const DECK_SLOT_PRICE = 500;
 const MIN_DECK_SIZE = 60;
 const MAX_COPIES_PER_CARD = 4;
 
-// Basic energy card IDs (unlimited copies allowed)
-const BASIC_ENERGY_IDS = new Set([
-  "base-set-097-fighting-energy",
-  "base-set-098-fire-energy",
-  "base-set-099-grass-energy",
-  "base-set-100-lightning-energy",
-  "base-set-101-psychic-energy",
-  "base-set-102-water-energy",
-]);
+/**
+ * Basic Energy is the only unlimited card (game-core isLimitedInDeck): special Energy (Double
+ * Colorless, Rainbow, Full Heal, Potion Energy) is limited to 4 like any other card. Unknown
+ * card ids count as limited.
+ */
+function isUnlimited(cardDefId: string): boolean {
+  const card = findCardById(cardDefId);
+  return !!card && !isLimitedInDeck(card);
+}
 
 // ---------------------------------------------------------------------------
 // Validation
@@ -51,15 +52,19 @@ export function validateDeckCards(cards: DeckCardEntry[]): {
     );
   }
 
-  // Check max copies per non-energy card
+  // Max copies per limited card, summed over entries (one card can appear once per variant).
+  // Counted per card id like the frontend deck builder: every special Energy name has a
+  // single id, so that is also "by name" for them. Same-name cards of different sets (Base Set
+  // and Jungle Pikachu) are still counted apart — changing that would invalidate saved decks.
+  const copies = new Map<string, number>();
   for (const entry of cards) {
-    if (
-      !BASIC_ENERGY_IDS.has(entry.cardDefId) &&
-      entry.quantity > MAX_COPIES_PER_CARD
-    ) {
-      errors.push(
-        `Maximo ${MAX_COPIES_PER_CARD} copias de "${entry.cardDefId}" (tiene ${entry.quantity})`,
-      );
+    if (isUnlimited(entry.cardDefId)) continue;
+    copies.set(entry.cardDefId, (copies.get(entry.cardDefId) ?? 0) + entry.quantity);
+  }
+  for (const [cardDefId, quantity] of copies) {
+    if (quantity > MAX_COPIES_PER_CARD) {
+      const name = findCardById(cardDefId)?.name ?? cardDefId;
+      errors.push(`Maximo ${MAX_COPIES_PER_CARD} copias de "${name}" (tiene ${quantity})`);
     }
   }
 
@@ -73,7 +78,7 @@ export function validateDeckCards(cards: DeckCardEntry[]): {
 async function findCollectionShortfalls(userId: string, cards: DeckCardEntry[]): Promise<string[]> {
   const needed = new Map<string, number>();
   for (const entry of cards) {
-    if (BASIC_ENERGY_IDS.has(entry.cardDefId)) continue;
+    if (isUnlimited(entry.cardDefId)) continue;
     needed.set(entry.cardDefId, (needed.get(entry.cardDefId) ?? 0) + entry.quantity);
   }
   if (needed.size === 0) return [];

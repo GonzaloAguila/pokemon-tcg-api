@@ -21,8 +21,14 @@ describe("set registry consumers", () => {
   });
 
   it("every standard booster opens 9 cards of its set plus 2 basic Energy", () => {
-    expect(STANDARD_BOOSTER_IDS).toEqual(["base-set-booster", "jungle-booster", "fossil-booster"]);
-    expect(getAllPacks().map((p) => p.id)).toEqual(["base-set-booster", "base-set-theme-pack", "jungle-booster", "fossil-booster"]);
+    expect(STANDARD_BOOSTER_IDS).toEqual(["base-set-booster", "jungle-booster", "fossil-booster", "team-rocket-booster"]);
+    expect(getAllPacks().map((p) => p.id)).toEqual([
+      "base-set-booster",
+      "base-set-theme-pack",
+      "jungle-booster",
+      "fossil-booster",
+      "team-rocket-booster",
+    ]);
     for (const packId of STANDARD_BOOSTER_IDS) {
       const pack = getAllPacks().find((p) => p.id === packId)!;
       const setName = CARD_SETS.find((s) => s.id === pack.setId)!.name;
@@ -61,6 +67,50 @@ describe("set registry consumers", () => {
 
     const fossilIds = new Set(CARD_SETS.find((s) => s.id === "fossil")!.cards.map((c) => c.id));
     expect(draftPool.filter((c) => fossilIds.has(c.id))).toHaveLength(47);
+  });
+
+  it("Team Rocket: catalog set (66 cards, 83 printed), booster like Jungle/Fossil, Dark Raichu rare, draft pool", () => {
+    const tr = getAllSets().find((s) => s.id === "team-rocket");
+    expect(tr).toMatchObject({ name: "Team Rocket", code: "TR", totalCards: 66, printedTotal: 83 });
+    expect(getCardsBySet("team-rocket")).toHaveLength(66);
+    expect(getCardById("team-rocket-083-dark-raichu")?.name).toBe("Dark Raichu");
+    expect(getCardById("team-rocket-017-rainbow-energy")?.name).toBe("Rainbow Energy");
+
+    const pack = getPackById("team-rocket-booster")!;
+    const jungle = getPackById("jungle-booster")!;
+    expect(pack).toMatchObject({
+      name: "Team Rocket Booster",
+      setId: "team-rocket",
+      image: "/packs/team-rocket/booster.png",
+      cardCount: 11,
+      energyCount: 2,
+      available: true,
+    });
+    expect(pack.price).toBe(jungle.price);
+    expect(pack.slots).toEqual(jungle.slots);
+
+    const rares = new Set<string>();
+    for (let i = 0; i < 200; i++) {
+      const { cards } = openPack("team-rocket-booster");
+      expect(cards).toHaveLength(11);
+      const bySlot = (pred: (slot: string) => boolean) => cards.filter((c) => pred(c.slotType));
+      const rare = bySlot((s) => s === "rare" || s === "rare-holo");
+      expect(rare.length).toBeGreaterThanOrEqual(1);
+      for (const c of rare) rares.add(c.card.id);
+      expect(bySlot((s) => s === "common")).toHaveLength(5);
+      expect(bySlot((s) => s === "energy")).toHaveLength(2);
+      expect(cards.filter((c) => c.slotType !== "energy").every((c) => c.card.set === "Team Rocket")).toBe(true);
+      // Like Fossil: the set has no basic Energy, the Energy slots are Base Set basic Energy
+      expect(cards.filter((c) => c.slotType === "energy").every((c) => isBasicEnergy(c.card))).toBe(true);
+    }
+    // Dark Raichu (#83, the secret rare) is in the rare pool; 200 packs see most of the 18 rares
+    const rarePool = CARD_SETS.find((s) => s.id === "team-rocket")!.cards.filter((c) => c.rarity === "rare-holo").map((c) => c.id);
+    expect(rarePool).toContain("team-rocket-083-dark-raichu");
+    expect([...rares].every((id) => rarePool.includes(id))).toBe(true);
+    expect(rares.size).toBeGreaterThan(10);
+
+    const trIds = new Set(CARD_SETS.find((s) => s.id === "team-rocket")!.cards.map((c) => c.id));
+    expect(draftPool.filter((c) => trIds.has(c.id))).toHaveLength(66);
   });
 
   it("the theme pack has no energy", () => {

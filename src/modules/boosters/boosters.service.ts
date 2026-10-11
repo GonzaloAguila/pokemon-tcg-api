@@ -100,6 +100,13 @@ const SET_BOOSTERS: Record<string, SetBoosterDef> = {
     image: "/packs/fossil/booster.png",
     price: 200,
   },
+  "team-rocket": {
+    id: "team-rocket-booster",
+    name: "Team Rocket Booster",
+    description: "Contains 11 random cards from the Team Rocket expansion. Includes 1 guaranteed Rare!",
+    image: "/packs/team-rocket/booster.png",
+    price: 200,
+  },
 };
 
 /** Ids of the standard boosters, in set-registry order (prizes pick one at random). */
