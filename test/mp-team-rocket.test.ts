@@ -73,7 +73,10 @@ function setupGame(actor: Side, board: Board = {}, coins: Coin[] = []) {
     if (!next) throw new Error("unexpected coin flip");
     return next;
   });
-  const base = initializeMultiplayerGame(getDeckById("zap")!, getDeckById("overgrowth")!);
+  const shuffled = initializeMultiplayerGame(getDeckById("zap")!, getDeckById("overgrowth")!);
+  // Basic Pokémon first so the deck slices below always hold some (Challenge!, Summon Minions)
+  const basicsFirst = (cards: GameCard[]) => [...cards].sort((a, b) => Number(isBasic(b)) - Number(isBasic(a)));
+  const base = { ...shuffled, playerDeck: basicsFirst(shuffled.playerDeck), opponentDeck: basicsFirst(shuffled.opponentDeck) };
   const view = {
     ...base,
     gamePhase: GamePhase.Playing,
@@ -136,6 +139,7 @@ function expectStrippedStep(step: Step | undefined) {
   expect(typeof step!.title).toBe("string");
 }
 
+const isBasic = (c: GameCard) => isPokemonCard(c) && c.stage === "basic";
 const hidden = (cards: unknown[]) => cards.every((c) => (c as { hidden?: boolean }).hidden === true);
 
 describe.each(["p1", "p2"] as const)("Team Rocket in multiplayer as %s", (actor) => {
