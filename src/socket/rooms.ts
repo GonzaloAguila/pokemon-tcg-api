@@ -61,7 +61,10 @@ import {
   getPowerCoinFlips,
   getPowerSteps,
   usePokemonPower,
+  getTrainerCoinFlippers,
+  getPowerCoinFlippers,
   checkSelection,
+  type CoinFlipper,
   type SelectionStep,
   type EnergyType,
   // Team Rocket: on-play power choices, Sinkhole
@@ -193,18 +196,35 @@ function walkClientSteps(
 }
 
 /**
- * Who flips each coin of a Trainer (TR contract §2). Digger: "you, opponent, you..." in one
- * until-tails run. No game-core API says this yet, so it is keyed by the card's name here.
+ * flippedBy of a Trainer's / power's coins (TR contract §2) from game-core's
+ * getTrainerCoinFlippers / getPowerCoinFlippers ("self" = the effect's player = "attacker").
+ * Omitted when that player flipped them all (every effect but Digger's "you, opponent, you...").
  */
-function trainerCoinFlippers(trainerName: string | undefined, count: number): Flipper[] | undefined {
-  if (trainerName !== "Digger") return undefined;
-  return Array.from({ length: count }, (_, i) => (i % 2 === 0 ? "attacker" : "defender"));
+function toFlippedBy(flippers: CoinFlipper[]): Flipper[] | undefined {
+  if (!flippers.includes("opponent")) return undefined;
+  return flippers.map((flipper) => (flipper === "self" ? "attacker" : "defender"));
 }
 
-/** showCoinFlip of a Trainer's coins (Poké Ball, Digger...). */
-function trainerCoinInfo(trainerName: string | undefined, results: Coin[]): CoinFlipInfo {
-  const flippedBy = trainerCoinFlippers(trainerName, results.length);
+/** Who flipped each coin of the Trainer `cardId`; `view` is its player's, with the card still in the hand. */
+const trainerFlippedBy = (view: GameState, cardId: string, count: number): Flipper[] | undefined =>
+  toFlippedBy(getTrainerCoinFlippers(view, cardId, count));
+
+/** Who flipped each coin of the power of `pokemonId`; `view` is its owner's. */
+const powerFlippedBy = (view: GameState, pokemonId: string, count: number): Flipper[] | undefined =>
+  toFlippedBy(getPowerCoinFlippers(view, pokemonId, count));
+
+/** showCoinFlip of a Trainer's coins (Poké Ball, Digger...); `view` as in trainerFlippedBy. */
+function trainerCoinInfo(view: GameState, cardId: string, trainerName: string | undefined, results: Coin[]): CoinFlipInfo {
+  const flippedBy = trainerFlippedBy(view, cardId, results.length);
   return { attackName: trainerName ?? "Entrenador", results, ...(flippedBy ? { flippedBy } : {}) };
+}
+
+/** showCoinFlip of a power's coins (Heal...); `view` is its owner's. */
+function powerCoinInfo(view: GameState, pokemonId: string, results: Coin[]): CoinFlipInfo {
+  const source = findInPlay(view, "player", pokemonId)?.pokemon.pokemon;
+  const powerName = source && isPokemonCard(source) ? source.power?.name : undefined;
+  const flippedBy = powerFlippedBy(view, pokemonId, results.length);
+  return { attackName: powerName ?? "Poder Pokémon", results, ...(flippedBy ? { flippedBy } : {}) };
 }
 
 /** The stored state with this Trainer step pending (chooser taken from the step). */
@@ -757,14 +777,12 @@ export class GameRoomManager {
     const view = key === "player1" ? room.gameState : swapSides(room.gameState);
     let coinKey: string;
     let requirement: CoinFlipRequirement;
-    let trainerName: string | undefined;
     try {
       if (request.purpose === "trainer") {
         const reason = canPlayTrainerCard(view, request.cardId);
         if (reason) return { success: false, error: reason };
         requirement = getTrainerCoinFlips(view, request.cardId);
         coinKey = effectCoinKey(key, "trainer", request.cardId);
-        trainerName = view.playerHand.find((c) => c.id === request.cardId)?.name;
       } else {
         const reason = canUsePokemonPower(view, request.pokemonId);
         if (reason) return { success: false, error: reason };
@@ -777,7 +795,9 @@ export class GameRoomManager {
     if (requirement === 0) return { success: false, error: "Esta carta no lanza monedas" };
 
     const results = this.effectCoins(room, coinKey, requirement);
-    const flippedBy = trainerCoinFlippers(trainerName, results.length);
+    const flippedBy = request.purpose === "trainer"
+      ? trainerFlippedBy(view, request.cardId, results.length)
+      : powerFlippedBy(view, request.pokemonId, results.length);
     return { success: true, results, result: results[0], ...(flippedBy ? { flippedBy } : {}) };
   }
 
@@ -1192,9 +1212,7 @@ export class GameRoomManager {
           newState = executeForPlayer((state) => usePokemonPower(state, pokemonId, selections, { coinResults }));
           if (coinResults.length > 0) {
             consumedCoinKey = coinKey;
-            const source = findInPlay(actorView, "player", pokemonId)?.pokemon.pokemon;
-            const powerName = source && isPokemonCard(source) ? source.power?.name : undefined;
-            opponentCoinFlipInfo = { attackName: powerName ?? "Poder Pokémon", results: coinResults };
+            opponentCoinFlipInfo = powerCoinInfo(actorView, pokemonId, coinResults);
           }
           break;
         }
@@ -1220,7 +1238,7 @@ export class GameRoomManager {
           newState = executeForPlayer((state) => playTrainerCard(state, cardId, selections, { coinResults }));
           if (coinResults.length > 0) {
             consumedCoinKey = coinKey;
-            opponentCoinFlipInfo = trainerCoinInfo(card?.name, coinResults);
+            opponentCoinFlipInfo = trainerCoinInfo(actorView, cardId, card?.name, coinResults);
           }
           break;
         }
@@ -1248,7 +1266,7 @@ export class GameRoomManager {
           newState = executeForPlayer((state) => playTrainerCard(state, cardId, selections, { coinResults }));
           if (coinResults.length > 0) {
             consumedCoinKey = coinKey;
-            opponentCoinFlipInfo = trainerCoinInfo(card?.name, coinResults);
+            opponentCoinFlipInfo = trainerCoinInfo(actorView, cardId, card?.name, coinResults);
           }
           break;
         }
@@ -1279,7 +1297,7 @@ export class GameRoomManager {
           eventsNeutralizedTo = newState.events.length;
           if (coinResults.length > 0) {
             consumedCoinKey = pendingRecord.coinKey;
-            opponentCoinFlipInfo = trainerCoinInfo(pending.trainerName, coinResults);
+            opponentCoinFlipInfo = trainerCoinInfo(trainerView, pendingRecord.cardId, pending.trainerName, coinResults);
             coinsShownTo = pendingRecord.side;
           }
           break;
