@@ -358,7 +358,9 @@ function neutralizeEvents(
     ["Rival empieza", `${opponent} empieza`],
   ];
 
-  // Regex replacements for partial/contextual matches
+  // Regex replacements for partial/contextual matches. Base Set / Jungle lines still use these
+  // relative forms ("pasa a ser el Pokémon activo del rival", "tu mazo", "Barajaste"...);
+  // Fossil / Team Rocket lines are perspective-free in game-core and need none of their own.
   const regexReplacements: [RegExp, string][] = [
     [/^Tu turno$/, `Turno de ${self}`],
     [/^Turno del rival$/, `Turno de ${opponent}`],
