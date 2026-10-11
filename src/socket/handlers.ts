@@ -627,22 +627,28 @@ export function setupSocketHandlers(io: Server): void {
           // Broadcast coin flip results to both players if present
           if (result.coinFlipInfo) {
             console.log(`[action] Broadcasting coin flip results: ${result.coinFlipInfo.attackName} - ${result.coinFlipInfo.results.join(", ")}`);
-            // results: the attacker's coins; defenderResults: Haunter's Transparency coin(s)
+            // results: the acting player's coins (flippedBy: who flipped each, when not all the
+            // acting player — Knock Down); defenderResults: Transparency / Final Beam coin
             io.to(roomId).emit("showCoinFlip", {
               attackName: result.coinFlipInfo.attackName,
               results: result.coinFlipInfo.results,
               count: result.coinFlipInfo.results.length,
+              ...(result.coinFlipInfo.flippedBy ? { flippedBy: result.coinFlipInfo.flippedBy } : {}),
               ...(result.coinFlipInfo.defenderResults ? { defenderResults: result.coinFlipInfo.defenderResults } : {}),
             });
           }
 
-          // Trainer/power coins: the actor already showed them (requestCoinFlip ack)
+          // Trainer/power coins: the Trainer's / power's player already showed them (requestCoinFlip ack)
           if (result.opponentCoinFlipInfo) {
-            socket.to(roomId).emit("showCoinFlip", {
+            const shownSocket = result.coinsShownTo === "player2" ? room.player2SocketId : room.player1SocketId;
+            const payload = {
               attackName: result.opponentCoinFlipInfo.attackName,
               results: result.opponentCoinFlipInfo.results,
               count: result.opponentCoinFlipInfo.results.length,
-            });
+              ...(result.opponentCoinFlipInfo.flippedBy ? { flippedBy: result.opponentCoinFlipInfo.flippedBy } : {}),
+            };
+            if (shownSocket) io.to(roomId).except(shownSocket).emit("showCoinFlip", payload);
+            else io.to(roomId).emit("showCoinFlip", payload);
           }
 
           // Broadcast setup timer start to both players if present

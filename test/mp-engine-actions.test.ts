@@ -332,12 +332,12 @@ describe.each(["p1", "p2"] as const)("multiplayer engine actions as %s", (actor)
     const confused = setupGame(actor, { myActive: inPlay("Pikachu", "my-active", { status: ["confused"] }) });
     await expectRejected(confused, confused.act("attack", { attackIndex: 1 }), "no tiene la energía necesaria");
 
+    // Conversion's chosen type goes to the engine (chosenType), which ignores it for an attack
+    // without ChangeWeakness / ChangeResistance: the attack is a normal one
     const conversion = setupGame(actor, { myActive: inPlay("Pikachu", "my-active", { energy: "LL" }) });
-    await expectRejected(
-      conversion,
-      conversion.act("attack", { attackIndex: 0, conversionType: "fire", conversionEffect: "changeWeakness" }),
-      "Ese ataque no cambia debilidad ni resistencia",
-    );
+    const notConversion = await conversion.act("attack", { attackIndex: 0, conversionType: "fire", conversionEffect: "changeWeakness" });
+    expect(notConversion.success, notConversion.error).toBe(true);
+    expect(conversion.mine().opponentActivePokemon?.modifiedWeakness).toBeUndefined();
 
     const twice = setupGame(actor, { theirActive: inPlay("Raichu", "their-active") });
     const first = await twice.act("attack", { attackIndex: 0 }); // Growl, no coins

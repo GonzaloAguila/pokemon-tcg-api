@@ -43,6 +43,8 @@ const effectSelections = z
   .nullish()
   .transform((v) => v ?? []);
 const attackIndex = z.number().int().min(0).max(9);
+/** One answer to a pending step (attack / power / Trainer choice): option ids. */
+const choiceSelection = z.array(z.string().min(1).max(200)).max(MAX_ZONE_CARDS);
 
 /** Treat null like "not sent" (the client drops undefined fields when serializing). */
 function optional<T extends z.ZodTypeAny>(schema: T) {
@@ -207,7 +209,10 @@ export const gameActionSchema = z.discriminatedUnion("type", [
   action("clearPeek", noPayload),
   // Answer to state.pendingAttackChoice.step (option ids; Prophecy's order "0".."n-1").
   // Only the step's chooser may send it; game-core checks it against the step's options.
-  action("resolveAttackChoice", z.object({ selection: z.array(z.string().min(1).max(200)).max(MAX_ZONE_CARDS) })),
+  action("resolveAttackChoice", z.object({ selection: choiceSelection })),
+  // Answer to state.pendingPowerChoice.step (Summon Minions, Sneak Attack, Reel In): only the
+  // side whose turn it is; game-core checks it against the step's options.
+  action("resolvePowerChoice", z.object({ selection: choiceSelection })),
   // Discard a Mysterious Fossil / Clefairy Doll in play (game-core canDiscardFromPlay)
   action("discardFromPlay", z.object({ pokemonId: instanceId })),
   action("mulligan", noPayload),
@@ -222,6 +227,11 @@ export const gameActionSchema = z.discriminatedUnion("type", [
     trainerName: optional(z.string().min(1).max(64)),
     coinResult: optional(coinSide),
   })),
+  // A Trainer whose steps the server runs (a step with chooser "opponent" or `reveals`:
+  // Challenge!, Rocket's Sneak Attack): the card in the hand and the steps answered so far.
+  action("startTrainer", z.object({ cardId: instanceId, selections: effectSelections })),
+  // Answer to state.pendingTrainerChoice.step, from the player that step asks (either side).
+  action("answerTrainerChoice", z.object({ selection: choiceSelection })),
   action("surrender", noPayload),
 ]);
 

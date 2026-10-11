@@ -55,10 +55,18 @@ import {
   // Effect registry: every Trainer and activated Pokémon Power
   canPlayTrainerCard,
   getTrainerCoinFlips,
+  getTrainerSteps,
   playTrainerCard,
   canUsePokemonPower,
   getPowerCoinFlips,
+  getPowerSteps,
   usePokemonPower,
+  checkSelection,
+  type SelectionStep,
+  type EnergyType,
+  // Team Rocket: on-play power choices, Sinkhole
+  resolvePowerChoice,
+  getRetreatDamageSources,
 } from "@gonzaloaguila/game-core";
 import { parseGameAction } from "./schemas.js";
 
@@ -112,16 +120,97 @@ interface GameRoom {
   // Coins rolled for a Trainer / power before it resolved (requestCoinFlip, or a failed
   // attempt), by effectCoinKey. The action uses these, never coins sent by the client.
   effectCoins?: Record<string, { results: Coin[]; turnNumber: number | null }>;
+
+  // Trainer whose steps the server runs (startTrainer): the answers so far stay here, never in
+  // the state sent to clients (Challenge!'s picks are face down until it resolves).
+  pendingTrainer?: PendingTrainerRecord;
 }
 
 type PlayerKey = "player1" | "player2";
 type Coin = "heads" | "tails";
+/** Who flipped a coin: "attacker" = the player acting (attack, Trainer, retreat), "defender" = the other one. */
+type Flipper = "attacker" | "defender";
 interface CoinFlipInfo {
   attackName: string;
   /** The attacker's coins: Smokescreen / Sand-attack coin first, then the attack's own */
   results: Coin[];
-  /** Coins flipped by the defending side (Haunter's Transparency), after the attacker's */
+  /** Who flipped each of `results` (Knock Down, Digger); omitted = all the acting player */
+  flippedBy?: Flipper[];
+  /** Coins flipped by the defending side (Transparency, Final Beam), after the attacker's */
   defenderResults?: Coin[];
+}
+
+/**
+ * state.pendingTrainerChoice as stored and sent to clients (TR contract §3). `chooser` is
+ * relative to the Trainer's player (the side whose turn it is): "self" = that player answers,
+ * "opponent" = the other player. Masking strips `step` for whoever doesn't answer.
+ */
+export interface PendingTrainerChoice {
+  cardId: string;
+  trainerName: string;
+  step: SelectionStep;
+  chooser: "self" | "opponent";
+}
+
+interface PendingTrainerRecord {
+  side: PlayerKey;
+  cardId: string;
+  /** Answers so far (server-side only) */
+  selections: string[][];
+  coinKey: string;
+}
+
+type RoomGameState = GameState & { pendingTrainerChoice?: PendingTrainerChoice };
+
+const pendingTrainerChoiceOf = (state: GameState): PendingTrainerChoice | undefined =>
+  (state as RoomGameState).pendingTrainerChoice;
+
+function withoutTrainerChoice(state: GameState): GameState {
+  if (!("pendingTrainerChoice" in state)) return state;
+  const { pendingTrainerChoice: _omit, ...rest } = state as RoomGameState;
+  return rest as GameState;
+}
+
+/** Steps the acting client can't answer itself: another player's answer, or hidden cards. */
+const isServerStep = (step: SelectionStep): boolean => step.chooser === "opponent" || step.reveals !== undefined;
+
+/**
+ * Check the answers a client sent for a Trainer's / power's steps: each one valid for its step,
+ * none answering a step the server must run (isServerStep: Challenge!'s opponent, Rocket's
+ * Sneak Attack's revealed hand). Returns the next step (null = every step answered).
+ */
+function walkClientSteps(
+  getSteps: (selections: string[][]) => SelectionStep | null,
+  selections: string[][],
+): SelectionStep | null {
+  for (let i = 0; i < selections.length; i++) {
+    const step = getSteps(selections.slice(0, i));
+    if (!step) throw new IllegalActionError("Hay selecciones de más");
+    if (isServerStep(step)) throw new IllegalActionError("Esta elección la pide el servidor: juega la carta con startTrainer");
+    checkSelection(step, selections[i]);
+  }
+  return getSteps(selections);
+}
+
+/**
+ * Who flips each coin of a Trainer (TR contract §2). Digger: "you, opponent, you..." in one
+ * until-tails run. No game-core API says this yet, so it is keyed by the card's name here.
+ */
+function trainerCoinFlippers(trainerName: string | undefined, count: number): Flipper[] | undefined {
+  if (trainerName !== "Digger") return undefined;
+  return Array.from({ length: count }, (_, i) => (i % 2 === 0 ? "attacker" : "defender"));
+}
+
+/** showCoinFlip of a Trainer's coins (Poké Ball, Digger...). */
+function trainerCoinInfo(trainerName: string | undefined, results: Coin[]): CoinFlipInfo {
+  const flippedBy = trainerCoinFlippers(trainerName, results.length);
+  return { attackName: trainerName ?? "Entrenador", results, ...(flippedBy ? { flippedBy } : {}) };
+}
+
+/** The stored state with this Trainer step pending (chooser taken from the step). */
+function withTrainerChoice(state: GameState, choice: Omit<PendingTrainerChoice, "chooser">): GameState {
+  const pendingTrainerChoice: PendingTrainerChoice = { ...choice, chooser: choice.step.chooser ?? "self" };
+  return { ...state, pendingTrainerChoice } as RoomGameState;
 }
 
 /** What a client asks coins for before choosing (requestCoinFlip). */
@@ -184,8 +273,10 @@ interface ActionResult {
   winner?: "player1" | "player2";
   /** Coins every client animates (attacks, confusion): showCoinFlip to the room */
   coinFlipInfo?: CoinFlipInfo;
-  /** Trainer/power coins: showCoinFlip to everyone but the actor (it showed them from requestCoinFlip) */
+  /** Trainer/power coins: showCoinFlip to everyone but the player who already showed them (requestCoinFlip) */
   opponentCoinFlipInfo?: CoinFlipInfo;
+  /** That player (default: the actor; differs when the opponent answered a Trainer's last step) */
+  coinsShownTo?: PlayerKey;
   winReason?: string;
   setupTimerStarted?: number; // timestamp when setup timer started (ms)
 }
@@ -654,23 +745,26 @@ export class GameRoomManager {
     roomId: string,
     socketId: string,
     request: CoinFlipRequest,
-  ): { success: true; results: Coin[]; result: Coin } | { success: false; error: string } {
+  ): { success: true; results: Coin[]; result: Coin; flippedBy?: Flipper[] } | { success: false; error: string } {
     const room = this.rooms.get(roomId);
     if (!room?.gameState) return { success: false, error: "Game not started" };
     const key = room.player1SocketId === socketId ? "player1" : room.player2SocketId === socketId ? "player2" : null;
     if (!key) return { success: false, error: "Not a player in this room" };
     const isMyTurn = key === "player1" ? room.gameState.isPlayerTurn : !room.gameState.isPlayerTurn;
     if (!isMyTurn) return { success: false, error: "Not your turn" };
+    if (pendingTrainerChoiceOf(room.gameState)) return { success: false, error: "Primero hay que resolver la carta de Entrenador" };
 
     const view = key === "player1" ? room.gameState : swapSides(room.gameState);
     let coinKey: string;
     let requirement: CoinFlipRequirement;
+    let trainerName: string | undefined;
     try {
       if (request.purpose === "trainer") {
         const reason = canPlayTrainerCard(view, request.cardId);
         if (reason) return { success: false, error: reason };
         requirement = getTrainerCoinFlips(view, request.cardId);
         coinKey = effectCoinKey(key, "trainer", request.cardId);
+        trainerName = view.playerHand.find((c) => c.id === request.cardId)?.name;
       } else {
         const reason = canUsePokemonPower(view, request.pokemonId);
         if (reason) return { success: false, error: reason };
@@ -683,7 +777,8 @@ export class GameRoomManager {
     if (requirement === 0) return { success: false, error: "Esta carta no lanza monedas" };
 
     const results = this.effectCoins(room, coinKey, requirement);
-    return { success: true, results, result: results[0] };
+    const flippedBy = trainerCoinFlippers(trainerName, results.length);
+    return { success: true, results, result: results[0], ...(flippedBy ? { flippedBy } : {}) };
   }
 
   /**
@@ -738,6 +833,18 @@ export class GameRoomManager {
     // require it to be the acting player's turn. Otherwise the opponent could resolve your choice.
     // resolveAttackChoice: only the chooser of the pending attack choice — the attacker, or the
     // other player when the step's chooser is "opponent" (Terror Strike), off-turn included.
+    // A Trainer the server runs (startTrainer: Challenge!, Rocket's Sneak Attack): only the
+    // player its step asks may answer (the opponent off-turn included); nothing else but
+    // surrendering happens meanwhile.
+    const pendingTrainerChoice = pendingTrainerChoiceOf(room.gameState);
+    if (action.type === "answerTrainerChoice") {
+      if (!pendingTrainerChoice || !room.pendingTrainer) return { success: false, error: "No hay ninguna carta de Entrenador esperando una respuesta" };
+      const trainerIsPlayer1 = room.pendingTrainer.side === "player1";
+      const chooserIsPlayer1 = pendingTrainerChoice.chooser === "opponent" ? !trainerIsPlayer1 : trainerIsPlayer1;
+      if (chooserIsPlayer1 !== isPlayer1) return { success: false, error: "No te corresponde elegir" };
+    } else if (pendingTrainerChoice && action.type !== "surrender") {
+      return { success: false, error: "Primero hay que resolver la carta de Entrenador" };
+    }
     if (action.type === "resolveAttackChoice") {
       const pendingChoice = room.gameState.pendingAttackChoice;
       if (!pendingChoice) return { success: false, error: "No hay ninguna elección de ataque pendiente" };
@@ -748,7 +855,14 @@ export class GameRoomManager {
       // game-core blocks everything else until the choice is answered (endTurn would be a no-op)
       return { success: false, error: "Primero hay que resolver la elección del ataque" };
     }
-    const turnFreeActions = ["ready", "mulligan", "playerReady", "takePrize", "promote", "surrender", "resolveAttackChoice"];
+    // An on-play power (Summon Minions, Sneak Attack, Reel In): the side whose turn it is
+    // answers it (turn check below); game-core blocks everything else until then
+    if (action.type === "resolvePowerChoice") {
+      if (!room.gameState.pendingPowerChoice) return { success: false, error: "No hay ninguna elección de Poder Pokémon pendiente" };
+    } else if (room.gameState.pendingPowerChoice && !["surrender", "promote", "takePrize"].includes(action.type)) {
+      return { success: false, error: "Primero hay que resolver el Poder Pokémon" };
+    }
+    const turnFreeActions = ["ready", "mulligan", "playerReady", "takePrize", "promote", "surrender", "resolveAttackChoice", "answerTrainerChoice"];
     const setupActions = ["playBasicToActive", "playBasicToBench"];
     const isSetupPhase = room.gameState.gamePhase === "MULLIGAN" || room.gameState.gamePhase === "SETUP";
     const isMyTurn = isPlayer1 ? room.gameState.isPlayerTurn : !room.gameState.isPlayerTurn;
@@ -785,8 +899,11 @@ export class GameRoomManager {
     // (trainer and power coins: the acting client already showed them from requestCoinFlip)
     let actionCoinFlipInfo: CoinFlipInfo | undefined;
     let opponentCoinFlipInfo: CoinFlipInfo | undefined;
+    let coinsShownTo: PlayerKey | undefined;
     // Effect coins to forget once the action succeeded
     let consumedCoinKey: string | undefined;
+    // room.pendingTrainer after the action: undefined = unchanged, null = cleared
+    let nextPendingTrainer: PendingTrainerRecord | null | undefined;
 
     try {
       let newState = room.gameState;
@@ -795,8 +912,9 @@ export class GameRoomManager {
         case "attack": {
           const attackIndex = action.payload.attackIndex;
           const metronomePayload = action.payload.metronomeAttack;
-          const conversionType = action.payload.conversionType;
-          const conversionEffect = action.payload.conversionEffect;
+          // Porygon's Conversion 1/2: the chosen type goes to the engine (ExecuteAttackOptions
+          // .chosenType), which applies it only for an attack with that effect
+          const chosenType = action.payload.conversionType as EnergyType | undefined;
           const attacker = actorView.playerActivePokemon;
           // A transformed Ditto uses the copied card's attacks (game-core's effective card)
           const attackerCard = attacker ? getEffectivePokemonCard(actorView, attacker) : undefined;
@@ -824,15 +942,6 @@ export class GameRoomManager {
             if (reason) return { success: false, error: reason };
           }
 
-          // Porygon's Conversion 1/2: only with the attack that has that effect
-          const conversion = conversionType && conversionEffect ? { type: conversionType, effect: conversionEffect } : null;
-          if (conversion) {
-            const effectType = conversion.effect === "changeWeakness" ? AttackEffectType.ChangeWeakness : AttackEffectType.ChangeResistance;
-            if (metronomePayload || !ownAttack?.effects?.some((e) => e.type === effectType)) {
-              return { success: false, error: "Ese ataque no cambia debilidad ni resistencia" };
-            }
-          }
-
           // ── Confusion: the server flips (never the client). Tails: the attack fails, the
           // engine applies the self-damage / KO / end of turn. Heads: the attack proceeds.
           let beforeAttack = room.gameState;
@@ -852,22 +961,6 @@ export class GameRoomManager {
             beforeAttack = afterFlip; // heads: continue the attack from the flipped state
           }
 
-          // ── Porygon Conversion 1 / Conversion 2 (still resolved here, no engine resolver) ──
-          if (conversion && ownAttack) {
-            newState = executeForPlayer((state) => {
-              const user = state.playerActivePokemon!;
-              const events = [...state.events, createGameEvent(`${user.pokemon.name} usó ${ownAttack.name}`, "action")];
-              if (conversion.effect === "changeWeakness") {
-                const defender = state.opponentActivePokemon!;
-                events.push(createGameEvent(`La debilidad de ${defender.pokemon.name} cambió a ${conversion.type}`, "action"));
-                return endTurn({ ...state, opponentActivePokemon: { ...defender, modifiedWeakness: conversion.type }, events }, true);
-              }
-              events.push(createGameEvent(`La resistencia de ${user.pokemon.name} cambió a ${conversion.type}`, "action"));
-              return endTurn({ ...state, playerActivePokemon: { ...user, modifiedResistance: conversion.type }, events }, true);
-            }, beforeAttack);
-            break;
-          }
-
           // ── Attack (or Metronome copying the Defending Pokémon's attack) ──
           // The server flips exactly the coins of game-core's plan (getAttackCoinPlan:
           // Smokescreen/Sand-attack coin, the attack's own — Stone Barrage until tails —, then
@@ -877,7 +970,7 @@ export class GameRoomManager {
           // ends the attacker's turn.
           const coinPlan = getAttackCoinPlan(toActor(beforeAttack), attackToUse);
           const coinResults = flipAttackCoins(coinPlan, this.flipCoin);
-          const attackOptions = { coinResults, skipDefenderPromotion: true };
+          const attackOptions = { coinResults, skipDefenderPromotion: true, ...(chosenType ? { chosenType } : {}) };
           newState = executeForPlayer((state) =>
             typeof attackToUse === "number"
               ? executeAttack(state, attackToUse, attackOptions)
@@ -885,12 +978,20 @@ export class GameRoomManager {
           beforeAttack);
 
           // Both clients animate the real coins (showCoinFlip); the defender's coins apart
+          // (Transparency / Final Beam). Knock Down / Bench Manipulation: the attack's own coins
+          // are flipped by the defending player (flippedBy "defender"; Smokescreen stays the attacker's).
           if (coinResults.length > 0) {
             const attackerCoinCount = coinResults.length - coinPlan.defender;
+            const results = coinResults.slice(0, attackerCoinCount);
             const defenderResults = coinResults.slice(attackerCoinCount);
+            const flippedBy: Flipper[] | undefined =
+              coinPlan.attackFlipper === "opponent"
+                ? results.map((_, i) => (i < coinPlan.smokescreen ? "attacker" : "defender"))
+                : undefined;
             actionCoinFlipInfo = {
               attackName,
-              results: coinResults.slice(0, attackerCoinCount),
+              results,
+              ...(flippedBy ? { flippedBy } : {}),
               ...(defenderResults.length > 0 ? { defenderResults } : {}),
             };
           }
@@ -904,7 +1005,22 @@ export class GameRoomManager {
         case "retreat": {
           const energyIds = action.payload.energyIdsToDiscard;
           const benchIdx = action.payload.benchIndex;
-          newState = executeForPlayer((state) => executeRetreat(state, energyIds, benchIdx));
+          // Sinkhole (Dark Dugtrio): one coin per working Sinkhole of the opponent, flipped by
+          // the retreating player. Always passed (the engine would use Math.random otherwise).
+          const sinkholes = getRetreatDamageSources(actorView, "player");
+          // executeRetreat reports an illegal retreat as an info event instead of throwing:
+          // probe it with harmless coins so no coin is flipped (or shown) for a rejected retreat
+          const probe = executeRetreat(actorView, energyIds, benchIdx, { coinResults: sinkholes.map(() => "heads" as const) });
+          if (probe.playerActivePokemon?.pokemon.id === actorView.playerActivePokemon?.pokemon.id) {
+            return { success: false, error: probe.events[probe.events.length - 1]?.message ?? "No puedes retirarte ahora" };
+          }
+          const coinResults = sinkholes.map(() => this.flipCoin());
+          newState = executeForPlayer((state) => executeRetreat(state, energyIds, benchIdx, { coinResults }));
+          if (coinResults.length > 0) {
+            const source = sinkholes[0].pokemon;
+            const powerName = isPokemonCard(source) ? source.power?.name : undefined;
+            actionCoinFlipInfo = { attackName: powerName ?? "Socavón", results: coinResults };
+          }
           break;
         }
 
@@ -989,6 +1105,14 @@ export class GameRoomManager {
           break;
         }
 
+        case "resolvePowerChoice": {
+          // Summon Minions / Sneak Attack / Reel In: answered on the acting side's view (the
+          // side whose turn it is, checked above); game-core checks the selection
+          const { selection } = action.payload;
+          newState = executeForPlayer((state) => resolvePowerChoice(state, selection));
+          break;
+        }
+
         case "deckSearch": {
           const selectedCardId = action.payload.cardId;
           newState = executeForPlayer((state) => executeDeckSearch(state, selectedCardId));
@@ -1063,6 +1187,8 @@ export class GameRoomManager {
           const requirement = getPowerCoinFlips(actorView, pokemonId);
           const coinKey = effectCoinKey(actorKey, "power", pokemonId, actorView.turnNumber);
           const coinResults = this.effectCoins(room, coinKey, requirement);
+          // No answer may stand in for another player's or need hidden cards (isServerStep)
+          walkClientSteps((answered) => getPowerSteps(actorView, pokemonId, answered, coinResults.length > 0 ? coinResults : undefined), selections);
           newState = executeForPlayer((state) => usePokemonPower(state, pokemonId, selections, { coinResults }));
           if (coinResults.length > 0) {
             consumedCoinKey = coinKey;
@@ -1088,10 +1214,73 @@ export class GameRoomManager {
           const requirement = getTrainerCoinFlips(actorView, cardId);
           const coinKey = effectCoinKey(actorKey, "trainer", cardId);
           const coinResults = this.effectCoins(room, coinKey, requirement);
+          // A client can't answer for the opponent (Challenge!) or pick from cards it can't see
+          // (Rocket's Sneak Attack): those cards go through startTrainer
+          walkClientSteps((answered) => getTrainerSteps(actorView, cardId, answered, coinResults.length > 0 ? coinResults : undefined), selections);
           newState = executeForPlayer((state) => playTrainerCard(state, cardId, selections, { coinResults }));
           if (coinResults.length > 0) {
             consumedCoinKey = coinKey;
-            opponentCoinFlipInfo = { attackName: card?.name ?? "Entrenador", results: coinResults };
+            opponentCoinFlipInfo = trainerCoinInfo(card?.name, coinResults);
+          }
+          break;
+        }
+
+        // ── Trainers with server-run steps (TR contract §3) ──
+        // startTrainer { cardId, selections }: the client answered what it could; the server
+        // checks those answers, then asks the next step itself, built from the real (unmasked)
+        // state: a step for the opponent (Challenge!) or with revealed cards (Rocket's Sneak
+        // Attack's whole opposing hand). Answers are kept in room.pendingTrainer, never sent.
+        case "startTrainer": {
+          const { cardId, selections } = action.payload;
+          const card = actorView.playerHand.find((c) => c.id === cardId);
+          const reason = canPlayTrainerCard(actorView, cardId);
+          if (reason) return { success: false, error: reason };
+          const coinKey = effectCoinKey(actorKey, "trainer", cardId);
+          const coinResults = this.effectCoins(room, coinKey, getTrainerCoinFlips(actorView, cardId));
+          const coinArg = coinResults.length > 0 ? coinResults : undefined;
+          const next = walkClientSteps((answered) => getTrainerSteps(actorView, cardId, answered, coinArg), selections);
+          if (next) {
+            newState = withTrainerChoice(room.gameState, { cardId, trainerName: card?.name ?? "", step: next });
+            nextPendingTrainer = { side: actorKey, cardId, selections, coinKey };
+            break;
+          }
+          // Nothing left to ask (e.g. Sneak Attack against an empty hand): played at once
+          newState = executeForPlayer((state) => playTrainerCard(state, cardId, selections, { coinResults }));
+          if (coinResults.length > 0) {
+            consumedCoinKey = coinKey;
+            opponentCoinFlipInfo = trainerCoinInfo(card?.name, coinResults);
+          }
+          break;
+        }
+
+        // answerTrainerChoice { selection }: from the player the pending step asks (checked
+        // above). Next step, or the Trainer is played on its player's view once all are answered.
+        case "answerTrainerChoice": {
+          const pendingRecord = room.pendingTrainer!;
+          const pending = pendingTrainerChoiceOf(room.gameState)!;
+          checkSelection(pending.step, action.payload.selection);
+          const selections = [...pendingRecord.selections, action.payload.selection];
+          const trainerIsPlayer1 = pendingRecord.side === "player1";
+          const asTrainer = (state: GameState): GameState => (trainerIsPlayer1 ? state : swapSides(state));
+          const trainerView = asTrainer(withoutTrainerChoice(room.gameState));
+          const coinResults = room.effectCoins?.[pendingRecord.coinKey]?.results ?? [];
+          const next = getTrainerSteps(trainerView, pendingRecord.cardId, selections, coinResults.length > 0 ? coinResults : undefined);
+          if (next) {
+            newState = withTrainerChoice(room.gameState, { cardId: pending.cardId, trainerName: pending.trainerName, step: next });
+            nextPendingTrainer = { ...pendingRecord, selections };
+            break;
+          }
+          newState = asTrainer(playTrainerCard(trainerView, pendingRecord.cardId, selections, { coinResults }));
+          nextPendingTrainer = null;
+          // Events speak for the Trainer's player, whoever answered last
+          const trainerName = trainerIsPlayer1 ? "Jugador 1" : "Jugador 2";
+          const otherName = trainerIsPlayer1 ? "Jugador 2" : "Jugador 1";
+          newState = { ...newState, events: neutralizeEvents(newState.events, eventsNeutralizedTo, trainerName, otherName) };
+          eventsNeutralizedTo = newState.events.length;
+          if (coinResults.length > 0) {
+            consumedCoinKey = pendingRecord.coinKey;
+            opponentCoinFlipInfo = trainerCoinInfo(pending.trainerName, coinResults);
+            coinsShownTo = pendingRecord.side;
           }
           break;
         }
@@ -1132,6 +1321,8 @@ export class GameRoomManager {
 
       room.gameState = newState;
       if (consumedCoinKey && room.effectCoins) delete room.effectCoins[consumedCoinKey];
+      if (nextPendingTrainer === null) delete room.pendingTrainer;
+      else if (nextPendingTrainer) room.pendingTrainer = nextPendingTrainer;
 
       // Update turn timer when turn changes
       room.turnStartedAt = Date.now();
@@ -1160,7 +1351,7 @@ export class GameRoomManager {
         winner,
         winReason,
         ...(actionCoinFlipInfo ? { coinFlipInfo: actionCoinFlipInfo } : {}),
-        ...(opponentCoinFlipInfo ? { opponentCoinFlipInfo } : {}),
+        ...(opponentCoinFlipInfo ? { opponentCoinFlipInfo, coinsShownTo: coinsShownTo ?? actorKey } : {}),
         ...(setupTimerStarted ? { setupTimerStarted } : {}),
       };
     } catch (error) {
@@ -1534,9 +1725,15 @@ export class GameRoomManager {
       return { success: false, error: "Not a player in this room" };
     }
 
-    // Check that it's the OPPONENT's turn (you can only kick when opponent's time is up)
-    const isOpponentsTurn = isPlayer1 ? !room.gameState.isPlayerTurn : room.gameState.isPlayerTurn;
-    if (!isOpponentsTurn) {
+    // Only the player the game is waiting for can be kicked: the side whose turn it is, unless
+    // a pending step asks the other player (Challenge!, Terror Strike) — then the turn's player
+    // is the one waiting and may kick
+    const turnIsPlayer1 = room.gameState.isPlayerTurn;
+    const otherPlayerAnswers =
+      pendingTrainerChoiceOf(room.gameState)?.chooser === "opponent" ||
+      room.gameState.pendingAttackChoice?.step.chooser === "opponent";
+    const waitingOnPlayer1 = otherPlayerAnswers ? !turnIsPlayer1 : turnIsPlayer1;
+    if (waitingOnPlayer1 === isPlayer1) {
       return { success: false, error: "Solo puedes expulsar cuando es el turno del rival" };
     }
 

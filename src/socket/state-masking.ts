@@ -24,11 +24,15 @@
  */
 
 import {
+  arePrizesRevealed,
   isHandRevealed,
   swapSides,
   type GameState as EngineState,
   type PendingAttackChoice,
+  type PendingPowerChoice,
+  type SelectionStep,
 } from "@gonzaloaguila/game-core";
+import type { PendingTrainerChoice } from "./rooms.js";
 
 // Loose record: emitted states are plain JSON and tests pass partial states
 type GameState = Record<string, unknown>;
@@ -120,7 +124,24 @@ const clairvoyanceRule: RevealRule = (viewerState) => {
   return zones;
 };
 
-export const REVEAL_RULES: RevealRule[] = [clairvoyanceRule];
+/**
+ * Here Comes Team Rocket!: Prize cards are played face up (game-core arePrizesRevealed). Face
+ * up = public: both players and spectators see them.
+ */
+const prizesFaceUpRule: RevealRule = (viewerState) => {
+  if (!Array.isArray(viewerState.playerPrizes) || !Array.isArray(viewerState.opponentPrizes)) return [];
+  const state = viewerState as unknown as EngineState;
+  const zones: HiddenZone[] = [];
+  try {
+    if (arePrizesRevealed(state, "opponent")) zones.push("opponentPrizes");
+    if (arePrizesRevealed(state, "player")) zones.push("playerPrizes");
+  } catch {
+    return []; // fail closed
+  }
+  return zones;
+};
+
+export const REVEAL_RULES: RevealRule[] = [clairvoyanceRule, prizesFaceUpRule];
 
 /** Zones revealed to this viewer by REVEAL_RULES. */
 export function revealedZones(viewerState: GameState, viewer: Viewer): Set<HiddenZone> {
@@ -185,11 +206,56 @@ function maskAttackChoice(state: GameState, viewer: Viewer): GameState {
   };
 }
 
+/** A step without anything to choose from (no options, cards, ordering cards, thumbnails). */
+function strippedStep(step: SelectionStep): Pick<SelectionStep, "title" | "description" | "options" | "maxSelections" | "minSelections"> {
+  const { title, description, maxSelections, minSelections } = step;
+  return { title, description, options: [], maxSelections, minSelections };
+}
+
+/**
+ * pendingPowerChoice (Summon Minions, Sneak Attack, Reel In) belongs to the side whose turn it
+ * is: in full for it; everyone else gets the question without options + `waiting: true`.
+ */
+function maskPowerChoice(state: GameState, viewer: Viewer): GameState {
+  const choice = state.pendingPowerChoice as PendingPowerChoice | undefined;
+  if (!choice) return state;
+  if (viewer !== "spectator" && state.isPlayerTurn === true) return state;
+  return {
+    ...state,
+    pendingPowerChoice: { pokemonId: choice.pokemonId, powerName: choice.powerName, step: strippedStep(choice.step), waiting: true },
+  };
+}
+
+/**
+ * pendingTrainerChoice (startTrainer: Challenge!, Rocket's Sneak Attack): `chooser` is relative
+ * to the Trainer's player, the side whose turn it is. The player who answers gets the step in
+ * full (Sneak Attack's revealed hand included); the other player and spectators get it
+ * stripped + `waiting: true`. The answers given so far are never in the state.
+ */
+function maskTrainerChoice(state: GameState, viewer: Viewer): GameState {
+  const choice = state.pendingTrainerChoice as PendingTrainerChoice | undefined;
+  if (!choice) return state;
+  const viewerIsTrainerPlayer = state.isPlayerTurn === true;
+  const viewerAnswers = viewer !== "spectator" && (choice.chooser === "opponent" ? !viewerIsTrainerPlayer : viewerIsTrainerPlayer);
+  if (viewerAnswers) return state;
+  return {
+    ...state,
+    pendingTrainerChoice: {
+      cardId: choice.cardId,
+      trainerName: choice.trainerName,
+      step: { ...strippedStep(choice.step), chooser: choice.step.chooser ?? "self" },
+      chooser: choice.chooser,
+      waiting: true,
+    },
+  };
+}
+
 /**
  * The state a given viewer may receive: perspective-swapped for player 2, with the
  * opponent's hidden zones masked (unless a REVEAL_RULE shows them), pending choices
- * only for the side resolving them and pendingAttackChoice in full only for its chooser. Spectators see player 1's perspective with both
- * sides masked and no pending choices.
+ * only for the side resolving them, and pendingAttackChoice / pendingPowerChoice /
+ * pendingTrainerChoice in full only for whoever answers them. Spectators see player 1's
+ * perspective with both sides masked and no pending choices.
  */
 export function maskGameStateForPlayer(
   state: GameState,
@@ -197,5 +263,8 @@ export function maskGameStateForPlayer(
 ): GameState {
   const view = forPlayer === "spectator" ? state : getGameStateForPlayer(state, forPlayer);
   const sides: HiddenZoneSide[] = forPlayer === "spectator" ? ["player", "opponent"] : ["opponent"];
-  return maskAttackChoice(stripForeignPending(hideZones(view, sides, revealedZones(view, forPlayer)), forPlayer), forPlayer);
+  let masked = stripForeignPending(hideZones(view, sides, revealedZones(view, forPlayer)), forPlayer);
+  masked = maskAttackChoice(masked, forPlayer);
+  masked = maskPowerChoice(masked, forPlayer);
+  return maskTrainerChoice(masked, forPlayer);
 }
