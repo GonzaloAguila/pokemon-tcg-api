@@ -16,7 +16,7 @@
     "test": "vitest"
   },
   "dependencies": {
-    "@gonzaloaguila/game-core": "0.5.0",
+    "@gonzaloaguila/game-core": "0.6.0",
     "@prisma/client": "^5.22.0",
     "bcrypt": "^6.0.0",
     "cookie-parser": "^1.4.7",
