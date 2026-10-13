@@ -2,11 +2,12 @@ import rateLimit from "express-rate-limit";
 
 /**
  * Strict rate limiter for login attempts.
- * 5 attempts per 15 minutes per IP.
+ * 5 attempts per 15 minutes per IP. LOGIN_RATE_LIMIT_MAX raises it for local testing with
+ * several accounts; read per request because dotenv loads after the imports.
  */
 export const loginRateLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 5,
+  max: () => Number(process.env.LOGIN_RATE_LIMIT_MAX) || 5,
   standardHeaders: true,
   legacyHeaders: false,
   message: {

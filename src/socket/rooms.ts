@@ -505,23 +505,24 @@ export class GameRoomManager {
       throw new Error("Esta mesa está reservada para otro jugador");
     }
 
+    // Reconnecting, also to a waiting room (the creator from another tab): a user never takes both seats
+    if (room.player1Id === userId) {
+      room.player1SocketId = socketId;
+      this.socketToRoom.set(socketId, roomId);
+      this.cancelForfeitTimer(roomId, "player1");
+      this.cancelCleanupTimer(roomId);
+      return room;
+    }
+    if (room.player2Id === userId) {
+      room.player2SocketId = socketId;
+      this.socketToRoom.set(socketId, roomId);
+      this.cancelForfeitTimer(roomId, "player2");
+      this.cancelCleanupTimer(roomId);
+      return room;
+    }
+
     // Check if room is full
     if (room.player1Id && room.player2Id) {
-      // Check if reconnecting
-      if (room.player1Id === userId) {
-        room.player1SocketId = socketId;
-        this.socketToRoom.set(socketId, roomId);
-        this.cancelForfeitTimer(roomId, "player1");
-        this.cancelCleanupTimer(roomId);
-        return room;
-      }
-      if (room.player2Id === userId) {
-        room.player2SocketId = socketId;
-        this.socketToRoom.set(socketId, roomId);
-        this.cancelForfeitTimer(roomId, "player2");
-        this.cancelCleanupTimer(roomId);
-        return room;
-      }
       throw new Error("Room is full");
     }
 
