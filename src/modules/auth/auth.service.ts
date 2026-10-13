@@ -105,9 +105,9 @@ export async function registerUser(data: RegisterRequest) {
 
   if (existing) {
     if (existing.email === data.email) {
-      throw Errors.Conflict("Ya existe una cuenta con este correo electronico");
+      throw Errors.Conflict("Ya existe una cuenta con este correo electrónico");
     }
-    throw Errors.Conflict("El nombre de usuario ya esta en uso");
+    throw Errors.Conflict("El nombre de usuario ya está en uso");
   }
 
   const passwordHash = await hashPassword(data.password);
@@ -146,9 +146,9 @@ export async function registerUser(data: RegisterRequest) {
         content: [
           "**Bienvenido, Entrenador!**",
           "",
-          "Nos alegra que te unas a **Nostalgic TCG**, la plataforma donde revives la era dorada del Juego de Cartas Coleccionables de Pokemon.",
+          "Nos alegra que te unas a **Nostalgic TCG**, la plataforma donde revives la era dorada del Juego de Cartas Coleccionables de Pokémon.",
           "",
-          "La plataforma se encuentra actualmente en fase **Alpha**, lo que significa que todavia estamos trabajando en muchas funcionalidades y puede que encuentres errores. Tu feedback es muy valioso para nosotros!",
+          "La plataforma se encuentra actualmente en fase **Alpha**, lo que significa que todavía estamos trabajando en muchas funcionalidades y puede que encuentres errores. ¡Tu feedback es muy valioso para nosotros!",
           "",
           "Para que puedas empezar tu aventura, te hemos otorgado:",
           "",
@@ -197,7 +197,7 @@ export async function loginUser(email: string, password: string) {
   // OAuth-only accounts don't have passwords
   if (!user.passwordHash) {
     throw Errors.Unauthorized(
-      `Esta cuenta usa ${user.provider}. Inicia sesion con ${user.provider}.`,
+      `Esta cuenta usa ${user.provider}. Inicia sesión con ${user.provider}.`,
     );
   }
 
@@ -227,7 +227,7 @@ export async function loginUser(email: string, password: string) {
   // Check email verification
   if (!user.emailVerified) {
     throw Errors.Forbidden(
-      "Debes verificar tu correo electronico antes de iniciar sesion",
+      "Debes verificar tu correo electrónico antes de iniciar sesión",
     );
   }
 
@@ -237,7 +237,7 @@ export async function loginUser(email: string, password: string) {
   }
   if (user.status === "suspended" && user.suspendedUntil && user.suspendedUntil > new Date()) {
     throw Errors.Forbidden(
-      `Tu cuenta esta suspendida hasta ${user.suspendedUntil.toISOString()}`,
+      `Tu cuenta está suspendida hasta ${user.suspendedUntil.toISOString()}`,
     );
   }
 
@@ -263,7 +263,7 @@ export async function loginUser(email: string, password: string) {
 export async function refreshAccessToken(refreshToken: string) {
   const payload = verifyRefreshToken(refreshToken);
   if (!payload) {
-    throw Errors.Unauthorized("Refresh token invalido o expirado");
+    throw Errors.Unauthorized("Refresh token inválido o expirado");
   }
 
   const user = await prisma.user.findUnique({
@@ -276,7 +276,7 @@ export async function refreshAccessToken(refreshToken: string) {
 
   // Check token version — if changed, all tokens are invalidated
   if (user.tokenVersion !== payload.tokenVersion) {
-    throw Errors.Unauthorized("Sesion invalidada. Inicia sesion de nuevo.");
+    throw Errors.Unauthorized("Sesión invalidada. Inicia sesión de nuevo.");
   }
 
   // Check account status
@@ -289,7 +289,7 @@ export async function refreshAccessToken(refreshToken: string) {
 
   // Check stored refresh token matches
   if (user.refreshToken !== refreshToken) {
-    throw Errors.Unauthorized("Refresh token no valido");
+    throw Errors.Unauthorized("Refresh token no válido");
   }
 
   const newPayload = toTokenPayload(user);
@@ -313,13 +313,13 @@ export async function changePassword(
   const user = await prisma.user.findUnique({ where: { id: userId } });
   if (!user || !user.passwordHash) {
     throw Errors.BadRequest(
-      "No se puede cambiar la contrasena de una cuenta OAuth",
+      "No se puede cambiar la contraseña de una cuenta OAuth",
     );
   }
 
   const valid = await comparePassword(currentPassword, user.passwordHash);
   if (!valid) {
-    throw Errors.Unauthorized("Contrasena actual incorrecta");
+    throw Errors.Unauthorized("Contraseña actual incorrecta");
   }
 
   const strength = validatePasswordStrength(newPassword);
@@ -362,7 +362,7 @@ export async function resetPassword(token: string, newPassword: string) {
   });
 
   if (!user) {
-    throw Errors.BadRequest("Token de restablecimiento invalido");
+    throw Errors.BadRequest("Token de restablecimiento inválido");
   }
 
   if (!user.resetTokenExpiry || user.resetTokenExpiry < new Date()) {
@@ -415,14 +415,14 @@ export async function verifyEmail(token: string) {
   });
 
   if (!user) {
-    throw Errors.BadRequest("Token de verificacion invalido");
+    throw Errors.BadRequest("Token de verificación inválido");
   }
 
   if (
     !user.verificationTokenExpiry ||
     user.verificationTokenExpiry < new Date()
   ) {
-    throw Errors.BadRequest("Token de verificacion expirado");
+    throw Errors.BadRequest("Token de verificación expirado");
   }
 
   await prisma.user.update({

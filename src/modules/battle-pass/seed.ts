@@ -20,7 +20,7 @@ async function main() {
       slug: "base-set-season-1",
       name: "Temporada 1: Base Set",
       description:
-        "El primer pase de batalla. 30 dias de recompensas exclusivas del Set Base.",
+        "El primer pase de batalla. 30 días de recompensas exclusivas del Set Base.",
       imageUrl: "/battle-pass/season-1.png",
       durationDays: 30,
       premiumPrice: 2,

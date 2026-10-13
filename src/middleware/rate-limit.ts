@@ -12,7 +12,7 @@ export const loginRateLimiter = rateLimit({
   legacyHeaders: false,
   message: {
     error: {
-      message: "Demasiados intentos de inicio de sesion. Intenta en 15 minutos.",
+      message: "Demasiados intentos de inicio de sesión. Intenta en 15 minutos.",
       code: "RATE_LIMITED",
     },
   },
@@ -29,7 +29,7 @@ export const registerRateLimiter = rateLimit({
   legacyHeaders: false,
   message: {
     error: {
-      message: "Demasiados intentos de registro. Intenta mas tarde.",
+      message: "Demasiados intentos de registro. Intenta más tarde.",
       code: "RATE_LIMITED",
     },
   },
@@ -46,7 +46,7 @@ export const passwordResetRateLimiter = rateLimit({
   legacyHeaders: false,
   message: {
     error: {
-      message: "Demasiadas solicitudes de recuperacion. Intenta mas tarde.",
+      message: "Demasiadas solicitudes de recuperación. Intenta más tarde.",
       code: "RATE_LIMITED",
     },
   },

@@ -61,7 +61,7 @@ describe("executeAction rejects malformed actions before touching the game", () 
     const before = room.gameState;
     const result = await manager.executeAction(room.id, "s1", action as never);
     expect(result.success).toBe(false);
-    expect(result.error).toMatch(/invalid/i);
+    expect(result.error).toMatch(/inválid/i);
     expect(room.gameState).toBe(before);
   });
 

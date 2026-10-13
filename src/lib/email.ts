@@ -37,26 +37,26 @@ export async function sendPasswordResetEmail(
   await client.emails.send({
     from: FROM_EMAIL,
     to,
-    subject: "Restablece tu contrasena - Nostalgic TCG",
+    subject: "Restablece tu contraseña - Nostalgic TCG",
     html: `
       <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto; padding: 32px; background: #faf5e4; border-radius: 12px;">
         <h1 style="color: #451a03; text-align: center; margin-bottom: 8px;">Nostalgic TCG</h1>
-        <p style="color: #92400e; text-align: center; margin-bottom: 24px;">Restablecimiento de contrasena</p>
+        <p style="color: #92400e; text-align: center; margin-bottom: 24px;">Restablecimiento de contraseña</p>
 
         <p style="color: #451a03;">Hola <strong>${username}</strong>,</p>
-        <p style="color: #78350f;">Has solicitado restablecer tu contrasena. Haz clic en el siguiente boton:</p>
+        <p style="color: #78350f;">Has solicitado restablecer tu contraseña. Haz clic en el siguiente botón:</p>
 
         <div style="text-align: center; margin: 32px 0;">
           <a href="${resetUrl}"
              style="background: linear-gradient(180deg, #ef4444, #b91c1c); color: white; padding: 12px 32px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block;">
-            Restablecer contrasena
+            Restablecer contraseña
           </a>
         </div>
 
         <p style="color: #92400e; font-size: 14px;">Si no solicitaste esto, puedes ignorar este correo. El enlace expira en 1 hora.</p>
 
         <hr style="border: none; border-top: 1px solid #d6d3d1; margin: 24px 0;" />
-        <p style="color: #a8a29e; font-size: 12px; text-align: center;">Nostalgic TCG - Pokemon Trading Card Game</p>
+        <p style="color: #a8a29e; font-size: 12px; text-align: center;">Nostalgic TCG - Pokémon Trading Card Game</p>
       </div>
     `,
   });
@@ -145,14 +145,14 @@ export async function sendVerificationEmail(
   await client.emails.send({
     from: FROM_EMAIL,
     to,
-    subject: "Verifica tu correo electronico - Nostalgic TCG",
+    subject: "Verifica tu correo electrónico - Nostalgic TCG",
     html: `
       <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto; padding: 32px; background: #faf5e4; border-radius: 12px;">
         <h1 style="color: #451a03; text-align: center; margin-bottom: 8px;">Nostalgic TCG</h1>
-        <p style="color: #92400e; text-align: center; margin-bottom: 24px;">Verificacion de correo electronico</p>
+        <p style="color: #92400e; text-align: center; margin-bottom: 24px;">Verificación de correo electrónico</p>
 
         <p style="color: #451a03;">Hola <strong>${username}</strong>,</p>
-        <p style="color: #78350f;">Gracias por registrarte. Para activar tu cuenta, verifica tu correo electronico haciendo clic en el siguiente boton:</p>
+        <p style="color: #78350f;">Gracias por registrarte. Para activar tu cuenta, verifica tu correo electrónico haciendo clic en el siguiente botón:</p>
 
         <div style="text-align: center; margin: 32px 0;">
           <a href="${verifyUrl}"
@@ -164,7 +164,7 @@ export async function sendVerificationEmail(
         <p style="color: #92400e; font-size: 14px;">Si no creaste esta cuenta, puedes ignorar este correo. El enlace expira en 24 horas.</p>
 
         <hr style="border: none; border-top: 1px solid #d6d3d1; margin: 24px 0;" />
-        <p style="color: #a8a29e; font-size: 12px; text-align: center;">Nostalgic TCG - Pokemon Trading Card Game</p>
+        <p style="color: #a8a29e; font-size: 12px; text-align: center;">Nostalgic TCG - Pokémon Trading Card Game</p>
       </div>
     `,
   });

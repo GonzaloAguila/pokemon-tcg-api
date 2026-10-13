@@ -24,7 +24,7 @@ export function validatePasswordStrength(
   const errors: string[] = [];
 
   if (password.length < 8) {
-    errors.push("La contrasena debe tener al menos 8 caracteres");
+    errors.push("La contraseña debe tener al menos 8 caracteres");
   }
   if (!/[A-Z]/.test(password)) {
     errors.push("Debe contener al menos una letra mayuscula");
@@ -33,7 +33,7 @@ export function validatePasswordStrength(
     errors.push("Debe contener al menos una letra minuscula");
   }
   if (!/[0-9]/.test(password)) {
-    errors.push("Debe contener al menos un numero");
+    errors.push("Debe contener al menos un número");
   }
 
   return { valid: errors.length === 0, errors };

@@ -305,7 +305,7 @@ export async function claimReward(
   track: string,
 ) {
   if (track !== "standard" && track !== "premium") {
-    throw Errors.BadRequest("Track invalido");
+    throw Errors.BadRequest("Track inválido");
   }
 
   const pass = await prisma.battlePass.findUnique({ where: { id: passId } });
@@ -320,7 +320,7 @@ export async function claimReward(
   // Validate day is unlocked (calendar day)
   const currentDay = getCurrentDayOfMonth();
   if (day < 1 || day > currentDay) {
-    throw Errors.BadRequest("Este dia aun no esta disponible");
+    throw Errors.BadRequest("Este día aún no está disponible");
   }
 
   // Validate premium track
@@ -341,7 +341,7 @@ export async function claimReward(
   // Find the reward definition
   const rewards = pass.rewards as unknown as BattlePassRewardDef[];
   const rewardDef = rewards.find((r) => r.day === day && r.track === track);
-  if (!rewardDef) throw Errors.NotFound("Definicion de recompensa");
+  if (!rewardDef) throw Errors.NotFound("Definición de recompensa");
 
   // Grant reward inside a transaction
   return prisma.$transaction(async (tx) => {

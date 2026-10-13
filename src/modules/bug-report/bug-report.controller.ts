@@ -45,7 +45,7 @@ router.post(
       // Rate limit check
       if (!checkRateLimit(userId)) {
         throw Errors.BadRequest(
-          "Has enviado demasiados reportes. Intenta de nuevo mas tarde.",
+          "Has enviado demasiados reportes. Intenta de nuevo más tarde.",
         );
       }
 
@@ -57,19 +57,19 @@ router.post(
 
       // Validate title
       if (!title || title.trim().length === 0) {
-        throw Errors.BadRequest("El titulo es requerido");
+        throw Errors.BadRequest("El título es requerido");
       }
       if (title.length > 200) {
-        throw Errors.BadRequest("El titulo no puede tener mas de 200 caracteres");
+        throw Errors.BadRequest("El título no puede tener más de 200 caracteres");
       }
 
       // Validate description
       if (!description || description.trim().length === 0) {
-        throw Errors.BadRequest("La descripcion es requerida");
+        throw Errors.BadRequest("La descripción es requerida");
       }
       if (description.length > 5000) {
         throw Errors.BadRequest(
-          "La descripcion no puede tener mas de 5000 caracteres",
+          "La descripción no puede tener más de 5000 caracteres",
         );
       }
 
@@ -77,7 +77,7 @@ router.post(
       const validImages: BugReportAttachment[] = [];
       if (images && Array.isArray(images)) {
         if (images.length > MAX_IMAGES) {
-          throw Errors.BadRequest(`Maximo ${MAX_IMAGES} imagenes permitidas`);
+          throw Errors.BadRequest(`Máximo ${MAX_IMAGES} imágenes permitidas`);
         }
         for (const img of images) {
           if (!img.data || !img.filename) continue;

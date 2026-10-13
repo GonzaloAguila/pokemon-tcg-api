@@ -86,9 +86,15 @@ interface CreatorInfo {
   titleId: string | null;
 }
 
-interface GameRoom {
+export interface GameRoom {
   id: string;
   status: "waiting" | "ready" | "playing" | "finished";
+
+  // Settlement (match-settlement.ts): the `matches` row opened when the game started (bets
+  // escrowed), a start in progress (escrow awaiting the DB) and whether the result was settled
+  matchId?: string;
+  startPending?: boolean;
+  resultSettled?: boolean;
 
   // Players
   player1Id: string | null;
@@ -426,6 +432,9 @@ type ForfeitCallback = (
   reason?: string,
 ) => void;
 
+/** A room with an open match is dropped without a result (admin close, everybody gone): refund it. */
+type AbandonCallback = (room: GameRoom, reason: string) => void;
+
 export class GameRoomManager {
   private rooms: Map<string, GameRoom> = new Map();
   private socketToRoom: Map<string, string> = new Map();
@@ -434,6 +443,7 @@ export class GameRoomManager {
   private setupTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private setupTimerStartTimes: Map<string, number> = new Map(); // roomId → Date.now()
   private onForfeitCallback: ForfeitCallback | null = null;
+  private onAbandonCallback: AbandonCallback | null = null;
 
   /** @param flipCoin - where every coin of this manager's games comes from (tests pass a scripted one) */
   constructor(private readonly flipCoin: CoinSource = serverCoin) {}
@@ -443,6 +453,17 @@ export class GameRoomManager {
    */
   setOnForfeit(callback: ForfeitCallback): void {
     this.onForfeitCallback = callback;
+  }
+
+  /** Set the callback for rooms dropped while their match is still open (refunds the bets). */
+  setOnAbandon(callback: AbandonCallback): void {
+    this.onAbandonCallback = callback;
+  }
+
+  /** The room goes away without a result: if it had an open match, let the owner refund it. */
+  private abandonMatch(room: GameRoom, reason: string): void {
+    if (!room.matchId || room.resultSettled) return;
+    this.onAbandonCallback?.(room, reason);
   }
 
   /**
@@ -556,6 +577,15 @@ export class GameRoomManager {
     const room = this.rooms.get(roomId);
     if (!room) return;
 
+    // Leaving a game in progress is a forfeit: the other player wins (and takes the bet). Before
+    // this, a losing player could leave, let the room die and escape the result.
+    const leavingSide = room.player1SocketId === socketId ? "player1" : room.player2SocketId === socketId ? "player2" : null;
+    if (leavingSide && room.status === "playing" && room.gameState) {
+      room.status = "finished";
+      this.cancelSetupTimer(roomId);
+      this.onForfeitCallback?.(roomId, leavingSide === "player1" ? "player2" : "player1", room.gameState, "El rival abandonó la partida");
+    }
+
     if (room.player1SocketId === socketId) {
       room.player1Id = null;
       room.player1SocketId = null;
@@ -570,11 +600,7 @@ export class GameRoomManager {
 
     // Remove room if empty
     if (!room.player1Id && !room.player2Id) {
-      this.rooms.delete(roomId);
-    }
-
-    // Clean up playing rooms where both players have left
-    if (room.status === "playing" && !room.player1Id && !room.player2Id) {
+      this.abandonMatch(room, "Ambos jugadores abandonaron la mesa");
       room.status = "finished";
       this.rooms.delete(roomId);
     }
@@ -1612,6 +1638,7 @@ export class GameRoomManager {
       // Only clean up if still both disconnected
       if (!room.player1SocketId && !room.player2SocketId) {
         console.log(`🧹 Cleaning up abandoned room ${roomId}`);
+        if (room.status === "playing") this.abandonMatch(room, "Ambos jugadores se desconectaron");
         room.status = "finished";
         this.rooms.delete(roomId);
       }
@@ -1720,6 +1747,9 @@ export class GameRoomManager {
   forceDeleteRoom(roomId: string): boolean {
     const room = this.rooms.get(roomId);
     if (!room) return false;
+    // A game in progress closed by an admin has no result: refund its bets
+    if (room.status === "playing") this.abandonMatch(room, "Mesa cerrada por un administrador");
+    room.status = "finished";
     // Clean up timers and socket mappings
     this.cancelSetupTimer(roomId);
     if (room.player1SocketId) this.socketToRoom.delete(room.player1SocketId);

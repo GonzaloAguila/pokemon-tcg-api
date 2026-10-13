@@ -35,7 +35,7 @@ describe("deck ownership", () => {
     const deck = await createDeck(owner.id, { name: "t", cards: deckCards });
     expect(await checkDeckPlayable(other.id, deck.id)).toBe("Mazo no encontrado");
     await prisma.userCard.updateMany({ where: { userId: owner.id }, data: { quantity: 1 } });
-    expect(await checkDeckPlayable(owner.id, deck.id)).toMatch(/Mazo invalido/);
+    expect(await checkDeckPlayable(owner.id, deck.id)).toMatch(/Mazo inválido/);
     expect(await checkDeckPlayable(other.id, "overgrowth")).toBeNull(); // theme decks are public
   });
 });
@@ -69,7 +69,7 @@ describe("deck rules: special Energy is limited (game-core isLimitedInDeck)", ()
     expect(validateDeckCards(deckWith([{ cardDefId: RAINBOW, quantity: 4 }]))).toEqual({ valid: true, errors: [] });
     const five = validateDeckCards(deckWith([{ cardDefId: RAINBOW, quantity: 5 }]));
     expect(five.valid).toBe(false);
-    expect(five.errors).toEqual(['Maximo 4 copias de "Rainbow Energy" (tiene 5)']);
+    expect(five.errors).toEqual(['Máximo 4 copias de "Rainbow Energy" (tiene 5)']);
     expect(validateDeckCards(deckWith([{ cardDefId: "base-set-096-double-colorless-energy", quantity: 5 }])).valid).toBe(false);
   });
 
@@ -91,7 +91,7 @@ describe("deck rules: special Energy is limited (game-core isLimitedInDeck)", ()
     });
     const deck = await createDeck(user.id, { name: "rainbow", cards: deckWith([{ cardDefId: RAINBOW, quantity: 5 }]) });
     expect(deck.isValid).toBe(false);
-    expect(await checkDeckPlayable(user.id, deck.id)).toMatch(/Mazo invalido: Maximo 4 copias de "Rainbow Energy"/);
+    expect(await checkDeckPlayable(user.id, deck.id)).toMatch(/Mazo inválido: Máximo 4 copias de "Rainbow Energy"/);
   });
 
   it("every starter deck and theme deck still passes the copy limits", () => {

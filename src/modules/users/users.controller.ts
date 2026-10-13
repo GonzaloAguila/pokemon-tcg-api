@@ -18,7 +18,7 @@ const updateProfileSchema = z.object({
     .max(20, "El nombre de usuario no puede exceder 20 caracteres")
     .regex(
       /^[a-zA-Z0-9_]+$/,
-      "Solo se permiten letras, numeros y guion bajo",
+      "Solo se permiten letras, números y guion bajo",
     )
     .optional(),
   avatarUrl: z.string().url().optional(),

@@ -90,7 +90,7 @@ export async function updateUserProfile(
       where: { username: data.username, NOT: { id: userId } },
     });
     if (existing) {
-      throw Errors.Conflict("El nombre de usuario ya esta en uso");
+      throw Errors.Conflict("El nombre de usuario ya está en uso");
     }
   }
 
@@ -189,7 +189,7 @@ const balanceSelect = { coins: true, coupons: true, rareCandy: true } as const;
 
 function assertPositiveAmount(amount: number) {
   if (!Number.isSafeInteger(amount) || amount <= 0) {
-    throw Errors.BadRequest("Cantidad invalida");
+    throw Errors.BadRequest("Cantidad inválida");
   }
 }
 
@@ -327,21 +327,23 @@ export async function recordMatchResult(
   userId: string,
   mode: GameMode,
   isWin: boolean,
+  db: Db = prisma,
 ) {
   const winsField = `${mode}Wins` as const;
   const lossesField = `${mode}Losses` as const;
 
-  const stats = await prisma.userStats.findUnique({
+  // Accounts get their stats row at signup; create it if it's missing (older accounts)
+  const stats = await db.userStats.upsert({
     where: { userId },
+    create: { userId },
+    update: {},
     select: { currentStreak: true, bestStreak: true },
   });
-
-  if (!stats) throw Errors.NotFound("Usuario");
 
   const newStreak = isWin ? stats.currentStreak + 1 : 0;
   const newBestStreak = Math.max(stats.bestStreak, newStreak);
 
-  return prisma.userStats.update({
+  return db.userStats.update({
     where: { userId },
     data: {
       [winsField]: isWin ? { increment: 1 } : undefined,

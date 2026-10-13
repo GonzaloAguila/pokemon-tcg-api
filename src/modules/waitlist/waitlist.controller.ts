@@ -27,7 +27,7 @@ function recordUsage(ip: string): void {
 }
 
 const emailSchema = z.object({
-  email: z.string().email("Email invalido").max(255),
+  email: z.string().email("Email inválido").max(255),
 });
 
 // ---------------------------------------------------------------------------
@@ -41,7 +41,7 @@ router.post(
 
       if (!checkRateLimit(ip)) {
         throw Errors.BadRequest(
-          "Demasiados intentos. Intenta de nuevo mas tarde.",
+          "Demasiados intentos. Intenta de nuevo más tarde.",
         );
       }
 

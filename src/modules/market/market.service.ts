@@ -252,7 +252,7 @@ export async function buyDailyCard(userId: string, cardDefId: string) {
   const offers = await getDailyOffers(userId);
   const offer = offers.cardOffers.find((o) => o.cardDefId === cardDefId);
   if (!offer) {
-    throw Errors.BadRequest("Esta carta no esta disponible en la tienda hoy");
+    throw Errors.BadRequest("Esta carta no está disponible en la tienda hoy");
   }
 
   const itemKey = `card:${cardDefId}`;
@@ -295,12 +295,12 @@ export async function buyCosmetic(
     (o) => o.type === type && o.itemId === itemId,
   );
   if (!offer) {
-    throw Errors.BadRequest("Este cosmetico no esta disponible en la tienda hoy");
+    throw Errors.BadRequest("Este cosmético no está disponible en la tienda hoy");
   }
 
   const itemKey = `cosmetic:${type}:${itemId}`;
   await prisma.$transaction(async (tx) => {
-    await recordDailyPurchase(tx, userId, itemKey, "Ya compraste este cosmetico hoy");
+    await recordDailyPurchase(tx, userId, itemKey, "Ya compraste este cosmético hoy");
 
     // Ownership rows have unique (userId, itemId) constraints, so a duplicate create also rolls back the charge.
     const charge = (label: string) =>
@@ -332,7 +332,7 @@ export async function buyCosmetic(
       await charge("tapete");
       await tx.userPlaymat.create({ data: { userId, playmatId: itemId } });
     } else {
-      throw Errors.BadRequest("Tipo de cosmetico invalido");
+      throw Errors.BadRequest("Tipo de cosmético inválido");
     }
   });
 
@@ -351,7 +351,7 @@ export async function buyEnergy(
   const offers = await getDailyOffers();
   const offer = offers.energyOffers.find((o) => o.energyType === energyType);
   if (!offer) {
-    throw Errors.BadRequest("Tipo de energia no valido");
+    throw Errors.BadRequest("Tipo de energía no válido");
   }
 
   if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > MAX_ENERGY_PER_PURCHASE) {
@@ -380,13 +380,13 @@ export async function convertRareCandy(
   target: "coins" | "coupons",
 ) {
   return prisma.$transaction(async (tx) => {
-    await usersService.spendRareCandy(userId, 1, "rare_candy_conversion", `Conversion de Caramelo Raro a ${target}`, tx);
+    await usersService.spendRareCandy(userId, 1, "rare_candy_conversion", `Conversión de Caramelo Raro a ${target}`, tx);
 
     if (target === "coins") {
-      const result = await usersService.addCoins(userId, CANDY_TO_COINS, "rare_candy_conversion", `Conversion: 1 Caramelo Raro → ${CANDY_TO_COINS} monedas`, tx);
+      const result = await usersService.addCoins(userId, CANDY_TO_COINS, "rare_candy_conversion", `Conversión: 1 Caramelo Raro → ${CANDY_TO_COINS} monedas`, tx);
       return { target, amount: CANDY_TO_COINS, newBalance: result.coins };
     }
-    const result = await usersService.addCoupons(userId, CANDY_TO_COUPONS, "rare_candy_conversion", `Conversion: 1 Caramelo Raro → ${CANDY_TO_COUPONS} cupones`, tx);
+    const result = await usersService.addCoupons(userId, CANDY_TO_COUPONS, "rare_candy_conversion", `Conversión: 1 Caramelo Raro → ${CANDY_TO_COUPONS} cupones`, tx);
     return { target, amount: CANDY_TO_COUPONS, newBalance: result.coupons };
   });
 }

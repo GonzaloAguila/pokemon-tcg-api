@@ -48,9 +48,9 @@ describe("socket payload validation over the wire", () => {
     const socket = await server.connect(tokenFor(user));
     socket.emit("createRoom", { deckId: "brushfire", prizeCount: "6" });
     const err = await nextEvent<{ message: string }>(socket, "error");
-    expect(err.message).toMatch(/invalid/i);
+    expect(err.message).toMatch(/inválid/i);
     socket.emit("createRoom", null);
-    expect((await nextEvent<{ message: string }>(socket, "error")).message).toMatch(/invalid/i);
+    expect((await nextEvent<{ message: string }>(socket, "error")).message).toMatch(/inválid/i);
   });
 
   it("a malformed game action gets actionResult { success:false }", async () => {
@@ -58,7 +58,7 @@ describe("socket payload validation over the wire", () => {
     const socket = await server.connect(tokenFor(user));
     socket.emit("action", { roomId: "NOPE01", action: { type: "attack", payload: { attackIndex: "0" } } });
     const res = await nextEvent<{ success: boolean; error: string }>(socket, "actionResult");
-    expect(res).toEqual({ success: false, error: expect.stringMatching(/invalid/i) });
+    expect(res).toEqual({ success: false, error: expect.stringMatching(/inválid/i) });
     socket.emit("action", { roomId: "NOPE01" });
     expect((await nextEvent<{ success: boolean }>(socket, "actionResult")).success).toBe(false);
   });
@@ -67,16 +67,16 @@ describe("socket payload validation over the wire", () => {
     const user = await createUser();
     const socket = await server.connect(tokenFor(user));
     const res = await socket.timeout(2000).emitWithAck("requestCoinFlip", { roomId: "NOPE01", purpose: "steal" });
-    expect(res).toEqual({ success: false, error: expect.stringMatching(/invalid/i) });
+    expect(res).toEqual({ success: false, error: expect.stringMatching(/inválid/i) });
   });
 
   it("draft events reject bad payloads with draft:error", async () => {
     const user = await createUser();
     const socket = await server.connect(tokenFor(user));
     socket.emit("draft:submitDeck", { roomId: "K7M2PQ", deckCardIds: Array(5000).fill("x"), energyCards: [] });
-    expect((await nextEvent<{ message: string }>(socket, "draft:error")).message).toMatch(/invalid/i);
+    expect((await nextEvent<{ message: string }>(socket, "draft:error")).message).toMatch(/inválid/i);
     socket.emit("draft:pick", { roomId: 42 });
-    expect((await nextEvent<{ message: string }>(socket, "draft:error")).message).toMatch(/invalid/i);
+    expect((await nextEvent<{ message: string }>(socket, "draft:error")).message).toMatch(/inválid/i);
   });
 });
 
@@ -185,6 +185,6 @@ describe("session freshness on sockets", () => {
     invalidateAccountState(user.id);
     const socket = await server.connect(oldToken);
     socket.emit("createRoom", lobbyCreateRoom(user.id));
-    expect((await nextEvent<{ message: string }>(socket, "error")).message).toMatch(/Autenticacion requerida/);
+    expect((await nextEvent<{ message: string }>(socket, "error")).message).toMatch(/Autenticación requerida/);
   });
 });

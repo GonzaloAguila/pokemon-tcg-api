@@ -8,6 +8,13 @@ npx prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma 
   > prisma/migrations/20261010000000_baseline/migration.sql
 ```
 
+Later migrations (apply with `migrate deploy` once the baseline is resolved, step 4 below):
+
+- `20261013000000_match_settlement` (2026-10-13): `matches` gets `mode`, `roomId`, `betAmount`,
+  `player1Xp`, `player2Xp`, `settledAt` and three indexes; `player1Id` becomes nullable with
+  `ON DELETE SET NULL` (deleting an account no longer fails once it has matches). Additive, no
+  data rewrite (nothing wrote to `matches` before this change).
+
 **Nothing has been applied to production.** Production was built with `prisma db push`. Its
 `_prisma_migrations` table holds a single row, `0001_init` (applied 2026-02-09), from an earlier
 attempt. The VPS also has an untracked `prisma/migrations/` folder from that attempt.

@@ -78,7 +78,7 @@ export async function getGoogleUserFromCode(code: string): Promise<OAuthUser> {
   );
 
   if (!userRes.ok) {
-    throw Errors.BadRequest("Error al obtener informacion de Google");
+    throw Errors.BadRequest("Error al obtener información de Google");
   }
 
   const userData = (await userRes.json()) as {
@@ -150,7 +150,7 @@ export async function getDiscordUserFromCode(
   });
 
   if (!userRes.ok) {
-    throw Errors.BadRequest("Error al obtener informacion de Discord");
+    throw Errors.BadRequest("Error al obtener información de Discord");
   }
 
   const userData = (await userRes.json()) as {

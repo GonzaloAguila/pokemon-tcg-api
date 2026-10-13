@@ -29,7 +29,7 @@ async function freshSession(payload: TokenPayload): Promise<TokenPayload> {
   const state = await getAccountState(payload.userId);
   if (!state) throw Errors.Unauthorized("Usuario no encontrado");
   if (state.tokenVersion !== payload.tokenVersion) {
-    throw Errors.Unauthorized("Sesion invalidada. Inicia sesion de nuevo.");
+    throw Errors.Unauthorized("Sesión invalidada. Inicia sesión de nuevo.");
   }
   const blocked = accountBlockReason(state);
   if (blocked) throw Errors.Forbidden(blocked);
@@ -48,7 +48,7 @@ export function requireAuth(
   if (!token) return next(Errors.Unauthorized("Token de acceso requerido"));
 
   const payload = verifyAccessToken(token);
-  if (!payload) return next(Errors.Unauthorized("Token invalido o expirado"));
+  if (!payload) return next(Errors.Unauthorized("Token inválido o expirado"));
 
   freshSession(payload).then(
     (user) => {
@@ -68,7 +68,7 @@ export function requireRole(...roles: UserRole[]): RequestHandler {
       throw Errors.Unauthorized("Token de acceso requerido");
     }
     if (!roles.includes(req.user.role)) {
-      throw Errors.Forbidden("No tienes permisos para esta accion");
+      throw Errors.Forbidden("No tienes permisos para esta acción");
     }
     next();
   };
@@ -89,7 +89,7 @@ export function requirePermission(...permissions: string[]): RequestHandler {
 
       // Must be at least admin
       if (req.user.role !== "admin") {
-        throw Errors.Forbidden("No tienes permisos para esta accion");
+        throw Errors.Forbidden("No tienes permisos para esta acción");
       }
 
       // Check user's permissions from DB (allows real-time revocation)
@@ -101,7 +101,7 @@ export function requirePermission(...permissions: string[]): RequestHandler {
       const userPerms = (user?.permissions as string[]) || [];
       const hasAll = permissions.every((p) => userPerms.includes(p));
       if (!hasAll) {
-        throw Errors.Forbidden("No tienes permisos para esta accion");
+        throw Errors.Forbidden("No tienes permisos para esta acción");
       }
 
       next();
@@ -134,7 +134,7 @@ export function checkUserStatus(): RequestHandler {
       if (user.status === "suspended") {
         if (user.suspendedUntil && user.suspendedUntil > new Date()) {
           const until = user.suspendedUntil.toISOString();
-          throw Errors.Forbidden(`Tu cuenta esta suspendida hasta ${until}`);
+          throw Errors.Forbidden(`Tu cuenta está suspendida hasta ${until}`);
         }
         // Suspension expired — auto-reactivate
         await prisma.user.update({

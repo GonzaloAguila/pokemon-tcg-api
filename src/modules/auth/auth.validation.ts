@@ -1,18 +1,18 @@
 import { z } from "zod";
 
 export const registerSchema = z.object({
-  email: z.string().email("Correo electronico invalido"),
+  email: z.string().email("Correo electrónico inválido"),
   username: z
     .string()
     .min(3, "El nombre de usuario debe tener al menos 3 caracteres")
     .max(20, "El nombre de usuario no puede exceder 20 caracteres")
     .regex(
       /^[a-zA-Z0-9_]+$/,
-      "Solo se permiten letras, numeros y guion bajo",
+      "Solo se permiten letras, números y guion bajo",
     ),
   password: z
     .string()
-    .min(8, "La contrasena debe tener al menos 8 caracteres"),
+    .min(8, "La contraseña debe tener al menos 8 caracteres"),
   starterColor: z
     .enum(["fire", "water", "grass", "electric", "psychic", "fighting"])
     .optional(),
@@ -24,24 +24,24 @@ export const registerSchema = z.object({
 });
 
 export const loginSchema = z.object({
-  email: z.string().email("Correo electronico invalido"),
-  password: z.string().min(1, "La contrasena es requerida"),
+  email: z.string().email("Correo electrónico inválido"),
+  password: z.string().min(1, "La contraseña es requerida"),
 });
 
 export const changePasswordSchema = z.object({
-  currentPassword: z.string().min(1, "La contrasena actual es requerida"),
+  currentPassword: z.string().min(1, "La contraseña actual es requerida"),
   newPassword: z
     .string()
-    .min(8, "La nueva contrasena debe tener al menos 8 caracteres"),
+    .min(8, "La nueva contraseña debe tener al menos 8 caracteres"),
 });
 
 export const forgotPasswordSchema = z.object({
-  email: z.string().email("Correo electronico invalido"),
+  email: z.string().email("Correo electrónico inválido"),
 });
 
 export const resetPasswordSchema = z.object({
   token: z.string().min(1, "Token requerido"),
   newPassword: z
     .string()
-    .min(8, "La nueva contrasena debe tener al menos 8 caracteres"),
+    .min(8, "La nueva contraseña debe tener al menos 8 caracteres"),
 });

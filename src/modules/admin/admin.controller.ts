@@ -29,7 +29,7 @@ const adminBodies = {
   adjustCards: z.object({
     cards: z
       .array(z.object({
-        cardDefId: z.string().regex(/^[a-z0-9-]{1,100}$/, "cardDefId invalido"),
+        cardDefId: z.string().regex(/^[a-z0-9-]{1,100}$/, "cardDefId inválido"),
         quantity: signedAmount(1000),
       }))
       .min(1)
@@ -54,13 +54,13 @@ function parseBody<S extends z.ZodTypeAny>(schema: S, body: unknown, status: 400
   if (res.success) return res.data;
   const issue = res.error.issues[0];
   const field = issue?.path.length ? issue.path.join(".") : "body";
-  const message = `Datos invalidos (${field}): ${issue?.message ?? "formato incorrecto"}`;
+  const message = `Datos inválidos (${field}): ${issue?.message ?? "formato incorrecto"}`;
   throw status === 422 ? Errors.ValidationError(message) : Errors.BadRequest(message);
 }
 
 function preventSelfAction(req: Request, _res: Response, next: NextFunction) {
   if (req.user?.userId === req.params.userId) {
-    throw Errors.Forbidden("No puedes realizar esta accion sobre tu propia cuenta");
+    throw Errors.Forbidden("No puedes realizar esta acción sobre tu propia cuenta");
   }
   next();
 }
@@ -526,7 +526,7 @@ router.patch(
     try {
       const parsed = z.object({ permissions: z.array(z.enum(ALL_PERMISSIONS as [AdminPermission, ...AdminPermission[]])).max(ALL_PERMISSIONS.length) }).safeParse(req.body);
       if (!parsed.success) {
-        throw Errors.BadRequest("permissions debe ser un array de permisos validos");
+        throw Errors.BadRequest("permissions debe ser un array de permisos válidos");
       }
       const { permissions } = parsed.data;
       const result = await adminService.setPermissions(

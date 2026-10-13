@@ -14,6 +14,7 @@ import { prisma } from "../lib/prisma.js";
 import * as usersService from "../modules/users/users.service.js";
 import { draftSchemas, parsePayload } from "./schemas.js";
 import { requireSocketUser } from "./session-guard.js";
+import { openRoomMatch, settleRoomResult } from "./match-settlement.js";
 
 // Singleton draft room manager (exported for game-over reporting)
 export const draftRoomManager = new DraftRoomManager();
@@ -89,6 +90,11 @@ export async function createMatchGames(
       p2.id,
     );
 
+    // Match row for the result (stats + XP); no bets in drafts
+    await openRoomMatch(gameRoom, "draft").catch((err) =>
+      console.error(`[draft] Could not open the match of room ${gameRoomId}:`, err),
+    );
+
     // Start the game with their drafted decks
     const gameState = await gameRoomManager.startGameWithRawDecks(
       gameRoomId,
@@ -151,7 +157,7 @@ const startingRooms = new Set<string>();
 /** Refunds and removes each id from `playerIds` as it goes, so a retry never refunds anyone twice. */
 async function refundDraftEntry(playerIds: string[], entryFee: number) {
   while (playerIds.length > 0) {
-    await usersService.addCoins(playerIds[0], entryFee, "draft_refund", "Reintegro de inscripcion a draft");
+    await usersService.addCoins(playerIds[0], entryFee, "draft_refund", "Reintegro de inscripción a draft");
     playerIds.shift();
   }
 }
@@ -250,7 +256,7 @@ export function registerDraftEvents(
           select: { username: true },
         });
         if (!account) {
-          socket.emit("draft:error", { message: "Solicitud invalida" });
+          socket.emit("draft:error", { message: "Solicitud inválida" });
           return;
         }
         const name = account.username;
@@ -365,7 +371,7 @@ export function registerDraftEvents(
         for (const player of [...room.players]) {
           if (player.isAdmin) continue; // admin doesn't pay
           const paid = await usersService
-            .spendCoins(player.id, entryFee, "draft_entry", `Inscripcion a draft (${entryFee} monedas)`)
+            .spendCoins(player.id, entryFee, "draft_entry", `Inscripción a draft (${entryFee} monedas)`)
             .then(() => true, () => false);
           if (paid) {
             charged.push(player.id);
@@ -509,9 +515,14 @@ export function registerDraftEvents(
           (p) => p.id === winnerId,
         );
 
-        // End the game room
+        // End the game room; the forfeiter loses (stats + XP settled once)
         const gameRoom = gameRoomManager.getRoom(gameRoomId);
         if (gameRoom) {
+          const forfeitedGame = gameRoom.status === "playing";
+          gameRoom.status = "finished";
+          if (forfeitedGame) {
+            settleRoomResult(io, gameRoom, winnerId === gameRoom.player1Id ? "player1" : "player2", `${forfeitingPlayer.name} abandonó la partida`, { isDraft: true });
+          }
           io.to(gameRoomId).emit("gameOver", {
             winner: winnerId === draftInfo.player1Id ? "player1" : "player2",
             reason: `${forfeitingPlayer.name} abandonó la partida`,

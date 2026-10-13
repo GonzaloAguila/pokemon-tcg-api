@@ -265,6 +265,6 @@ describe("game action schemas (every executeAction case)", () => {
   it.each(invalid)("rejects %s", (_label, action) => {
     const res = parseGameAction(action);
     expect(res.ok).toBe(false);
-    if (!res.ok) expect(res.error).toMatch(/invalid/i);
+    if (!res.ok) expect(res.error).toMatch(/inválid/i);
   });
 });

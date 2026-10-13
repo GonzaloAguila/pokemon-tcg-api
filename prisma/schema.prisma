@@ -157,12 +157,15 @@ model Deck {
 // =============================================================================
 
 model Match {
-  id     String @id @default(uuid())
-  status String @default("waiting") // waiting, playing, finished, abandoned
+  id     String  @id @default(uuid())
+  status String  @default("waiting") // waiting, playing, finished, abandoned
+  // "normal" | "friendly" | "draft" (multiplayer, server-authoritative) | "ai" (single player vs AI, client-reported)
+  mode   String  @default("normal")
+  roomId String? // in-memory game room id (multiplayer)
 
-  // Players
-  player1Id String
-  player1   User    @relation("Player1", fields: [player1Id], references: [id])
+  // Players (null once the account is deleted)
+  player1Id String?
+  player1   User?   @relation("Player1", fields: [player1Id], references: [id], onDelete: SetNull)
   player2Id String?
   player2   User?   @relation("Player2", fields: [player2Id], references: [id])
 
@@ -170,6 +173,14 @@ model Match {
   winnerId  String?
   winner    User?   @relation("Winner", fields: [winnerId], references: [id])
   winReason String? // "prizes", "deck_out", "no_pokemon", "forfeit"
+
+  // Economy: coins each player staked (escrowed when the game starts, paid/refunded on settlement)
+  betAmount Int       @default(0)
+  // XP granted to each player when the match was settled
+  player1Xp Int       @default(0)
+  player2Xp Int       @default(0)
+  // Set exactly once, when stakes, XP and stats were settled (guards against double settlement)
+  settledAt DateTime?
 
   // Game data (for reconnection & replay)
   gameState  Json? // Full GameState JSON
@@ -183,6 +194,9 @@ model Match {
   // Room relation
   room GameRoom?
 
+  @@index([player1Id, settledAt])
+  @@index([player2Id, settledAt])
+  @@index([status, settledAt])
   @@map("matches")
 }
 

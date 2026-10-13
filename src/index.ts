@@ -23,6 +23,8 @@ import { messagingRouter } from "./modules/messaging/index.js";
 import { adminRouter } from "./modules/admin/index.js";
 import { bugReportRouter } from "./modules/bug-report/index.js";
 import { waitlistRouter } from "./modules/waitlist/index.js";
+import { matchesRouter } from "./modules/matches/index.js";
+import { refundUnsettledMatches } from "./modules/matches/matches.service.js";
 import { cleanupOldMessages } from "./modules/chat/chat.service.js";
 
 // Load environment variables
@@ -74,6 +76,7 @@ app.use(
     "/api/users/me/claim-wheel-spin",
     "/api/users/me/claim-slot-spin",
     "/api/users/me/deck-slots",
+    "/api/matches",
   ],
   economyRateLimiter,
 );
@@ -94,6 +97,7 @@ app.use("/api", messagingRouter);
 app.use("/api", adminRouter);
 app.use("/api", express.json({ limit: "10mb" }), bugReportRouter);
 app.use("/api", waitlistRouter);
+app.use("/api", matchesRouter);
 // app.use("/api/matchmaking", matchmakingRouter);
 
 // Error handler
@@ -105,11 +109,17 @@ setupSocketHandlers(io);
 // Cleanup old chat messages every 6 hours
 setInterval(() => cleanupOldMessages().catch(console.error), 6 * 60 * 60 * 1000);
 
+// Games live in memory: a match still unsettled at startup was lost with the previous process.
+// Refund its table bets before accepting connections.
+const ready = refundUnsettledMatches()
+  .then((n) => { if (n > 0) console.log(`💸 Refunded ${n} interrupted match(es)`); })
+  .catch((err) => console.error("Could not settle interrupted matches:", err));
+
 // Start server
 const PORT = process.env.PORT || 3001;
-httpServer.listen(PORT, () => {
+ready.finally(() => httpServer.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📡 Socket.io ready for connections`);
-});
+}));
 
 export { app, io };

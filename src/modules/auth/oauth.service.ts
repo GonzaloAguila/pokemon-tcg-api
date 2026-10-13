@@ -77,7 +77,7 @@ async function handleOAuthCallback(
       throw Errors.Forbidden("Tu cuenta ha sido deshabilitada. Contacta soporte.");
     }
     if (user.status === "suspended" && user.suspendedUntil && user.suspendedUntil > new Date()) {
-      throw Errors.Forbidden(`Tu cuenta esta suspendida hasta ${user.suspendedUntil.toISOString()}`);
+      throw Errors.Forbidden(`Tu cuenta está suspendida hasta ${user.suspendedUntil.toISOString()}`);
     }
   } else {
     // Create new user
@@ -114,9 +114,9 @@ async function handleOAuthCallback(
           content: [
             "**Bienvenido, Entrenador!**",
             "",
-            "Nos alegra que te unas a **Nostalgic TCG**, la plataforma donde revives la era dorada del Juego de Cartas Coleccionables de Pokemon.",
+            "Nos alegra que te unas a **Nostalgic TCG**, la plataforma donde revives la era dorada del Juego de Cartas Coleccionables de Pokémon.",
             "",
-            "La plataforma se encuentra actualmente en fase **Alpha**, lo que significa que todavia estamos trabajando en muchas funcionalidades y puede que encuentres errores. Tu feedback es muy valioso para nosotros!",
+            "La plataforma se encuentra actualmente en fase **Alpha**, lo que significa que todavía estamos trabajando en muchas funcionalidades y puede que encuentres errores. ¡Tu feedback es muy valioso para nosotros!",
             "",
             "Para que puedas empezar tu aventura, te hemos otorgado:",
             "",

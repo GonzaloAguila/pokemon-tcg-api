@@ -237,7 +237,7 @@ export async function claimAchievement(userId: string, achievementId: string): P
         where: { userId_achievementId: { userId, achievementId } },
       });
       if (record?.unlockedAt) throw Errors.Conflict("Este logro ya fue reclamado");
-      throw Errors.BadRequest("Este logro todavia no esta completo");
+      throw Errors.BadRequest("Este logro todavía no está completo");
     }
 
     return grantReward(tx, userId, def);

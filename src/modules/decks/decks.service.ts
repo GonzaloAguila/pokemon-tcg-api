@@ -64,7 +64,7 @@ export function validateDeckCards(cards: DeckCardEntry[]): {
   for (const [cardDefId, quantity] of copies) {
     if (quantity > MAX_COPIES_PER_CARD) {
       const name = findCardById(cardDefId)?.name ?? cardDefId;
-      errors.push(`Maximo ${MAX_COPIES_PER_CARD} copias de "${name}" (tiene ${quantity})`);
+      errors.push(`Máximo ${MAX_COPIES_PER_CARD} copias de "${name}" (tiene ${quantity})`);
     }
   }
 
@@ -115,7 +115,7 @@ export async function checkDeckPlayable(userId: string, deckId: string | undefin
   const deck = await prisma.deck.findFirst({ where: { id: deckId, userId }, select: { cards: true } });
   if (!deck) return "Mazo no encontrado";
   const validation = await validateDeckForUser(userId, (deck.cards ?? []) as unknown as DeckCardEntry[]);
-  return validation.valid ? null : `Mazo invalido: ${validation.errors[0]}`;
+  return validation.valid ? null : `Mazo inválido: ${validation.errors[0]}`;
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -170,7 +170,7 @@ export async function createDeck(
   const existingCount = await prisma.deck.count({ where: { userId } });
   if (existingCount >= user.maxDeckSlots) {
     throw Errors.BadRequest(
-      `Has alcanzado el limite de ${user.maxDeckSlots} mazos. Compra un slot adicional.`,
+      `Has alcanzado el límite de ${user.maxDeckSlots} mazos. Compra un slot adicional.`,
     );
   }
 

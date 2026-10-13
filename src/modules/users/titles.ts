@@ -71,3 +71,40 @@ export function titleIdFromStats(stats: StatsForTitle | null | undefined, role?:
   const winRate = total > 0 ? (wins / total) * 100 : 0;
   return computeTrainerTitleId(total, winRate, stats?.bestStreak ?? 0, role);
 }
+
+// Table bet limit per title tier. Mirrors TITLE_TIER_MAP / TIER_BET_LIMITS in the frontend's
+// src/domain/profile/titles.ts (lobby slider max) — keep them in sync.
+const TITLE_BET_TIER: Record<string, keyof typeof TIER_BET_LIMITS> = {
+  novato: "none",
+  cazabichos: "bronze",
+  pescador: "bronze",
+  joven: "bronze",
+  pokefan: "silver",
+  pokemania: "silver",
+  excursionista: "silver",
+  "cinturon-negro": "gold",
+  "pokemon-ranger": "gold",
+  domadragones: "gold",
+  "estrella-naciente": "diamond",
+  "as-entrenador": "diamond",
+  veterano: "diamond",
+  "lider-de-gimnasio": "legend",
+  "alto-mando": "legend",
+  campeon: "legend",
+  "maestro-pokemon": "legend",
+  superadmin: "legend",
+  admin: "legend",
+};
+
+const TIER_BET_LIMITS = {
+  none: 20,
+  bronze: 50,
+  silver: 100,
+  gold: 200,
+  diamond: 500,
+  legend: 1000,
+} as const;
+
+export function maxBetForTitle(titleId: string | null | undefined): number {
+  return TIER_BET_LIMITS[(titleId && TITLE_BET_TIER[titleId]) || "none"];
+}

@@ -38,13 +38,13 @@ export async function authenticateHandshake(token: unknown): Promise<TokenPayloa
 /** Check the socket's user is authenticated and still allowed to play. */
 export async function checkSocketSession(socket: Socket): Promise<SessionCheck> {
   const userId = (socket.data.user as TokenPayload | undefined)?.userId;
-  if (!userId) return { ok: false, error: "Autenticacion requerida", blocked: false };
+  if (!userId) return { ok: false, error: "Autenticación requerida", blocked: false };
   try {
     const reason = accountBlockReason(await getAccountState(userId));
     if (reason) return { ok: false, error: reason, blocked: true };
   } catch (err) {
     console.error("[socket session] account lookup failed:", err);
-    return { ok: false, error: "No se pudo verificar la sesion", blocked: false };
+    return { ok: false, error: "No se pudo verificar la sesión", blocked: false };
   }
   return { ok: true, userId };
 }

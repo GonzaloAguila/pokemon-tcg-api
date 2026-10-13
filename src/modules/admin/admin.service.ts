@@ -269,7 +269,7 @@ export async function suspendUser(userId: string, hours: number, reason?: string
     },
     select: { status: true, suspendedUntil: true },
   });
-  applySessionChange(userId, "Tu cuenta esta suspendida");
+  applySessionChange(userId, "Tu cuenta está suspendida");
   return user;
 }
 
@@ -327,7 +327,7 @@ export async function setPermissions(userId: string, permissions: string[]) {
   // Validate that all permissions are valid
   const invalidPerms = permissions.filter((p) => !ALL_PERMISSIONS.includes(p as typeof ALL_PERMISSIONS[number]));
   if (invalidPerms.length > 0) {
-    throw Errors.BadRequest(`Permisos invalidos: ${invalidPerms.join(", ")}`);
+    throw Errors.BadRequest(`Permisos inválidos: ${invalidPerms.join(", ")}`);
   }
 
   return prisma.user.update({
@@ -413,7 +413,7 @@ export async function adjustCoins(userId: string, amount: number, reason: string
     }
 
     // Atomic change + Transaction row (debit is guarded against going negative)
-    const description = `[Admin: ${adminId}] Coins: ${amount > 0 ? "+" : ""}${amount}. Razon: ${reason.trim()}`;
+    const description = `[Admin: ${adminId}] Coins: ${amount > 0 ? "+" : ""}${amount}. Razón: ${reason.trim()}`;
     const updated = {
       coins: amount > 0
         ? await usersService.creditBalance(userId, "coins", amount, "admin_adjustment", description, tx)
@@ -425,7 +425,7 @@ export async function adjustCoins(userId: string, amount: number, reason: string
       data: {
         type: "personal",
         title: `Monedas: ${amount > 0 ? "+" : "-"}${Math.abs(amount)}`,
-        content: `Se te ha ${amount > 0 ? "acreditado" : "descontado"} **${Math.abs(amount)}** monedas desde el panel de administracion.\n\nRazon: *${reason.trim()}*`,
+        content: `Se te ha ${amount > 0 ? "acreditado" : "descontado"} **${Math.abs(amount)}** monedas desde el panel de administración.\n\nRazón: *${reason.trim()}*`,
         category: amount > 0 ? "reward" : "penalty",
         senderId: adminId,
         recipientId: userId,
@@ -460,7 +460,7 @@ export async function adjustCoupons(userId: string, amount: number, reason: stri
     }
 
     // Atomic change + Transaction row (debit is guarded against going negative)
-    const description = `[Admin: ${adminId}] Coupons: ${amount > 0 ? "+" : ""}${amount}. Razon: ${reason.trim()}`;
+    const description = `[Admin: ${adminId}] Coupons: ${amount > 0 ? "+" : ""}${amount}. Razón: ${reason.trim()}`;
     const updated = {
       coupons: amount > 0
         ? await usersService.creditBalance(userId, "coupons", amount, "admin_adjustment", description, tx)
@@ -472,7 +472,7 @@ export async function adjustCoupons(userId: string, amount: number, reason: stri
       data: {
         type: "personal",
         title: `Cupones: ${amount > 0 ? "+" : "-"}${Math.abs(amount)}`,
-        content: `Se te ha ${amount > 0 ? "acreditado" : "descontado"} **${Math.abs(amount)}** cupones desde el panel de administracion.\n\nRazon: *${reason.trim()}*`,
+        content: `Se te ha ${amount > 0 ? "acreditado" : "descontado"} **${Math.abs(amount)}** cupones desde el panel de administración.\n\nRazón: *${reason.trim()}*`,
         category: amount > 0 ? "reward" : "penalty",
         senderId: adminId,
         recipientId: userId,
@@ -507,7 +507,7 @@ export async function adjustRareCandy(userId: string, amount: number, reason: st
     }
 
     // Atomic change + Transaction row (debit is guarded against going negative)
-    const description = `[Admin: ${adminId}] RareCandy: ${amount > 0 ? "+" : ""}${amount}. Razon: ${reason.trim()}`;
+    const description = `[Admin: ${adminId}] RareCandy: ${amount > 0 ? "+" : ""}${amount}. Razón: ${reason.trim()}`;
     const updated = {
       rareCandy: amount > 0
         ? await usersService.creditBalance(userId, "rareCandy", amount, "admin_adjustment", description, tx)
@@ -519,7 +519,7 @@ export async function adjustRareCandy(userId: string, amount: number, reason: st
       data: {
         type: "personal",
         title: `Caramelo Raro: ${amount > 0 ? "+" : "-"}${Math.abs(amount)}`,
-        content: `Se te ha ${amount > 0 ? "acreditado" : "descontado"} **${Math.abs(amount)}** caramelo raro desde el panel de administracion.\n\nRazon: *${reason.trim()}*`,
+        content: `Se te ha ${amount > 0 ? "acreditado" : "descontado"} **${Math.abs(amount)}** caramelo raro desde el panel de administración.\n\nRazón: *${reason.trim()}*`,
         category: amount > 0 ? "reward" : "penalty",
         senderId: adminId,
         recipientId: userId,
@@ -745,7 +745,7 @@ const VALID_STAT_FIELDS = [
 
 export async function adjustStats(userId: string, field: string, amount: number, adminId: string) {
   if (!VALID_STAT_FIELDS.includes(field)) {
-    throw Errors.BadRequest(`Campo invalido. Campos validos: ${VALID_STAT_FIELDS.join(", ")}`);
+    throw Errors.BadRequest(`Campo inválido. Campos válidos: ${VALID_STAT_FIELDS.join(", ")}`);
   }
   if (!Number.isInteger(amount) || amount === 0) {
     throw Errors.BadRequest("amount debe ser un entero diferente de cero");

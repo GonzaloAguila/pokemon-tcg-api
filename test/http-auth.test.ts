@@ -62,7 +62,7 @@ describe("HTTP access tokens honor tokenVersion and account status", () => {
     invalidateAccountState(user.id); // stands in for the short TTL
     const res = await http.request("GET", "/me", { token });
     expect(res.status).toBe(401);
-    expect(res.body.error.message).toMatch(/Sesion invalidada/);
+    expect(res.body.error.message).toMatch(/Sesión invalidada/);
   });
 
   it("a deleted user's token is rejected", async () => {

@@ -110,7 +110,7 @@ router.post(
     try {
       const refreshToken = req.cookies?.refreshToken;
       if (!refreshToken) {
-        throw Errors.Unauthorized("No se encontro refresh token");
+        throw Errors.Unauthorized("No se encontró refresh token");
       }
 
       const result = await authService.refreshAccessToken(refreshToken);
@@ -129,7 +129,7 @@ router.post(
     try {
       await authService.logoutUser(req.user!.userId);
       clearRefreshCookie(res);
-      res.json({ message: "Sesion cerrada correctamente" });
+      res.json({ message: "Sesión cerrada correctamente" });
     } catch (err) {
       next(err);
     }
@@ -153,7 +153,7 @@ router.post(
       // Always return success to not leak user existence
       res.json({
         message:
-          "Si existe una cuenta con ese correo, recibiras instrucciones para restablecer tu contrasena.",
+          "Si existe una cuenta con ese correo, recibirás instrucciones para restablecer tu contraseña.",
       });
     } catch (err) {
       next(err);
@@ -177,7 +177,7 @@ router.post(
         parsed.data.token,
         parsed.data.newPassword,
       );
-      res.json({ message: "Contrasena restablecida correctamente" });
+      res.json({ message: "Contraseña restablecida correctamente" });
     } catch (err) {
       next(err);
     }
@@ -202,7 +202,7 @@ router.post(
         parsed.data.currentPassword,
         parsed.data.newPassword,
       );
-      res.json({ message: "Contrasena cambiada correctamente" });
+      res.json({ message: "Contraseña cambiada correctamente" });
     } catch (err) {
       next(err);
     }
@@ -216,11 +216,11 @@ router.get(
     try {
       const token = req.query.token as string;
       if (!token) {
-        throw Errors.ValidationError("Token de verificacion requerido");
+        throw Errors.ValidationError("Token de verificación requerido");
       }
 
       await authService.verifyEmail(token);
-      res.json({ message: "Correo electronico verificado correctamente" });
+      res.json({ message: "Correo electrónico verificado correctamente" });
     } catch (err) {
       next(err);
     }
@@ -235,14 +235,14 @@ router.post(
     try {
       const { email } = req.body;
       if (!email) {
-        throw Errors.ValidationError("Correo electronico requerido");
+        throw Errors.ValidationError("Correo electrónico requerido");
       }
 
       await authService.resendVerificationEmail(email);
       // Always return success to not leak user existence
       res.json({
         message:
-          "Si existe una cuenta con ese correo, recibiras un enlace de verificacion.",
+          "Si existe una cuenta con ese correo, recibirás un enlace de verificación.",
       });
     } catch (err) {
       next(err);

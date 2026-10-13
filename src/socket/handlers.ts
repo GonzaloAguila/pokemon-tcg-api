@@ -7,17 +7,18 @@ import {
   getDeckById as getThemeDeckById,
   decks as themeDeckList,
 } from "@gonzaloaguila/game-core";
-import { GameRoomManager } from "./rooms.js";
+import type { GameState } from "@gonzaloaguila/game-core";
+import { GameRoomManager, type GameRoom } from "./rooms.js";
 import { maskGameStateForPlayer } from "./state-masking.js";
-import { titleIdFromStats } from "../modules/users/titles.js";
+import { maxBetForTitle, titleIdFromStats } from "../modules/users/titles.js";
 import { checkDeckPlayable } from "../modules/decks/decks.service.js";
 import {
   registerDraftEvents,
   draftRoomManager,
   createMatchGames,
 } from "./draft-handlers.js";
-import { recordMatchResult } from "../modules/users/users.service.js";
-import { checkAndUpdateProgress } from "../modules/achievements/achievements.service.js";
+import { InsufficientStakeError } from "../modules/matches/matches.service.js";
+import { openRoomMatch, roomMatchMode, settleRoomResult } from "./match-settlement.js";
 import { socketSchemas, parsePayload } from "./schemas.js";
 import { setIo, userRoom } from "./io-registry.js";
 import { authenticateHandshake, checkSocketSession, kickBlockedUser, requireSocketUser } from "./session-guard.js";
@@ -170,6 +171,83 @@ async function resolveAndStartGame(roomManager: GameRoomManager, roomId: string)
   return roomManager.startGame(roomId);
 }
 
+/** Short reason stored on the match row: the game's last event ("Jugador 2 se ha rendido", ...). */
+function describeGameEnd(state: GameState | undefined): string {
+  return state?.events?.at(-1)?.message ?? "Fin de la partida";
+}
+
+/** Current coin balance (0 for a missing account). */
+async function getCoins(userId: string): Promise<number> {
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { coins: true } });
+  return user?.coins ?? 0;
+}
+
+/**
+ * Open the room's match (deducting the table bet from both players in one transaction) and start
+ * the game. Returns null when the room can't start (already starting/started, a seat is empty)
+ * or a player can't cover the bet (handled here: the joiner is sent back, or the creator's room
+ * is closed). If the game fails to start after the escrow, the stakes are refunded.
+ */
+async function startRoomGame(io: Server, roomId: string): Promise<GameState | null> {
+  const room = roomManager.getRoom(roomId);
+  if (!room || room.status !== "waiting" || room.startPending || !room.player1Id || !room.player2Id) return null;
+  room.startPending = true;
+  try {
+    try {
+      await openRoomMatch(room, roomMatchMode(room, false));
+    } catch (err) {
+      if (err instanceof InsufficientStakeError) {
+        await handleUnpaidBet(io, room, err.userId);
+        return null;
+      }
+      // Without a bet the game can still be played; the result then only updates the stats
+      if (room.config.betAmount > 0 || room.matchId) throw err;
+      console.error(`[startRoomGame] Could not open the match of room ${roomId}:`, err);
+    }
+    if (roomManager.getRoom(roomId) !== room || room.status !== "waiting" || !room.player1Id || !room.player2Id) {
+      throw new Error("La mesa se cerró antes de empezar la partida");
+    }
+    return await resolveAndStartGame(roomManager, roomId);
+  } catch (err) {
+    // Nothing was played: refund the stakes, and let the room take a fresh match if it starts later
+    settleRoomResult(io, room, null, "La partida no pudo comenzar");
+    room.matchId = undefined;
+    room.resultSettled = false;
+    throw err;
+  } finally {
+    room.startPending = false;
+  }
+}
+
+/** A player couldn't cover the bet when the game was about to start (nobody was charged). */
+async function handleUnpaidBet(io: Server, room: GameRoom, userId: string): Promise<void> {
+  const bet = room.config.betAmount;
+  const creatorSocket = room.player1SocketId;
+  const joinerSocket = room.player2SocketId;
+  if (userId === room.player2Id) {
+    // The joiner can't pay: send them back to the lobby, the table stays open
+    if (joinerSocket) {
+      await roomManager.leaveRoom(room.id, joinerSocket);
+      io.in(joinerSocket).socketsLeave(room.id);
+      io.to(joinerSocket).emit("error", { message: `No tienes suficientes monedas para la apuesta de esta mesa (${bet} monedas)` });
+      if (creatorSocket) io.to(creatorSocket).emit("playerLeft", { socketId: joinerSocket });
+    }
+  } else {
+    // The creator spent their coins after opening the table: close it
+    roomManager.forceDeleteRoom(room.id);
+    if (creatorSocket) {
+      io.in(creatorSocket).socketsLeave(room.id);
+      io.to(creatorSocket).emit("error", { message: `No tienes suficientes monedas para la apuesta de tu mesa (${bet} monedas). La mesa se cerró.` });
+      io.to(creatorSocket).emit("roomDeleted", { roomId: room.id });
+    }
+    if (joinerSocket) {
+      io.in(joinerSocket).socketsLeave(room.id);
+      io.to(joinerSocket).emit("error", { message: "El creador de la mesa ya no tiene monedas para la apuesta. La mesa se cerró." });
+    }
+  }
+  broadcastRoomList(io);
+}
+
 // Socket payloads are validated with the zod schemas in ./schemas.ts.
 
 // Room manager instance (exported for admin panel access)
@@ -253,7 +331,7 @@ async function getPlayableIdentity(userId: string): Promise<PublicIdentity | { e
   if (!user) return { error: "Usuario no encontrado" };
   if (user.status === "banned") return { error: "Tu cuenta ha sido deshabilitada" };
   if (user.status === "suspended" && user.suspendedUntil && user.suspendedUntil > new Date()) {
-    return { error: "Tu cuenta esta suspendida" };
+    return { error: "Tu cuenta está suspendida" };
   }
   return {
     username: user.username,
@@ -317,11 +395,25 @@ export function setupSocketHandlers(io: Server): void {
         if (!userId) return;
         const parsed = parsePayload(socketSchemas.createRoom, payload);
         if (!parsed.ok) { socket.emit("error", { message: parsed.error }); return; }
-        const { deckId, prizeCount, betAmount, reservedUserId, friendly } = parsed.data;
+        const { deckId, prizeCount, reservedUserId, friendly } = parsed.data;
         const identity = await getPlayableIdentity(userId);
         if ("error" in identity) { socket.emit("error", { message: identity.error }); return; }
         const deckError = await checkDeckPlayable(userId, deckId);
         if (deckError) { socket.emit("error", { message: deckError }); return; }
+        // Friendly tables carry no bet; otherwise the bet is capped by the creator's title (lobby
+        // slider) and must be covered now (it's charged to both players when the game starts)
+        const betAmount = friendly ? 0 : (parsed.data.betAmount ?? 0);
+        if (betAmount > 0) {
+          const maxBet = maxBetForTitle(identity.titleId);
+          if (betAmount > maxBet) {
+            socket.emit("error", { message: `Tu título permite apostar hasta ${maxBet} monedas` });
+            return;
+          }
+          if ((await getCoins(userId)) < betAmount) {
+            socket.emit("error", { message: `No tienes suficientes monedas para apostar ${betAmount}` });
+            return;
+          }
+        }
         const room = roomManager.createRoom(
           undefined,
           { prizeCount, betAmount, reservedUserId: reservedUserId || null, friendly: friendly ?? false },
@@ -352,7 +444,7 @@ export function setupSocketHandlers(io: Server): void {
 
     socket.on("deleteRoom", async (payload: unknown) => {
       try {
-        if (!getAuthUserId(socket)) { socket.emit("error", { message: "Autenticacion requerida" }); return; }
+        if (!getAuthUserId(socket)) { socket.emit("error", { message: "Autenticación requerida" }); return; }
         const parsed = parsePayload(socketSchemas.roomRef, payload);
         if (!parsed.ok) { socket.emit("error", { message: parsed.error }); return; }
         const { roomId } = parsed.data;
@@ -391,6 +483,16 @@ export function setupSocketHandlers(io: Server): void {
         if ("error" in identity) { socket.emit("error", { message: identity.error }); return; }
         const deckError = await checkDeckPlayable(userId, deckId);
         if (deckError) { socket.emit("error", { message: deckError }); return; }
+
+        // Taking the free seat of a table with a bet: the joiner must be able to cover it
+        // (charged when the game starts, in the same transaction as the creator's stake)
+        const target = roomManager.getRoom(roomId);
+        if (target && target.config.betAmount > 0 && target.player1Id !== userId && target.player2Id !== userId) {
+          if ((await getCoins(userId)) < target.config.betAmount) {
+            socket.emit("error", { message: `No tienes suficientes monedas para la apuesta de esta mesa (${target.config.betAmount} monedas)` });
+            return;
+          }
+        }
 
         // Auto-close any waiting room the user owns before joining another
         const existingWaitingRoom = roomManager.findWaitingRoomByUser(userId);
@@ -461,7 +563,8 @@ export function setupSocketHandlers(io: Server): void {
         console.log(`[joinRoom] Checking if room is ready: ${roomManager.isRoomReady(roomId)}`);
         if (roomManager.isRoomReady(roomId) && room.status === "waiting") {
           console.log(`[joinRoom] Room is ready, starting game...`);
-          const gameState = await resolveAndStartGame(roomManager, roomId);
+          const gameState = await startRoomGame(io, roomId);
+          if (!gameState) return;
           console.log(`[joinRoom] Game started, phase: ${gameState.gamePhase}`);
 
           // Update room list (room now playing)
@@ -504,7 +607,7 @@ export function setupSocketHandlers(io: Server): void {
 
     socket.on("leaveRoom", async (payload: unknown) => {
       try {
-        if (!getAuthUserId(socket)) { socket.emit("error", { message: "Autenticacion requerida" }); return; }
+        if (!getAuthUserId(socket)) { socket.emit("error", { message: "Autenticación requerida" }); return; }
         const parsed = parsePayload(socketSchemas.roomRef, payload);
         if (!parsed.ok) { socket.emit("error", { message: parsed.error }); return; }
         const { roomId } = parsed.data;
@@ -535,7 +638,8 @@ export function setupSocketHandlers(io: Server): void {
 
         // Check if both players ready
         if (room.player1Ready && room.player2Ready) {
-          const gameState = await resolveAndStartGame(roomManager, roomId);
+          const gameState = await startRoomGame(io, roomId);
+          if (!gameState) return;
 
           // Build variant maps from deck entries
           const [p1Variants, p2Variants] = await Promise.all([
@@ -694,17 +798,10 @@ export function setupSocketHandlers(io: Server): void {
             reason: result.winReason,
           });
 
-          // Persist win/loss stats to database (skip for friendly matches)
+          // Settle once: stats (not friendly), XP and the table bet
           const draftInfo =
             draftRoomManager.getDraftInfoForGameRoom(roomId);
-          const room = roomManager.getRoom(roomId);
-          if (room?.player1Id && room?.player2Id && result.winner && !room.config.friendly) {
-            const mode = draftInfo ? "draft" as const : "normal" as const;
-            const winnerId = result.winner === "player1" ? room.player1Id : room.player2Id;
-            const loserId = result.winner === "player1" ? room.player2Id : room.player1Id;
-            recordMatchResult(winnerId, mode, true).then(() => checkAndUpdateProgress(winnerId)).catch(console.error);
-            recordMatchResult(loserId, mode, false).then(() => checkAndUpdateProgress(loserId)).catch(console.error);
-          }
+          settleRoomResult(io, roomManager.getRoom(roomId), result.winner ?? null, describeGameEnd(result.gameState), { isDraft: !!draftInfo });
 
           // Report result to draft system if this was a draft match
           if (draftInfo && result.winner) {
@@ -865,16 +962,9 @@ export function setupSocketHandlers(io: Server): void {
           reason: "Tiempo agotado",
         });
 
-        // Persist win/loss stats to database (skip for friendly matches)
-        const room = roomManager.getRoom(roomId);
+        // Settle once: stats (not friendly), XP and the table bet
         const draftInfo = draftRoomManager.getDraftInfoForGameRoom(roomId);
-        if (room?.player1Id && room?.player2Id && result.winner && !room.config.friendly) {
-          const mode = draftInfo ? "draft" as const : "normal" as const;
-          const winnerId = result.winner === "player1" ? room.player1Id : room.player2Id;
-          const loserId = result.winner === "player1" ? room.player2Id : room.player1Id;
-          recordMatchResult(winnerId, mode, true).then(() => checkAndUpdateProgress(winnerId)).catch(console.error);
-          recordMatchResult(loserId, mode, false).then(() => checkAndUpdateProgress(loserId)).catch(console.error);
-        }
+        settleRoomResult(io, roomManager.getRoom(roomId), result.winner ?? null, "Tiempo agotado", { isDraft: !!draftInfo });
 
         // Report to draft system if applicable
         if (draftInfo && result.winner) {
@@ -997,23 +1087,21 @@ export function setupSocketHandlers(io: Server): void {
     registerDraftEvents(io, socket, roomManager);
   });
 
-  // Set up forfeit callback for disconnect timeout
+  // A game dropped without a result (admin close, both players gone): refund the table bet
+  roomManager.setOnAbandon((room, reason) => {
+    settleRoomResult(io, room, null, reason);
+  });
+
+  // Set up forfeit callback for disconnect timeout (also leaving a game in progress)
   roomManager.setOnForfeit((roomId, winner, gameState, reason) => {
     io.to(roomId).emit("gameOver", {
       winner,
       reason: reason || "Oponente desconectado (tiempo de espera agotado)",
     });
 
-    // Persist win/loss stats to database (skip for friendly matches)
-    const room = roomManager.getRoom(roomId);
+    // Settle once: stats (not friendly), XP and the table bet (the forfeiter loses it)
     const draftInfo = draftRoomManager.getDraftInfoForGameRoom(roomId);
-    if (room?.player1Id && room?.player2Id && !room.config.friendly) {
-      const mode = draftInfo ? "draft" as const : "normal" as const;
-      const winnerId = winner === "player1" ? room.player1Id : room.player2Id;
-      const loserId = winner === "player1" ? room.player2Id : room.player1Id;
-      recordMatchResult(winnerId, mode, true).then(() => checkAndUpdateProgress(winnerId)).catch(console.error);
-      recordMatchResult(loserId, mode, false).then(() => checkAndUpdateProgress(loserId)).catch(console.error);
-    }
+    settleRoomResult(io, roomManager.getRoom(roomId), winner, reason || "Abandono por desconexión", { isDraft: !!draftInfo });
 
     // Report to draft system if this was a draft match
     if (draftInfo) {

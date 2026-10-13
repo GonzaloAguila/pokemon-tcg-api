@@ -114,7 +114,7 @@ router.post(
     try {
       const day = parseInt(req.params.day, 10);
       if (isNaN(day) || day < 1) {
-        throw Errors.BadRequest("Dia invalido");
+        throw Errors.BadRequest("Día inválido");
       }
 
       const parsed = claimRewardSchema.safeParse(req.body);

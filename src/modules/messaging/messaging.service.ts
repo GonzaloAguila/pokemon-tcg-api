@@ -13,7 +13,7 @@ export async function createBroadcast(
   category: string,
   metadata?: Record<string, unknown>,
 ) {
-  if (!title || title.trim().length === 0) throw Errors.BadRequest("El titulo es requerido");
+  if (!title || title.trim().length === 0) throw Errors.BadRequest("El título es requerido");
   if (!content || content.trim().length === 0) throw Errors.BadRequest("El contenido es requerido");
 
   return prisma.systemMessage.create({
@@ -40,7 +40,7 @@ export async function createPersonalMessage(
   category: string,
   metadata?: Record<string, unknown>,
 ) {
-  if (!title || title.trim().length === 0) throw Errors.BadRequest("El titulo es requerido");
+  if (!title || title.trim().length === 0) throw Errors.BadRequest("El título es requerido");
   if (!content || content.trim().length === 0) throw Errors.BadRequest("El contenido es requerido");
 
   // Verify recipient exists
@@ -288,10 +288,10 @@ export async function updateMessage(
   if (!existing) throw Errors.NotFound("Mensaje");
 
   if (updates.title !== undefined && updates.title.trim().length === 0) {
-    throw Errors.BadRequest("El titulo no puede estar vacio");
+    throw Errors.BadRequest("El título no puede estar vacío");
   }
   if (updates.content !== undefined && updates.content.trim().length === 0) {
-    throw Errors.BadRequest("El contenido no puede estar vacio");
+    throw Errors.BadRequest("El contenido no puede estar vacío");
   }
 
   const data: Record<string, string> = {};

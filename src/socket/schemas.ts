@@ -13,7 +13,7 @@ import { z } from "zod";
 // ---------------------------------------------------------------------------
 
 /** Room codes are 6 chars today; keep it bounded (joinRoom creates a room for unknown ids). */
-const roomId = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/, "codigo de sala invalido");
+const roomId = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/, "código de sala inválido");
 /** Card / Pokémon instance ids (e.g. "Pikachu-0-1700000000000-0.123", "draft-...-a1b2c3"). */
 const instanceId = z.string().min(1).max(200);
 /** DB deck UUID or theme deck id ("brushfire"). */
@@ -60,7 +60,7 @@ export type ParseResult<T> = { ok: true; data: T } | { ok: false; error: string 
 function describeIssue(error: z.ZodError): string {
   const issue = error.issues[0];
   const path = issue?.path.length ? issue.path.join(".") : "payload";
-  return `Datos invalidos (${path})`;
+  return `Datos inválidos (${path})`;
 }
 
 export function parsePayload<S extends z.ZodTypeAny>(schema: S, data: unknown): ParseResult<z.output<S>> {
@@ -85,7 +85,8 @@ export const socketSchemas = {
   createRoom: z.object({
     deckId: optional(deckId),
     prizeCount: optional(z.number().int().min(4).max(MAX_PRIZES)),
-    // Lobby slider max is 1000 (legend tier). Bets are not charged yet.
+    // Lobby slider max is 1000 (legend tier); createRoom also caps it by the creator's title
+    // (maxBetForTitle). Charged to both players when the game starts (match-settlement.ts).
     betAmount: optional(z.number().int().min(0).max(1000)),
     reservedUserId: optional(z.string().max(64)),
     friendly: optional(z.boolean()),

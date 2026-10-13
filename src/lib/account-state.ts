@@ -65,7 +65,7 @@ export function accountBlockReason(state: AccountState | null, now: Date = new D
   if (!state) return "Usuario no encontrado";
   if (state.status === "banned") return "Tu cuenta ha sido deshabilitada";
   if (state.status === "suspended" && state.suspendedUntil && state.suspendedUntil > now) {
-    return "Tu cuenta esta suspendida";
+    return "Tu cuenta está suspendida";
   }
   return null;
 }
