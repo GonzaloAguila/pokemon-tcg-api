@@ -16,7 +16,7 @@ import { checkDeckPlayable } from "../modules/decks/decks.service.js";
 import {
   registerDraftEvents,
   draftRoomManager,
-  createMatchGames,
+  announceDraftResult,
 } from "./draft-handlers.js";
 import { InsufficientStakeError, betIneligibilityReason } from "../modules/matches/matches.service.js";
 import { ECONOMY } from "../modules/economy/config.js";
@@ -283,11 +283,20 @@ function finishRoomGame(
 
   const draftInfo = draftRoomManager.getDraftInfoForGameRoom(roomId);
   settleRoomResult(io, room, winner, settlementReason, { isDraft: !!draftInfo });
-  if (!draftInfo || !winner) return;
+  reportDraftGame(io, roomId, winner, forfeit);
+}
 
-  const winnerId = winner === "player1" ? draftInfo.player1Id : draftInfo.player2Id;
-  const loserId = winner === "player1" ? draftInfo.player2Id : draftInfo.player1Id;
-  const { newRoundStarted } = draftRoomManager.reportMatchResult(
+/**
+ * A draft game ended (winner null: no winner, both players lose it): its result goes to the
+ * draft once (the draft forgets the game room when its result is reported).
+ */
+function reportDraftGame(io: Server, roomId: string, winner: PlayerKey | null, forfeit: boolean): void {
+  const draftInfo = draftRoomManager.getDraftInfoForGameRoom(roomId);
+  if (!draftInfo) return;
+
+  const winnerId = winner === "player1" ? draftInfo.player1Id : winner === "player2" ? draftInfo.player2Id : null;
+  const loserId = winner === "player1" ? draftInfo.player2Id : winner === "player2" ? draftInfo.player1Id : null;
+  const progress = draftRoomManager.reportMatchResult(
     draftInfo.draftRoomId,
     draftInfo.roundNumber,
     draftInfo.matchNumber,
@@ -295,29 +304,7 @@ function finishRoomGame(
     loserId,
     roomId,
   );
-  draftRoomManager.clearPendingMatchInfo(draftInfo.draftRoomId, winnerId);
-  draftRoomManager.clearPendingMatchInfo(draftInfo.draftRoomId, loserId);
-
-  const draftRoom = draftRoomManager.getRoom(draftInfo.draftRoomId);
-  if (draftRoom) {
-    for (const p of draftRoom.players) {
-      if (p.socketId) {
-        io.to(p.socketId).emit("draft:matchEnded", {
-          draftRoomId: draftInfo.draftRoomId,
-          winnerId,
-          loserId,
-          forfeit,
-          tournamentFinished: draftRoom.phase === "finished",
-        });
-      }
-    }
-  }
-
-  if (newRoundStarted && draftRoom?.tournament) {
-    createMatchGames(io, draftInfo.draftRoomId, draftRoom.tournament.currentRoundNumber, roomManager).catch((err) => {
-      console.error("Error creating next round games:", err);
-    });
-  }
+  announceDraftResult(io, draftInfo.draftRoomId, { gameRoomId: roomId, winnerId, loserId, forfeit }, progress, roomManager);
 }
 
 /** Serialize a room for the lobby room list */
@@ -1080,6 +1067,8 @@ export function setupSocketHandlers(io: Server): void {
   // A game dropped without a result (admin close, both players gone): refund the table bet
   roomManager.setOnAbandon((room, reason) => {
     settleRoomResult(io, room, null, reason);
+    // A draft game must still decide its match, or the round never ends
+    reportDraftGame(io, room.id, null, false);
   });
 
   // Set up forfeit callback for disconnect timeout, the setup timeout and leaving a game in

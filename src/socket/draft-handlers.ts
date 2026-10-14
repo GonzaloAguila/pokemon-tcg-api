@@ -7,7 +7,7 @@
 
 import type { Server, Socket } from "socket.io";
 import type { z } from "zod";
-import { DraftRoomManager, catalogIdOf, type DraftClosedInfo, type DraftRoom } from "./draft-rooms.js";
+import { DraftRoomManager, catalogIdOf, type DraftClosedInfo, type DraftPlayer, type DraftRoom } from "./draft-rooms.js";
 import { GameRoomManager } from "./rooms.js";
 import { maskRoomState } from "./room-state.js";
 import { prisma } from "../lib/prisma.js";
@@ -17,6 +17,15 @@ import { draftSchemas, parsePayload } from "./schemas.js";
 import { requireSocketUser } from "./session-guard.js";
 import { openRoomMatch, settleRoomResult } from "./match-settlement.js";
 import { canManageDraftRooms } from "../modules/admin/permissions.js";
+import { ECONOMY } from "../modules/economy/config.js";
+import type { TournamentProgress } from "./draft-rooms.js";
+
+/**
+ * Time a player has to show up in a draft game created for them. The next round's games are
+ * created while the players of the last game are still on its game-over screen: the usual 2
+ * minutes made them lose games they never saw.
+ */
+const DRAFT_CHECKIN_MS = 5 * 60_000;
 
 // Singleton draft room manager (exported for game-over reporting)
 export const draftRoomManager = new DraftRoomManager();
@@ -71,92 +80,152 @@ export async function createMatchGames(
   if (!round) return;
 
   for (const pairing of round.pairings) {
+    // Already decided (a player left the tournament): no game
+    if (draftRoomManager.isMatchDecided(draftRoomId, roundNumber, pairing.matchNumber)) continue;
     const p1 = draftRoom.players.find((p) => p.id === pairing.player1.id);
     const p2 = draftRoom.players.find((p) => p.id === pairing.player2.id);
-    if (!p1 || !p2 || !p1.deck || !p2.deck) continue;
+    if (!p1 || !p2) continue;
+    // One failed game must not keep the other pairings from being created
+    await createMatchGame(io, draftRoomId, roundNumber, pairing.matchNumber, p1, p2, gameRoomManager).catch((err) =>
+      console.error(`[draft] Could not create the game R${roundNumber}-M${pairing.matchNumber} of room ${draftRoomId}:`, err),
+    );
+  }
+}
 
-    // Create a game room and add both players
-    const gameRoom = gameRoomManager.createRoom();
-    const gameRoomId = gameRoom.id;
+/** One draft match: a game room with both drafted decks, and each player told. */
+async function createMatchGame(
+  io: Server,
+  draftRoomId: string,
+  roundNumber: number,
+  matchNumber: number,
+  p1: DraftPlayer,
+  p2: DraftPlayer,
+  gameRoomManager: GameRoomManager,
+): Promise<void> {
+  if (!p1.deck || !p2.deck) return;
 
-    await gameRoomManager.joinRoom(gameRoomId, p1.id, p1.socketId || "");
-    await gameRoomManager.joinRoom(gameRoomId, p2.id, p2.socketId || "");
+  // Create a game room and add both players
+  const gameRoom = gameRoomManager.createRoom();
+  const gameRoomId = gameRoom.id;
 
-    // Register mapping so game-over can report back to draft
-    draftRoomManager.registerGameRoom(
+  await gameRoomManager.joinRoom(gameRoomId, p1.id, p1.socketId || "");
+  await gameRoomManager.joinRoom(gameRoomId, p2.id, p2.socketId || "");
+
+  // Register mapping so game-over can report back to draft
+  draftRoomManager.registerGameRoom(gameRoomId, draftRoomId, roundNumber, matchNumber, p1.id, p2.id);
+
+  // Match row for the result (stats + XP); no bets in drafts
+  await openRoomMatch(gameRoom, "draft").catch((err) =>
+    console.error(`[draft] Could not open the match of room ${gameRoomId}:`, err),
+  );
+
+  // Start the game with their drafted decks
+  const gameState = await gameRoomManager.startGameWithRawDecks(gameRoomId, [...p1.deck], [...p2.deck]);
+
+  console.log(`🎮 Draft match R${roundNumber}-M${matchNumber}: ${p1.name} vs ${p2.name} → room ${gameRoomId}`);
+  // A player who isn't connected right now (e.g. still on the last game's screen) has
+  // DRAFT_CHECKIN_MS to show up
+  gameRoomManager.ensureForfeitTimers(gameRoomId, DRAFT_CHECKIN_MS);
+
+  // Store pending match info for reconnection, and tell each player
+  for (const [player, opponent, isPlayer1] of [
+    [p1, p2, true],
+    [p2, p1, false],
+  ] as const) {
+    draftRoomManager.setPendingMatchInfo(draftRoomId, player.id, {
       gameRoomId,
-      draftRoomId,
+      matchNumber,
       roundNumber,
-      pairing.matchNumber,
-      p1.id,
-      p2.id,
-    );
-
-    // Match row for the result (stats + XP); no bets in drafts
-    await openRoomMatch(gameRoom, "draft").catch((err) =>
-      console.error(`[draft] Could not open the match of room ${gameRoomId}:`, err),
-    );
-
-    // Start the game with their drafted decks
-    const gameState = await gameRoomManager.startGameWithRawDecks(
-      gameRoomId,
-      [...p1.deck],
-      [...p2.deck],
-    );
-
-    console.log(
-      `🎮 Draft match R${roundNumber}-M${pairing.matchNumber}: ${p1.name} vs ${p2.name} → room ${gameRoomId}`,
-    );
-    // A player who isn't connected right now has the usual time to come back
-    gameRoomManager.ensureForfeitTimers(gameRoomId);
-
-    // Store pending match info for reconnection
-    draftRoomManager.setPendingMatchInfo(draftRoomId, p1.id, {
-      gameRoomId,
-      matchNumber: pairing.matchNumber,
-      roundNumber,
-      isPlayer1: true,
-      opponentName: p2.name,
+      isPlayer1,
+      opponentName: opponent.name,
     });
-    draftRoomManager.setPendingMatchInfo(draftRoomId, p2.id, {
-      gameRoomId,
-      matchNumber: pairing.matchNumber,
-      roundNumber,
-      isPlayer1: false,
-      opponentName: p1.name,
-    });
-
-    // Notify each player with their match info
-    if (p1.socketId) {
-      io.to(p1.socketId).emit("draft:matchReady", {
-        matchNumber: pairing.matchNumber,
+    if (player.socketId) {
+      io.to(player.socketId).emit("draft:matchReady", {
+        matchNumber,
         roundNumber,
         draftRoomId,
         gameRoomId,
-        userId: p1.id,
-        isPlayer1: true,
-        opponentName: p2.name,
-        gameState: maskRoomState(gameRoomManager, gameRoom, gameState, "player1"),
-      });
-    }
-
-    if (p2.socketId) {
-      io.to(p2.socketId).emit("draft:matchReady", {
-        matchNumber: pairing.matchNumber,
-        roundNumber,
-        draftRoomId,
-        gameRoomId,
-        userId: p2.id,
-        isPlayer1: false,
-        opponentName: p1.name,
-        gameState: maskRoomState(gameRoomManager, gameRoom, gameState, "player2"),
+        userId: player.id,
+        isPlayer1,
+        opponentName: opponent.name,
+        gameState: maskRoomState(gameRoomManager, gameRoom, gameState, isPlayer1 ? "player1" : "player2"),
       });
     }
   }
 }
 
+/**
+ * A draft match was decided (game over, forfeit, a player left): tell the draft's players
+ * (`gameRoomId` lets each client tell whether it was its match) and create the next round's
+ * games when one started.
+ */
+export function announceDraftResult(
+  io: Server,
+  draftRoomId: string,
+  result: { gameRoomId: string; winnerId: string | null; loserId: string | null; forfeit: boolean },
+  progress: TournamentProgress,
+  gameRoomManager: GameRoomManager,
+): void {
+  const draftRoom = draftRoomManager.getRoom(draftRoomId);
+  if (!draftRoom) return;
+  for (const p of draftRoom.players) {
+    if (p.socketId) {
+      io.to(p.socketId).emit("draft:matchEnded", {
+        draftRoomId,
+        ...result,
+        tournamentFinished: draftRoom.phase === "finished",
+      });
+    }
+  }
+  if (progress.newRoundStarted && draftRoom.tournament) {
+    createMatchGames(io, draftRoomId, draftRoom.tournament.currentRoundNumber, gameRoomManager).catch((err) => {
+      console.error("Error creating next round games:", err);
+    });
+  }
+}
+
+/** The prizes of a finished tournament (room.prizes), paid once per room. */
+export async function payDraftPrizes(room: DraftRoom): Promise<void> {
+  if (room.prizesPaid || !room.prizes) return;
+  room.prizesPaid = true;
+  for (const prize of room.prizes) {
+    if (prize.coins <= 0) continue;
+    await usersService
+      .addCoins(prize.playerId, prize.coins, "draft_prize", `Premio de draft: ${prize.position}° puesto`)
+      .catch((err) => console.error(`[draft] Prize of ${prize.playerId} in room ${room.id} failed:`, err));
+  }
+}
+
+/**
+ * The penalty for leaving a tournament early: ECONOMY.draft.withdrawPenalty, or every coin the
+ * player has when they have less. Returns what was charged.
+ */
+async function chargeWithdrawPenalty(userId: string): Promise<number> {
+  return prisma.$transaction(async (tx) => {
+    await lockUsers(tx, [userId]);
+    const user = await tx.user.findUnique({ where: { id: userId }, select: { coins: true } });
+    const amount = Math.min(ECONOMY.draft.withdrawPenalty, Math.max(0, user?.coins ?? 0));
+    if (amount > 0) {
+      await usersService.spendCoins(userId, amount, "draft_withdraw", "Penalización por abandonar un draft", tx);
+    }
+    return amount;
+  });
+}
+
+/** End a draft game in progress: `winnerId` wins it (stats + XP settled once). */
+function endDraftGame(io: Server, gameRoomManager: GameRoomManager, gameRoomId: string, winnerId: string, reason: string): void {
+  const gameRoom = gameRoomManager.getRoom(gameRoomId);
+  if (!gameRoom || gameRoom.resultSettled) return;
+  gameRoom.status = "finished";
+  const winnerSide = winnerId === gameRoom.player1Id ? "player1" : "player2";
+  settleRoomResult(io, gameRoom, winnerSide, reason, { isDraft: true });
+  io.to(gameRoomId).emit("gameOver", { winner: winnerSide, reason });
+}
+
 /** Rooms whose start (and entry-fee charging) is in flight, to ignore duplicate start requests. */
 const startingRooms = new Set<string>();
+/** Players whose withdrawal (and penalty) is in flight, to ignore a double click. */
+const withdrawingUsers = new Set<string>();
 
 /** Refunds and removes each id from `playerIds` as it goes, so a retry never refunds anyone twice. */
 async function refundDraftEntry(playerIds: string[], entryFee: number) {
@@ -280,6 +349,7 @@ export function registerDraftEvents(
     },
     onFinished: (room) => {
       creditDraftedCards(room).catch((err) => console.error("[draft] credit failed:", err));
+      payDraftPrizes(room).catch((err) => console.error("[draft] prizes failed:", err));
     },
   });
 
@@ -476,7 +546,8 @@ export function registerDraftEvents(
       if (entryFee > 0) {
         // Charge each non-admin player atomically; anyone who can't pay is removed
         for (const player of [...room.players]) {
-          if (player.isAdmin) continue; // admin doesn't pay
+          // The draft's creator doesn't pay (a player who inherited the admin seat does)
+          if (player.id === room.adminId) continue;
           const paid = await usersService
             .spendCoins(player.id, entryFee, "draft_entry", `Inscripción a draft (${entryFee} monedas)`)
             .then(() => true, () => false);
@@ -610,8 +681,7 @@ export function registerDraftEvents(
             : draftInfo.player1Id;
         const loserId = forfeitingPlayer.id;
 
-        // Report result
-        const { newRoundStarted } = draftRoomManager.reportMatchResult(
+        const progress = draftRoomManager.reportMatchResult(
           draftRoomId,
           draftInfo.roundNumber,
           draftInfo.matchNumber,
@@ -619,53 +689,9 @@ export function registerDraftEvents(
           loserId,
           gameRoomId,
         );
-
-        // Notify both players in the game room
-        const winnerPlayer = draftRoom.players.find(
-          (p) => p.id === winnerId,
-        );
-
-        // End the game room; the forfeiter loses (stats + XP settled once; the room was checked
-        // to be still playing above)
-        const gameRoom = gameRoomManager.getRoom(gameRoomId);
-        if (gameRoom) {
-          gameRoom.status = "finished";
-          const winnerSide = winnerId === gameRoom.player1Id ? "player1" : "player2";
-          settleRoomResult(io, gameRoom, winnerSide, `${forfeitingPlayer.name} abandonó la partida`, { isDraft: true });
-          io.to(gameRoomId).emit("gameOver", {
-            winner: winnerId === draftInfo.player1Id ? "player1" : "player2",
-            reason: `${forfeitingPlayer.name} abandonó la partida`,
-          });
-        }
-
-        // Clear pending match info
-        draftRoomManager.clearPendingMatchInfo(draftRoomId, winnerId);
-        draftRoomManager.clearPendingMatchInfo(draftRoomId, loserId);
-
-        // Notify both players about the draft match ending
-        for (const p of draftRoom.players) {
-          if (p.socketId) {
-            io.to(p.socketId).emit("draft:matchEnded", {
-              draftRoomId,
-              winnerId,
-              loserId,
-              forfeit: true,
-              tournamentFinished: draftRoom.phase === "finished",
-            });
-          }
-        }
-
-        // Create games for next round if needed
-        if (newRoundStarted && draftRoom.tournament) {
-          createMatchGames(
-            io,
-            draftRoomId,
-            draftRoom.tournament.currentRoundNumber,
-            gameRoomManager,
-          ).catch((err) => {
-            console.error("Error creating next round games:", err);
-          });
-        }
+        // The forfeiter loses the game (the room was checked to be still playing above)
+        endDraftGame(io, gameRoomManager, gameRoomId, winnerId, `${forfeitingPlayer.name} abandonó la partida`);
+        announceDraftResult(io, draftRoomId, { gameRoomId, winnerId, loserId, forfeit: true }, progress, gameRoomManager);
 
         console.log(
           `🏳️ ${forfeitingPlayer.name} forfeited draft match in room ${draftRoomId}`,
@@ -675,6 +701,63 @@ export function registerDraftEvents(
       }
     },
   );
+
+  // --------------------------------------------------------------------------
+  // Withdraw (leave the tournament early)
+  // --------------------------------------------------------------------------
+
+  // draft:withdraw { roomId }: the player leaves the tournament (only while it is being played):
+  // ECONOMY.draft.withdrawPenalty coins (to the prize pool), every match of theirs not played yet
+  // is won by the rival (the game in progress too), no prize. Answer: draft:withdrawn { penalty }.
+  socket.on("draft:withdraw", async (payload: unknown) => {
+    try {
+      const userId = await requireDraftUser(socket);
+      if (!userId) return;
+      const data = parseDraft(socket, draftSchemas.roomRef, payload);
+      if (!data) return;
+      const { roomId } = data;
+      if (withdrawingUsers.has(userId)) return;
+      withdrawingUsers.add(userId);
+      try {
+        draftRoomManager.assertCanWithdraw(roomId, userId);
+        const penalty = await chargeWithdrawPenalty(userId);
+        let result: ReturnType<typeof draftRoomManager.withdrawPlayer>;
+        try {
+          result = draftRoomManager.withdrawPlayer(roomId, userId, penalty);
+        } catch (error) {
+          // The tournament ended meanwhile: give the penalty back
+          if (penalty > 0) {
+            await usersService.addCoins(userId, penalty, "draft_refund", "Reintegro de penalización de draft").catch((e) =>
+              console.error("[draft] Penalty refund failed:", e),
+            );
+          }
+          throw error;
+        }
+
+        const room = draftRoomManager.getRoom(roomId);
+        const name = room?.players.find((p) => p.id === userId)?.name ?? "Un jugador";
+        for (const gameRoomId of result.gameRoomIds) {
+          const gameRoom = gameRoomManager.getRoom(gameRoomId);
+          const winnerId = gameRoom?.player1Id === userId ? gameRoom.player2Id : gameRoom?.player1Id;
+          if (winnerId) endDraftGame(io, gameRoomManager, gameRoomId, winnerId, `${name} abandonó el draft`);
+        }
+        socket.emit("draft:withdrawn", { roomId, penalty });
+        socket.leave(roomId);
+        announceDraftResult(
+          io,
+          roomId,
+          { gameRoomId: result.gameRoomIds[0] ?? "", winnerId: null, loserId: userId, forfeit: true },
+          result,
+          gameRoomManager,
+        );
+        console.log(`🏳️ ${name} withdrew from draft ${roomId} (penalty ${penalty})`);
+      } finally {
+        withdrawingUsers.delete(userId);
+      }
+    } catch (error) {
+      socket.emit("draft:error", { message: (error as Error).message });
+    }
+  });
 
   // --------------------------------------------------------------------------
   // Disconnect

@@ -98,6 +98,8 @@ export interface GameRoom {
   matchId?: string;
   startPending?: boolean;
   resultSettled?: boolean;
+  /** Started for players who may be absent (draft round): if neither shows up, nobody wins. */
+  checkIn?: boolean;
 
   // Players
   player1Id: string | null;
@@ -518,7 +520,8 @@ export class GameRoomManager {
 
   /** The room goes away without a result: if it had an open match, let the owner refund it. */
   private abandonMatch(room: GameRoom, reason: string): void {
-    if (!room.matchId || room.resultSettled) return;
+    // Without a match row only a started game matters (a draft round waits for its result)
+    if (room.resultSettled || (!room.matchId && !room.gameState)) return;
     this.onAbandonCallback?.(room, reason);
   }
 
@@ -1602,16 +1605,17 @@ export class GameRoomManager {
    * whoever has no socket gets the usual forfeit timer, so an absent player can't block the
    * game (and the draft round) forever.
    */
-  ensureForfeitTimers(roomId: string): void {
+  ensureForfeitTimers(roomId: string, timeoutMs = FORFEIT_TIMEOUT_MS): void {
     const room = this.rooms.get(roomId);
     if (!room || room.status !== "playing") return;
+    room.checkIn = true;
     if (!room.player1SocketId) {
       room.player1SocketId = null;
-      this.startForfeitTimer(roomId, "player1");
+      this.startForfeitTimer(roomId, "player1", timeoutMs);
     }
     if (!room.player2SocketId) {
       room.player2SocketId = null;
-      this.startForfeitTimer(roomId, "player2");
+      this.startForfeitTimer(roomId, "player2", timeoutMs);
     }
   }
 
@@ -1621,6 +1625,7 @@ export class GameRoomManager {
   private startForfeitTimer(
     roomId: string,
     disconnectedSide: "player1" | "player2",
+    timeoutMs = FORFEIT_TIMEOUT_MS,
   ): void {
     const timerKey = `${roomId}:${disconnectedSide}`;
 
@@ -1628,12 +1633,12 @@ export class GameRoomManager {
     if (this.forfeitTimers.has(timerKey)) return;
 
     console.log(
-      `⏱️ Forfeit timer started for ${disconnectedSide} in room ${roomId} (${FORFEIT_TIMEOUT_MS / 1000}s)`,
+      `⏱️ Forfeit timer started for ${disconnectedSide} in room ${roomId} (${timeoutMs / 1000}s)`,
     );
 
     const timer = setTimeout(() => {
       this.handleForfeitTimeout(roomId, disconnectedSide);
-    }, FORFEIT_TIMEOUT_MS);
+    }, timeoutMs);
 
     this.forfeitTimers.set(timerKey, timer);
   }
@@ -1683,6 +1688,14 @@ export class GameRoomManager {
 
     room.status = "finished";
     const winner = disconnectedSide === "player1" ? "player2" : "player1";
+
+    // A game created for absent players (draft round) where neither showed up: nobody wins
+    const isWinnerAbsent = winner === "player1" ? room.player1SocketId === null : room.player2SocketId === null;
+    if (room.checkIn && isWinnerAbsent) {
+      this.cancelForfeitTimer(roomId, winner);
+      this.abandonMatch(room, "Ningún jugador se presentó a la partida");
+      return;
+    }
 
     if (this.onForfeitCallback) {
       this.onForfeitCallback(roomId, winner, room.gameState);

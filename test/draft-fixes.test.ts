@@ -204,8 +204,8 @@ describe("hooks", () => {
     room.tournament = {
       rounds: [{ roundNumber: 1, pairings: [{ matchNumber: 1, player1: { id: "pa", name: "Ana" }, player2: { id: "pb", name: "Beto" } }], byePlayerId: null, status: "in_progress", results: [] }],
       standings: [
-        { playerId: "pa", playerName: "Ana", wins: 0, losses: 0, byes: 0 },
-        { playerId: "pb", playerName: "Beto", wins: 0, losses: 0, byes: 0 },
+        { playerId: "pa", playerName: "Ana", wins: 0, losses: 0, byes: 0, withdrawn: false },
+        { playerId: "pb", playerName: "Beto", wins: 0, losses: 0, byes: 0, withdrawn: false },
       ],
       currentRoundNumber: 1,
       totalRounds: 1,

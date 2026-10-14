@@ -125,7 +125,7 @@ async function draftMatch(keepInCollection: boolean) {
   room.players[1].draftedCards = [card("Charmander", "d4")];
   room.tournament = {
     rounds: [{ roundNumber: 1, pairings: [{ matchNumber: 1, player1: { id: a.id, name: "A" }, player2: { id: b.id, name: "B" } }], byePlayerId: null, status: "in_progress", results: [] }],
-    standings: [a, b, c].map((u, i) => ({ playerId: u.id, playerName: "ABC"[i], wins: 0, losses: 0, byes: 0 })),
+    standings: [a, b, c].map((u, i) => ({ playerId: u.id, playerName: "ABC"[i], wins: 0, losses: 0, byes: 0, withdrawn: false })),
     currentRoundNumber: 1,
     totalRounds: 1,
   };
@@ -212,5 +212,39 @@ describe("draft rooms are managed only by admins who can close rooms", () => {
     expect(denied.success).toBe(false);
     expect(draftRoomManager.getRoom(roomId)).toBeDefined();
     draftRoomManager.deleteRoom(roomId, "", true);
+  });
+});
+
+describe("draft:withdraw", () => {
+  it("charges the penalty (what the player has, up to 1000), gives the game in progress to the rival and pays the prizes", async () => {
+    const m = await draftMatch(false);
+    await prisma.user.update({ where: { id: m.a.id }, data: { coins: 400 } });
+    m.room.prizePool = 4000; // as if 2000 entry fees had been paid by two players
+
+    const sa = await server.connect(tokenFor(m.a));
+    const withdrawn = nextEvent<{ penalty: number }>(sa, "draft:withdrawn");
+    sa.emit("draft:withdraw", { roomId: m.room.id });
+    expect((await withdrawn).penalty).toBe(400);
+    expect((await getBalances(m.a.id)).coins).toBe(0);
+
+    expect(m.game.status).toBe("finished");
+    expect(m.room.tournament!.rounds[0].results).toMatchObject([{ winnerId: m.b.id, loserId: m.a.id, walkover: true }]);
+    expect(m.room.phase).toBe("finished");
+    // 3 players: 70 / 30 of 4400 to B and C; A left: last, nothing
+    expect(m.room.prizes!.map((p) => [p.playerId, p.coins, p.withdrawn])).toEqual([
+      [m.b.id, 3080, false],
+      [m.c.id, 1320, false],
+      [m.a.id, 0, true],
+    ]);
+    await sleep(300);
+    const prizeOf = async (userId: string) =>
+      (await prisma.transaction.findMany({ where: { userId, type: "draft_prize" } })).map((t) => t.amount);
+    expect(await prizeOf(m.b.id)).toEqual([3080]);
+    expect(await prizeOf(m.c.id)).toEqual([1320]);
+    expect(await prizeOf(m.a.id)).toEqual([]);
+
+    // Once only, and only during the tournament
+    sa.emit("draft:withdraw", { roomId: m.room.id });
+    expect((await nextEvent<{ message: string }>(sa, "draft:error")).message).toBe("Solo puedes abandonar el draft durante el torneo");
   });
 });

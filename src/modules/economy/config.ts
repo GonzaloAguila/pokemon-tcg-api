@@ -179,6 +179,21 @@ export const ECONOMY = {
     maxCoinConversionsPerWeek: 2,
   },
 
+  draft: {
+    /** Coins charged to a player who leaves the tournament early (what they have, up to this); they go to the prize pool. */
+    withdrawPenalty: 1000,
+    /**
+     * Prize pool (entry fees + withdraw penalties) split by final position, in percent, by the
+     * number of players in the tournament. Players who left get nothing: the shares of the
+     * positions left without a player are spread over the ones that have one.
+     */
+    prizeSplit: [
+      { minPlayers: 5, percents: [50, 30, 20] },
+      { minPlayers: 3, percents: [70, 30] },
+      { minPlayers: 2, percents: [100] },
+    ],
+  },
+
   /** Table bets are off. The settlement code stays; flip `enabled` to bring them back. */
   tableBets: {
     enabled: false,

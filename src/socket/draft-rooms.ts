@@ -18,6 +18,7 @@ import {
   isPokemonCard,
 } from "@gonzaloaguila/game-core";
 import type { Card, CardSetId, GameCard } from "@gonzaloaguila/game-core";
+import { ECONOMY } from "../modules/economy/config.js";
 
 // ============================================================================
 // Types
@@ -73,6 +74,8 @@ export type DraftPlayer = {
   isReady: boolean;
   isAdmin: boolean;
   pendingMatchInfo: PendingMatchInfo | null;
+  /** Left the tournament (withdrawPlayer): every match of theirs not played yet is lost. */
+  withdrawn: boolean;
 };
 
 export type DraftEvent = {
@@ -113,6 +116,22 @@ export type DraftRoom = {
   entryPaidIds: string[];
   /** keepInCollection: the drafted cards were credited (once). */
   cardsCredited: boolean;
+  /** Coins for the prizes: entry fees paid + withdraw penalties. */
+  prizePool: number;
+  /** Set when the tournament ends: each final position and its coins (paid once: prizesPaid). */
+  prizes: DraftPrize[] | null;
+  prizesPaid: boolean;
+  /** Removes a finished room after FINISHED_ROOM_TTL_MS. */
+  expiryTimer: ReturnType<typeof setTimeout> | null;
+};
+
+/** A player's final position and the coins it won. */
+export type DraftPrize = {
+  playerId: string;
+  playerName: string;
+  position: number;
+  coins: number;
+  withdrawn: boolean;
 };
 
 /** Masked player visible to other players (hides pack & specific cards) */
@@ -123,6 +142,7 @@ export type ClientDraftPlayer = {
   isReady: boolean;
   isAdmin: boolean;
   isYou: boolean;
+  withdrawn: boolean;
   currentPack: GameCard[] | null; // only when isYou
   draftedCards: GameCard[] | null; // only when isYou
   deck: GameCard[] | null; // only when isYou (building phase)
@@ -144,6 +164,8 @@ export type MatchResult = {
   winnerId: string | null;
   loserId: string | null;
   isBye: boolean;
+  /** Not played: a player had left the tournament (both of them when winnerId is null). */
+  walkover: boolean;
   gameRoomId: string | null;
 };
 
@@ -152,7 +174,9 @@ export type PlayerStanding = {
   playerName: string;
   wins: number;
   losses: number;
+  /** Rounds without an opponent (odd number of players); a bye is not a win. */
   byes: number;
+  withdrawn: boolean;
 };
 
 export type TournamentRound = {
@@ -195,6 +219,9 @@ export type ClientDraftState = {
   bonusPickPool: GameCard[];
   /** The viewer is this draft's admin (creator, or the admin seat): show Start / Close. */
   isAdminViewer: boolean;
+  prizePool: number;
+  /** Final positions and prizes, once the tournament is over. */
+  prizes: DraftPrize[] | null;
 };
 
 /** Room info for the lobby list */
@@ -472,6 +499,7 @@ export class DraftRoomManager {
         isReady: false,
         isAdmin: true,
         pendingMatchInfo: null,
+        withdrawn: false,
       });
     }
 
@@ -496,6 +524,10 @@ export class DraftRoomManager {
       graceTimer: null,
       entryPaidIds: [],
       cardsCredited: false,
+      prizePool: 0,
+      prizes: null,
+      prizesPaid: false,
+      expiryTimer: null,
     };
 
     this.rooms.set(roomId, room);
@@ -545,6 +577,7 @@ export class DraftRoomManager {
       isReady: false,
       isAdmin: false,
       pendingMatchInfo: null,
+      withdrawn: false,
     });
 
     room.events.push(this.createEvent("info", `${name} se unió al draft`));
@@ -667,8 +700,10 @@ export class DraftRoomManager {
   private clearTimers(room: DraftRoom): void {
     if (room.pickTimer) clearTimeout(room.pickTimer);
     if (room.graceTimer) clearTimeout(room.graceTimer);
+    if (room.expiryTimer) clearTimeout(room.expiryTimer);
     room.pickTimer = null;
     room.graceTimer = null;
+    room.expiryTimer = null;
   }
 
   // --------------------------------------------------------------------------
@@ -697,6 +732,7 @@ export class DraftRoomManager {
     room.currentPick = 1;
     room.direction = "clockwise";
     room.entryPaidIds = [...entryPaidIds];
+    room.prizePool = room.config.entryFee * entryPaidIds.length;
 
     // Defensive: ensure clean state before starting
     for (const p of room.players) {
@@ -746,6 +782,7 @@ export class DraftRoomManager {
     if (!player) throw new Error("Jugador no encontrado");
     if (player.isReady) throw new Error("Ya elegiste tus cartas bonus");
     if (cardDefIds.length !== BONUS_PICKS) throw new Error("Debes elegir exactamente 3 cartas");
+    if (new Set(cardDefIds).size !== cardDefIds.length) throw new Error("Elige 3 cartas distintas");
 
     // Find cards from the bonus pool by their draft ID (all of them before adding any)
     const templates = cardDefIds.map((defId) => {
@@ -878,6 +915,7 @@ export class DraftRoomManager {
         isReady: p.isReady,
         isAdmin: p.isAdmin,
         isYou,
+        withdrawn: p.withdrawn,
         currentPack: isYou ? p.currentPack : null,
         draftedCards: isYou ? p.draftedCards : null,
         deck: isYou && room.phase === "building" ? p.deck : null,
@@ -904,6 +942,8 @@ export class DraftRoomManager {
       tournament: room.tournament,
       bonusPickPool: room.phase === "bonus-pick" ? room.bonusPickPool : [],
       isAdminViewer: viewerId !== null && this.isRoomAdmin(room, viewerId),
+      prizePool: room.prizePool,
+      prizes: room.prizes,
     };
   }
 
@@ -1311,6 +1351,7 @@ export class DraftRoomManager {
       wins: 0,
       losses: 0,
       byes: 0,
+      withdrawn: false,
     }));
 
     return {
@@ -1322,7 +1363,10 @@ export class DraftRoomManager {
   }
 
   /**
-   * Start a specific tournament round: set its status, handle bye, update matchPairings.
+   * Start a tournament round: its pairings become the current ones, the bye player rests (a bye
+   * is not a win: with an odd number of players everyone gets one), and every pairing with a
+   * player who left the tournament is decided at once. Doesn't move on when that decides the
+   * whole round (advanceTournament does).
    */
   private startTournamentRound(room: DraftRoom, roundNumber: number): void {
     if (!room.tournament) return;
@@ -1338,39 +1382,23 @@ export class DraftRoomManager {
     // Set current matchPairings for backward compat with bracket display
     room.matchPairings = round.pairings;
 
-    // Handle bye: auto-win for the bye player
     if (round.byePlayerId) {
-      const byePlayer = room.players.find(
-        (p) => p.id === round.byePlayerId,
-      );
       const standing = room.tournament.standings.find(
         (s) => s.playerId === round.byePlayerId,
       );
-
-      if (standing) {
-        standing.byes++;
-        standing.wins++;
-      }
+      if (standing) standing.byes++;
 
       round.results.push({
         matchNumber: 0,
         roundNumber,
         player1Id: round.byePlayerId,
         player2Id: "__BYE__",
-        winnerId: round.byePlayerId,
+        winnerId: null,
         loserId: null,
         isBye: true,
+        walkover: false,
         gameRoomId: null,
       });
-
-      if (byePlayer) {
-        room.events.push(
-          this.createEvent(
-            "system",
-            `${byePlayer.name} tiene bye en la Ronda ${roundNumber} (victoria automática)`,
-          ),
-        );
-      }
     }
 
     const pairingText = round.pairings
@@ -1379,13 +1407,16 @@ export class DraftRoomManager {
           `Partida ${p.matchNumber}: ${p.player1.name} vs ${p.player2.name}`,
       )
       .join(" | ");
+    const byeName = room.players.find((p) => p.id === round.byePlayerId)?.name;
 
     room.events.push(
       this.createEvent(
         "system",
-        `¡Ronda ${roundNumber} de ${room.tournament.totalRounds}! ${pairingText}`,
+        `¡Ronda ${roundNumber} de ${room.tournament.totalRounds}! ${pairingText}${byeName ? ` · Descansa: ${byeName}` : ""}`,
       ),
     );
+
+    for (const pairing of round.pairings) this.decideWalkover(room, round, pairing);
   }
 
   /**
@@ -1415,120 +1446,220 @@ export class DraftRoomManager {
     return this.gameRoomToDraft.get(gameRoomId);
   }
 
+  /** The game room of a draft match still being played, if any. */
+  private gameRoomIdFor(draftRoomId: string, roundNumber: number, matchNumber: number): string | null {
+    for (const [gameRoomId, info] of this.gameRoomToDraft) {
+      if (info.draftRoomId === draftRoomId && info.roundNumber === roundNumber && info.matchNumber === matchNumber) {
+        return gameRoomId;
+      }
+    }
+    return null;
+  }
+
+  /** Whether this match of the round already has a result. */
+  isMatchDecided(draftRoomId: string, roundNumber: number, matchNumber: number): boolean {
+    const round = this.rooms.get(draftRoomId)?.tournament?.rounds.find((r) => r.roundNumber === roundNumber);
+    return !!round?.results.some((r) => !r.isBye && r.matchNumber === matchNumber);
+  }
+
   /**
-   * Report a match result. Called when a game room finishes.
-   * Returns true if a new round was started (caller should create game rooms).
+   * Report a match result. Called when a game room finishes (winnerId null: no winner, both
+   * players lose it). A match already decided (e.g. a player left the tournament meanwhile)
+   * is ignored. `newRoundStarted`: the caller creates the next round's game rooms.
    */
   reportMatchResult(
     draftRoomId: string,
     roundNumber: number,
     matchNumber: number,
-    winnerId: string,
-    loserId: string,
+    winnerId: string | null,
+    loserId: string | null,
     gameRoomId: string,
-  ): { newRoundStarted: boolean; tournamentFinished: boolean } {
+  ): TournamentProgress {
     const room = this.rooms.get(draftRoomId);
-    if (!room || !room.tournament) {
+    const round = room?.tournament?.rounds.find((r) => r.roundNumber === roundNumber);
+    const pairing = round?.pairings.find((p) => p.matchNumber === matchNumber);
+    if (!room || !round || !pairing || room.phase !== "matching" || this.isMatchDecided(draftRoomId, roundNumber, matchNumber)) {
+      this.gameRoomToDraft.delete(gameRoomId);
       return { newRoundStarted: false, tournamentFinished: false };
     }
 
-    const round = room.tournament.rounds.find(
-      (r) => r.roundNumber === roundNumber,
-    );
-    if (!round) {
-      return { newRoundStarted: false, tournamentFinished: false };
-    }
+    this.recordResult(room, round, pairing, winnerId, false, gameRoomId);
 
-    // Find the pairing
-    const pairing = round.pairings.find(
-      (p) => p.matchNumber === matchNumber,
-    );
-    if (!pairing) {
-      return { newRoundStarted: false, tournamentFinished: false };
-    }
-
-    // Record the result
-    round.results.push({
-      matchNumber,
-      roundNumber,
-      player1Id: pairing.player1.id,
-      player2Id: pairing.player2.id,
-      winnerId,
-      loserId,
-      isBye: false,
-      gameRoomId,
-    });
-
-    // Update standings
-    const winnerStanding = room.tournament.standings.find(
-      (s) => s.playerId === winnerId,
-    );
-    const loserStanding = room.tournament.standings.find(
-      (s) => s.playerId === loserId,
-    );
-    if (winnerStanding) winnerStanding.wins++;
-    if (loserStanding) loserStanding.losses++;
-
-    const winnerName =
-      room.players.find((p) => p.id === winnerId)?.name ?? "?";
-    const loserName =
-      room.players.find((p) => p.id === loserId)?.name ?? "?";
+    const nameOf = (id: string | null) => room.players.find((p) => p.id === id)?.name ?? "?";
     room.events.push(
       this.createEvent(
         "info",
-        `${winnerName} venció a ${loserName} (Ronda ${roundNumber})`,
+        winnerId
+          ? `${nameOf(winnerId)} venció a ${nameOf(loserId)} (Ronda ${roundNumber})`
+          : `La Partida ${matchNumber} terminó sin ganador (Ronda ${roundNumber})`,
       ),
     );
 
-    // Clean up game room mapping
-    this.gameRoomToDraft.delete(gameRoomId);
+    return this.advanceTournament(room);
+  }
 
-    // Check if round is complete (all non-bye matches have results)
-    const expectedMatches = round.pairings.length;
-    const completedMatches = round.results.filter((r) => !r.isBye).length;
-
-    if (completedMatches >= expectedMatches) {
-      round.status = "completed";
-
-      // Sort standings
-      this.sortStandings(room.tournament);
-
-      // Check if tournament is over
-      if (roundNumber >= room.tournament.totalRounds) {
-        room.phase = "finished";
-        room.events.push(
-          this.createEvent("system", "¡Torneo finalizado!"),
-        );
-        this.broadcast(room.id);
-        this.hooks.onFinished?.(room);
-        return { newRoundStarted: false, tournamentFinished: true };
-      }
-
-      // Start next round
-      this.startTournamentRound(room, roundNumber + 1);
-      this.broadcast(room.id);
-      return { newRoundStarted: true, tournamentFinished: false };
+  /** Throws a Spanish reason unless `userId` can leave this draft's tournament now. */
+  assertCanWithdraw(roomId: string, userId: string): DraftRoom {
+    const room = this.rooms.get(roomId);
+    if (!room) throw new Error("Sala no encontrada");
+    if (room.phase !== "matching" || !room.tournament) {
+      throw new Error("Solo puedes abandonar el draft durante el torneo");
     }
-
-    // Not all matches done yet, just broadcast updated state
-    this.broadcast(room.id);
-    return { newRoundStarted: false, tournamentFinished: false };
+    const player = room.players.find((p) => p.id === userId);
+    if (!player) throw new Error("No juegas este draft");
+    if (player.withdrawn) throw new Error("Ya abandonaste este draft");
+    return room;
   }
 
   /**
-   * Sort standings: primary by wins desc, tiebreaker by head-to-head, then fewer losses.
+   * `userId` leaves the tournament: each of their matches not played yet is won by the rival
+   * (also the one of this round, whose game room the caller closes: `gameRoomIds`), they end
+   * last with no prize, and `penalty` (already charged) goes to the prize pool.
+   */
+  withdrawPlayer(roomId: string, userId: string, penalty: number): TournamentProgress & { gameRoomIds: string[] } {
+    const room = this.assertCanWithdraw(roomId, userId);
+    const tournament = room.tournament!;
+    const player = room.players.find((p) => p.id === userId)!;
+
+    player.withdrawn = true;
+    player.pendingMatchInfo = null;
+    const standing = tournament.standings.find((s) => s.playerId === userId);
+    if (standing) standing.withdrawn = true;
+    room.prizePool += penalty;
+    room.events.push(this.createEvent("system", `${player.name} abandonó el draft`));
+
+    const round = tournament.rounds.find((r) => r.roundNumber === tournament.currentRoundNumber);
+    const gameRoomIds: string[] = [];
+    for (const pairing of round?.pairings ?? []) {
+      const gameRoomId = this.gameRoomIdFor(room.id, round!.roundNumber, pairing.matchNumber);
+      if (this.decideWalkover(room, round!, pairing) && gameRoomId) gameRoomIds.push(gameRoomId);
+    }
+    this.sortStandings(tournament);
+
+    return { ...this.advanceTournament(room), gameRoomIds };
+  }
+
+  /** A pairing with a player who left is won by the other one (lost by both if both left). */
+  private decideWalkover(room: DraftRoom, round: TournamentRound, pairing: MatchPairing): boolean {
+    if (round.results.some((r) => !r.isBye && r.matchNumber === pairing.matchNumber)) return false;
+    const isWithdrawn = (id: string) => room.players.find((p) => p.id === id)?.withdrawn ?? true;
+    const p1Left = isWithdrawn(pairing.player1.id);
+    const p2Left = isWithdrawn(pairing.player2.id);
+    if (!p1Left && !p2Left) return false;
+
+    const winner = p1Left && p2Left ? null : p1Left ? pairing.player2 : pairing.player1;
+    const gameRoomId = this.gameRoomIdFor(room.id, round.roundNumber, pairing.matchNumber);
+    this.recordResult(room, round, pairing, winner?.id ?? null, true, gameRoomId);
+    room.events.push(
+      this.createEvent(
+        "info",
+        winner
+          ? `${winner.name} gana la Partida ${pairing.matchNumber}: su rival abandonó el draft`
+          : `Partida ${pairing.matchNumber} sin jugar: ambos abandonaron el draft`,
+      ),
+    );
+    return true;
+  }
+
+  /** Store a match result and update the standings (no winner: both players lose it). */
+  private recordResult(
+    room: DraftRoom,
+    round: TournamentRound,
+    pairing: MatchPairing,
+    winnerId: string | null,
+    walkover: boolean,
+    gameRoomId: string | null,
+  ): void {
+    const tournament = room.tournament!;
+    const loserIds = [pairing.player1.id, pairing.player2.id].filter((id) => id !== winnerId);
+    round.results.push({
+      matchNumber: pairing.matchNumber,
+      roundNumber: round.roundNumber,
+      player1Id: pairing.player1.id,
+      player2Id: pairing.player2.id,
+      winnerId,
+      loserId: winnerId ? loserIds[0] : null,
+      isBye: false,
+      walkover,
+      gameRoomId,
+    });
+
+    for (const standing of tournament.standings) {
+      if (standing.playerId === winnerId) standing.wins++;
+      else if (loserIds.includes(standing.playerId)) standing.losses++;
+    }
+    this.sortStandings(tournament);
+
+    for (const id of [pairing.player1.id, pairing.player2.id]) {
+      const player = room.players.find((p) => p.id === id);
+      if (player?.pendingMatchInfo?.matchNumber === pairing.matchNumber) player.pendingMatchInfo = null;
+    }
+    if (gameRoomId) this.gameRoomToDraft.delete(gameRoomId);
+  }
+
+  /**
+   * Move on while the current round has every match decided: next round (whose walkovers may
+   * decide it too) or the end of the tournament. Broadcasts the state.
+   */
+  private advanceTournament(room: DraftRoom): TournamentProgress {
+    const tournament = room.tournament!;
+    let newRoundStarted = false;
+    for (;;) {
+      const round = tournament.rounds.find((r) => r.roundNumber === tournament.currentRoundNumber);
+      if (!round || round.results.filter((r) => !r.isBye).length < round.pairings.length) break;
+
+      round.status = "completed";
+      if (round.roundNumber >= tournament.totalRounds) {
+        this.finishTournament(room);
+        return { newRoundStarted: false, tournamentFinished: true };
+      }
+      this.startTournamentRound(room, round.roundNumber + 1);
+      newRoundStarted = true;
+    }
+    this.broadcast(room.id);
+    return { newRoundStarted, tournamentFinished: false };
+  }
+
+  /** Final standings and prizes (paid by onFinished); the room stays FINISHED_ROOM_TTL_MS. */
+  private finishTournament(room: DraftRoom): void {
+    const tournament = room.tournament!;
+    this.sortStandings(tournament);
+    room.phase = "finished";
+    room.prizes = computeDraftPrizes(tournament.standings, room.prizePool);
+    const champion = tournament.standings[0];
+    room.events.push(
+      this.createEvent("system", champion ? `¡Torneo finalizado! Campeón: ${champion.playerName}` : "¡Torneo finalizado!"),
+    );
+    room.expiryTimer = setTimeout(() => {
+      room.expiryTimer = null;
+      this.closeRoom(room, "El draft terminó");
+    }, FINISHED_ROOM_TTL_MS);
+    room.expiryTimer.unref?.();
+    this.broadcast(room.id);
+    this.hooks.onFinished?.(room);
+  }
+
+  /**
+   * Sort standings: players who left last; then more wins; between exactly two tied players the
+   * game they played; then fewer losses, then name (a three-way tie can be a cycle, A > B > C > A,
+   * where head-to-head would make the order depend on the input).
    */
   private sortStandings(tournament: Tournament): void {
     const allResults = tournament.rounds.flatMap((r) => r.results);
+    const tiedCount = (s: PlayerStanding) =>
+      tournament.standings.filter((o) => o.withdrawn === s.withdrawn && o.wins === s.wins).length;
 
     tournament.standings.sort((a, b) => {
+      if (a.withdrawn !== b.withdrawn) return a.withdrawn ? 1 : -1;
+
       // Primary: more wins is better
       if (b.wins !== a.wins) return b.wins - a.wins;
 
-      // Tiebreaker: head-to-head
-      const h2h = allResults.find(
+      // Tiebreaker: head-to-head (a game actually played), only between two tied players
+      const h2h = tiedCount(a) === 2 && allResults.find(
         (r) =>
           !r.isBye &&
+          !r.walkover &&
           ((r.player1Id === a.playerId && r.player2Id === b.playerId) ||
             (r.player1Id === b.playerId && r.player2Id === a.playerId)),
       );
@@ -1536,7 +1667,39 @@ export class DraftRoomManager {
       if (h2h && h2h.winnerId === b.playerId) return 1;
 
       // Further: fewer losses
-      return a.losses - b.losses;
+      if (a.losses !== b.losses) return a.losses - b.losses;
+      return a.playerName.localeCompare(b.playerName);
     });
   }
+}
+
+export type TournamentProgress = { newRoundStarted: boolean; tournamentFinished: boolean };
+
+/** A finished draft room stays this long (final standings and prizes), then it is removed. */
+const FINISHED_ROOM_TTL_MS = 30 * 60_000;
+
+/**
+ * Coins for each final position (standings already sorted): the prize pool split by
+ * ECONOMY.draft.prizeSplit for this many players. Players who left get nothing; the shares of
+ * paid positions without a player are spread over the others; rounding goes to the champion.
+ */
+export function computeDraftPrizes(
+  standings: readonly PlayerStanding[],
+  pool: number,
+  splits: readonly { minPlayers: number; percents: readonly number[] }[] = ECONOMY.draft.prizeSplit,
+): DraftPrize[] {
+  const percents = splits.find((s) => standings.length >= s.minPlayers)?.percents ?? [];
+  const shares = percents.slice(0, standings.filter((s) => !s.withdrawn).length);
+  const totalShare = shares.reduce((sum, share) => sum + share, 0);
+  const coins = shares.map((share) => (pool > 0 && totalShare > 0 ? Math.floor((pool * share) / totalShare) : 0));
+  if (coins.length > 0) coins[0] += Math.max(0, pool) - coins.reduce((sum, c) => sum + c, 0);
+
+  let paid = 0;
+  return standings.map((standing, index) => ({
+    playerId: standing.playerId,
+    playerName: standing.playerName,
+    position: index + 1,
+    coins: standing.withdrawn ? 0 : (coins[paid++] ?? 0),
+    withdrawn: standing.withdrawn,
+  }));
 }
