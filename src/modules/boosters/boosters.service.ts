@@ -9,6 +9,7 @@
  */
 
 import {
+  ALL_CARDS,
   CARD_SETS,
   getSetById,
   isBasicEnergy,
@@ -113,8 +114,34 @@ function initializeDefaultPacks(): void {
   }
 }
 
+/**
+ * Trainers-only booster, sold in the market only: 11 Trainers of every set (1 rare slot with
+ * 33% holo, 4 uncommons, 6 commons), no Energy. Not a STANDARD_BOOSTER_ID, so the daily free
+ * pack, the welcome packs and prize packs keep giving set boosters.
+ */
+export const TRAINER_BOOSTER_ID = "trainer-booster";
+
+const TRAINER_BOOSTER: BoosterPackType = {
+  id: TRAINER_BOOSTER_ID,
+  name: "Entrenadores",
+  description: "Contains 11 random Trainer cards from every expansion. Includes 1 guaranteed Rare!",
+  setId: "trainers",
+  trainersOnly: true,
+  image: "/packs/trainers/booster_oak.png",
+  cardCount: 11,
+  slots: [
+    { rarity: "rare", count: 1, holoChance: 0.33 },
+    { rarity: "uncommon", count: 4, upgradeChance: 0.01 },
+    { rarity: "common", count: 6 },
+  ],
+  energyCount: 0,
+  price: ECONOMY.packs.price,
+  available: true,
+};
+
 // Initialize on module load
 initializeDefaultPacks();
+packTypes.set(TRAINER_BOOSTER.id, TRAINER_BOOSTER);
 
 // =============================================================================
 // Pack Type CRUD
@@ -178,17 +205,20 @@ export function deletePack(packId: string): boolean {
 // Pack Opening Logic
 // =============================================================================
 
-/** Cards of a set, from game-core's registry */
-function setCards(setId: string): Card[] {
-  return getSetById(setId)?.cards ?? [];
+const ALL_TRAINERS: Card[] = ALL_CARDS.filter((card) => card.kind === "trainer");
+
+/** Cards a pack draws from: its set in game-core's registry, or every Trainer */
+function setCards(pack: Pick<BoosterPackType, "setId" | "trainersOnly">): Card[] {
+  if (pack.trainersOnly) return ALL_TRAINERS;
+  return getSetById(pack.setId)?.cards ?? [];
 }
 
 /**
- * Get cards by rarity from a set. The "rare" pool is rare ∪ rare-holo (sets without non-holo
- * rares — Jungle, Fossil, Team Rocket — therefore always give a holo in the rare slot).
+ * Get cards by rarity from a pack's pool. The "rare" pool is rare ∪ rare-holo (sets without
+ * non-holo rares — Jungle, Fossil, Team Rocket — therefore always give a holo in the rare slot).
  */
-function getCardsByRarity(setId: string, rarity: string): Card[] {
-  const cards = setCards(setId);
+function getCardsByRarity(pack: Pick<BoosterPackType, "setId" | "trainersOnly">, rarity: string): Card[] {
+  const cards = setCards(pack);
   if (cards.length === 0) return [];
 
   return cards.filter((card) => {
@@ -206,8 +236,8 @@ function getCardsByRarity(setId: string, rarity: string): Card[] {
  * Get basic energy cards from a set (excludes special energies like Double Colorless).
  * Sets without basic Energy (Jungle) use the first registry set that has them (Base Set).
  */
-function getEnergyCards(setId: string): Card[] {
-  const energy = setCards(setId).filter(isBasicEnergy);
+function getEnergyCards(pack: Pick<BoosterPackType, "setId" | "trainersOnly">): Card[] {
+  const energy = setCards(pack).filter(isBasicEnergy);
   if (energy.length > 0) return energy;
   return CARD_SETS.map((set) => set.cards.filter(isBasicEnergy)).find((cards) => cards.length > 0) ?? [];
 }
@@ -276,7 +306,7 @@ export function openPack(packId: string): PackOpeningResult {
         else if (slot.rarity === "common") targetRarity = "uncommon";
       }
 
-      const availableCards = getCardsByRarity(pack.setId, targetRarity);
+      const availableCards = getCardsByRarity(pack, targetRarity);
       if (availableCards.length === 0) continue;
 
       const [card] = pickRandom(availableCards, 1);
@@ -290,7 +320,7 @@ export function openPack(packId: string): PackOpeningResult {
 
   // Basic energy cards of standard booster packs
   if (pack.energyCount) {
-    const energyCards = getEnergyCards(pack.setId);
+    const energyCards = getEnergyCards(pack);
     const pickedEnergy = pickRandom(energyCards, pack.energyCount);
     for (const card of pickedEnergy) {
       pulledCards.push({
@@ -353,7 +383,7 @@ export function getPackOdds(packId: string): PackOdds | null {
     for (let i = 0; i < slot.count; i++) {
       const dist = new Map<string, number>();
       for (const outcome of outcomes) {
-        const pool = getCardsByRarity(pack.setId, outcome.rarity);
+        const pool = getCardsByRarity(pack, outcome.rarity);
         if (pool.length === 0) continue; // openPack skips the card
         for (const card of pool) dist.set(card.id, (dist.get(card.id) ?? 0) + outcome.probability / pool.length);
       }
@@ -362,12 +392,12 @@ export function getPackOdds(packId: string): PackOdds | null {
   }
   const energyChance = new Map<string, number>();
   if (pack.energyCount) {
-    const energy = getEnergyCards(pack.setId);
+    const energy = getEnergyCards(pack);
     for (const card of energy) energyChance.set(card.id, Math.min(1, pack.energyCount / energy.length));
   }
 
   const cardsById = new Map<string, Card>();
-  for (const card of [...setCards(pack.setId), ...getEnergyCards(pack.setId)]) cardsById.set(card.id, card);
+  for (const card of [...setCards(pack), ...getEnergyCards(pack)]) cardsById.set(card.id, card);
 
   const cardChances: Record<string, number> = {};
   for (const [id] of cardsById) {

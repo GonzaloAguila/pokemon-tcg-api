@@ -27,6 +27,7 @@ describe("set registry consumers", () => {
       "jungle-booster",
       "fossil-booster",
       "team-rocket-booster",
+      "trainer-booster", // market-only, see trainer-booster.test.ts
     ]);
     for (const packId of STANDARD_BOOSTER_IDS) {
       const pack = getAllPacks().find((p) => p.id === packId)!;

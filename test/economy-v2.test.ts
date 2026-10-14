@@ -571,7 +571,7 @@ describe("odds", () => {
   it("every pack costs the same; wheel and slots probabilities add up to 1", () => {
     const odds = getOdds();
     expect(new Set(odds.packs.map((p) => p.price))).toEqual(new Set([ECONOMY.packs.price]));
-    expect(odds.packs.map((p) => p.packId).sort()).toEqual([...STANDARD_BOOSTER_IDS].sort());
+    expect(odds.packs.map((p) => p.packId).sort()).toEqual([...STANDARD_BOOSTER_IDS, "trainer-booster"].sort());
     const sum = (xs: { probability: number }[]) => xs.reduce((n, x) => n + x.probability, 0);
     expect(sum(odds.wheel.segments)).toBeCloseTo(1, 5);
     expect(sum(odds.slots.patterns)).toBeCloseTo(1, 5);
