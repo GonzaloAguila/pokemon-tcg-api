@@ -135,6 +135,7 @@ model User {
   economyClaims    EconomyClaim[]
   packs            UserPack[]
   missions         UserMission[]
+  newsPosts        NewsPost[]        @relation("NewsAuthor")
 
   @@index([providerId, provider])
   @@map("users")
@@ -556,6 +557,34 @@ model MessageRead {
   @@unique([messageId, userId])
   @@index([userId])
   @@map("message_reads")
+}
+
+// =============================================================================
+// News ("Noticias"): announcements written by admins/moderators (permission "news")
+// =============================================================================
+
+model NewsPost {
+  id             String    @id @default(uuid())
+  title          String    @db.VarChar(120)
+  body           String    @db.VarChar(10000) // markdown-lite (**bold**, *italic*, __underline__, line breaks)
+  category       String    @default("news") // "news" | "update" | "maintenance" | "event"
+  pinned         Boolean   @default(false)
+  pinnedUntil    DateTime? // the pin stops counting after this date (null = until unpinned)
+  expiresAt      DateTime? // hidden from the public endpoints after this date
+  publishedAt    DateTime? // null = draft
+  ctaLabel       String?   @db.VarChar(40)
+  ctaHref        String?   @db.VarChar(200) // internal path only (^/[a-z0-9/_-]*$)
+  showInCarousel Boolean   @default(false)
+  // Broadcast SystemMessage created by "Avisar en Mensajes" (no FK; deleted with the post)
+  notificationId String?
+  authorId       String?
+  author         User?     @relation("NewsAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([publishedAt])
+  @@index([createdAt])
+  @@map("news_posts")
 }
 
 // =============================================================================

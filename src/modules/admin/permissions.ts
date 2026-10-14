@@ -10,6 +10,8 @@ export const ADMIN_PERMISSIONS = {
   MESSAGES_SEND: "messages:send",
   MESSAGES_VIEW: "messages:view",
   DASHBOARD_VIEW: "dashboard:view",
+  // Write, publish, pin and delete news posts. A "moderator" is an admin with only this one.
+  NEWS: "news",
 } as const;
 
 export type AdminPermission = typeof ADMIN_PERMISSIONS[keyof typeof ADMIN_PERMISSIONS];
