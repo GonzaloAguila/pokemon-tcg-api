@@ -98,6 +98,7 @@ describe("table bets (when re-enabled)", () => {
 
   it("requires a verified email and enough online games from both players", async () => {
     const fresh = await createPlayer(100);
+    await prisma.user.update({ where: { id: fresh.id }, data: { emailVerified: false } });
     expect(await matches.betIneligibilityReason(fresh.id)).toMatch(/verificar tu email/);
     await prisma.user.update({ where: { id: fresh.id }, data: { emailVerified: true } });
     expect(await matches.betIneligibilityReason(fresh.id)).toMatch(/20 partidas online/);
@@ -246,6 +247,26 @@ describe("counted games (anti-farming) and match rewards", () => {
     expect(await txTypes(b.id)).toEqual([["match_reward", ONLINE.loss]]);
     expect((await profile(a.id)).stats).toMatchObject({ normalWins: 1 });
     expect(await prisma.match.findUniqueOrThrow({ where: { id } })).toMatchObject({ player1Coins: ONLINE.win, player2Coins: ONLINE.loss, counted: true });
+  });
+
+  it("an account without a verified email gets stats and XP but no match coins or missions", async () => {
+    const a = await createPlayer();
+    const b = await createPlayer();
+    await prisma.user.update({ where: { id: a.id }, data: { emailVerified: false } });
+    const { id } = await openPlayed({ player1Id: a.id, player2Id: b.id, mode: "normal", betAmount: 0 });
+    const res = await matches.settleMatch(id, win(a.id));
+    expect(res?.counted).toBe(true);
+    expect(res?.players[0]).toMatchObject({ outcome: "win", rewardCoins: 0, missionsCompleted: [], xpGained: XP_REWARDS.normal.win, emailVerified: false });
+    expect(res?.players[1]).toMatchObject({ outcome: "loss", rewardCoins: ONLINE.loss, emailVerified: true });
+    expect(await txTypes(a.id)).toEqual([]);
+    expect(await prisma.userMission.count({ where: { userId: a.id } })).toBe(0);
+    expect((await profile(a.id)).stats).toMatchObject({ normalWins: 1 });
+
+    // Same for a single-player game
+    const { matchId } = await matches.startAiMatch(a.id, new Date(Date.now() - 10 * 60_000));
+    const ai = await matches.finishAiMatch(a.id, matchId, true, 5);
+    expect(ai).toMatchObject({ counted: true, rewardCoins: 0, missionsCompleted: [], emailVerified: false });
+    expect(ai.xpGained).toBeGreaterThan(0);
   });
 
   it("a surrender in the mulligan (turn 0) counts for nobody", async () => {

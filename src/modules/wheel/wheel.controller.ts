@@ -1,5 +1,5 @@
 import { Router, type Request, type Response, type NextFunction } from "express";
-import { requireAuth } from "../../middleware/auth.js";
+import { requireAuth, requireVerifiedEmail } from "../../middleware/auth.js";
 import * as wheelService from "./wheel.service.js";
 
 const router = Router();
@@ -12,6 +12,7 @@ const router = Router();
 router.post(
   "/wheel/spin",
   requireAuth,
+  requireVerifiedEmail,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const result = await wheelService.spinWheel(req.user!.userId);

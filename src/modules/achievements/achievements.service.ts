@@ -189,6 +189,9 @@ export async function checkAndUpdateProgress(userId: string): Promise<ClaimableA
         bestStreak: true,
       },
     }),
+    // Distinct cards of any set: the two collection achievements still active (Coleccionista
+    // Novato, Coleccionista) say "de cualquier set". The Base Set ones (Colección 75% / Completa,
+    // the hotfix's base-set-only count) are retired in favour of the per-set milestones.
     prisma.userCard.count({ where: { userId, quantity: { gt: 0 } } }),
     prisma.userAchievement.findMany({
       where: { userId },

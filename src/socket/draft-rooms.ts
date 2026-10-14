@@ -10,8 +10,11 @@
 
 import {
   ALL_CARDS,
+  findCardDefinition,
   isBasicEnergy,
   isEnergyCard,
+  isPlayableAsBasic,
+  isPokemonCard,
 } from "@gonzaloaguila/game-core";
 import type { Card, GameCard } from "@gonzaloaguila/game-core";
 
@@ -87,6 +90,16 @@ export type DraftRoom = {
   adminSocketId: string | null;
   /** Admin display name (for room list when admin is not a player) */
   adminName: string;
+  /**
+   * Pending advance once only disconnected players are left to act (a pick, the bonus picks,
+   * a deck): they get DISCONNECT_GRACE to come back (e.g. lobby -> table navigation) before
+   * the server acts for them.
+   */
+  graceTimer: ReturnType<typeof setTimeout> | null;
+  /** Players charged the entry fee (draft:start), refunded if the room closes unplayed. */
+  entryPaidIds: string[];
+  /** keepInCollection: the drafted cards were credited (once). */
+  cardsCredited: boolean;
 };
 
 /** Masked player visible to other players (hides pack & specific cards) */
@@ -167,6 +180,8 @@ export type ClientDraftState = {
   matchPairings: MatchPairing[] | null;
   tournament: Tournament | null;
   bonusPickPool: GameCard[];
+  /** The viewer is this draft's admin (creator, or the admin seat): show Start / Close. */
+  isAdminViewer: boolean;
 };
 
 /** Room info for the lobby list */
@@ -182,6 +197,45 @@ export type DraftRoomInfo = {
 };
 
 export type BroadcastFn = (roomId: string) => void;
+
+/** Why a room closed: unplayed = before the tournament started (entry fees are refunded). */
+export type DraftClosedInfo = { unplayed: boolean; reason: string };
+
+/** What the socket layer does when the draft moves on by itself (timers, grace periods). */
+export type DraftHooks = {
+  /** Round 1 is paired (all decks in): create the game rooms. */
+  onTournamentStart?: (room: DraftRoom) => void;
+  /** The room is gone (admin close, too few players left): refunds, credits, notify clients. */
+  onRoomClosed?: (room: DraftRoom, info: DraftClosedInfo) => void;
+  /** The tournament ended. */
+  onFinished?: (room: DraftRoom) => void;
+};
+
+export type DraftTimings = {
+  /** Time a disconnected player has to come back before the server acts for them. */
+  disconnectGraceMs: number;
+  /** Bonus-pick phase deadline (then 3 random bonus cards for whoever didn't pick). */
+  bonusPickSeconds: number;
+  /** Deck-building deadline (then an automatic deck, or removal without a Basic Pokémon). */
+  buildingSeconds: number;
+};
+
+export const DEFAULT_DRAFT_TIMINGS: DraftTimings = {
+  disconnectGraceMs: 10_000,
+  bonusPickSeconds: 120,
+  buildingSeconds: 600,
+};
+
+const BONUS_PICKS = 3;
+/** Most drafted cards an automatic deck uses; the rest of the deck is basic Energy. */
+const AUTO_DECK_MAX_CARDS = 36;
+const AUTO_DECK_MIN_ENERGY = 24;
+const BASIC_ENERGY_TYPES = ["grass", "fire", "water", "lightning", "psychic", "fighting"] as const;
+
+/** Catalog id of a drafted card (draft instances have their own ids), or null. */
+export function catalogIdOf(card: GameCard): string | null {
+  return findCardDefinition(card.set, card.number)?.id ?? null;
+}
 
 // ============================================================================
 // Pack Generation
@@ -251,6 +305,52 @@ function generatePack(cardsPerPack: number): GameCard[] {
   return shuffle([...commons, ...uncommons, ...rares]).map(toGameCard);
 }
 
+/**
+ * A playable deck from a player's drafted cards, for whoever didn't build one in time: up to
+ * AUTO_DECK_MAX_CARDS drafted cards (Basic Pokémon first, then the other Pokémon, Trainers and
+ * special Energy) plus basic Energy of the Pokémon's types, at least AUTO_DECK_MIN_ENERGY and
+ * enough to reach `minDeckSize`. Null without a card playable as a Basic Pokémon.
+ */
+export function buildAutoDeck(
+  drafted: GameCard[],
+  minDeckSize: number,
+  createEnergy: (type: string) => GameCard,
+): GameCard[] | null {
+  if (!drafted.some((card) => isPlayableAsBasic(card))) return null;
+  const rank = (card: GameCard): number => {
+    if (isPlayableAsBasic(card)) return 0;
+    if (isPokemonCard(card)) return 1;
+    return 2;
+  };
+  const chosen = [...drafted]
+    .filter((card) => !isBasicEnergy(card))
+    .sort((a, b) => rank(a) - rank(b))
+    .slice(0, AUTO_DECK_MAX_CARDS);
+
+  const typeCounts = new Map<string, number>();
+  for (const card of chosen) {
+    if (!isPokemonCard(card)) continue;
+    for (const type of card.types) {
+      if ((BASIC_ENERGY_TYPES as readonly string[]).includes(type)) typeCounts.set(type, (typeCounts.get(type) ?? 0) + 1);
+    }
+  }
+  const types = [...typeCounts.entries()].sort((a, b) => b[1] - a[1]).map(([type]) => type);
+  if (types.length === 0) types.push("fighting");
+
+  const energyCount = Math.max(minDeckSize - chosen.length, AUTO_DECK_MIN_ENERGY);
+  const total = types.reduce((sum, type) => sum + (typeCounts.get(type) ?? 1), 0);
+  const deck: GameCard[] = [...chosen];
+  let added = 0;
+  types.forEach((type, i) => {
+    const share = i === types.length - 1
+      ? energyCount - added
+      : Math.floor((energyCount * (typeCounts.get(type) ?? 1)) / total);
+    for (let n = 0; n < share; n++) deck.push(createEnergy(type));
+    added += share;
+  });
+  return deck;
+}
+
 // ============================================================================
 // DraftRoomManager
 // ============================================================================
@@ -260,9 +360,25 @@ export class DraftRoomManager {
   private socketToRoom = new Map<string, string>();
   private gameRoomToDraft = new Map<string, GameRoomDraftInfo>();
   private broadcastFn: BroadcastFn | null = null;
+  private hooks: DraftHooks = {};
+  private timings: DraftTimings;
+
+  constructor(timings: Partial<DraftTimings> = {}) {
+    this.timings = { ...DEFAULT_DRAFT_TIMINGS, ...timings };
+  }
 
   setBroadcast(fn: BroadcastFn): void {
     this.broadcastFn = fn;
+  }
+
+  /** What to do when the draft moves on by itself (see DraftHooks). Idempotent. */
+  setHooks(hooks: DraftHooks): void {
+    this.hooks = hooks;
+  }
+
+  /** Tests shorten the timers. */
+  setTimings(timings: Partial<DraftTimings>): void {
+    this.timings = { ...this.timings, ...timings };
   }
 
   private broadcast(roomId: string): void {
@@ -327,6 +443,9 @@ export class DraftRoomManager {
       adminId,
       adminSocketId,
       adminName,
+      graceTimer: null,
+      entryPaidIds: [],
+      cardsCredited: false,
     };
 
     this.rooms.set(roomId, room);
@@ -350,9 +469,11 @@ export class DraftRoomManager {
       return room;
     }
 
-    // Reconnection: existing player updates their socket (allowed in any phase)
+    // Reconnection: existing player updates their socket (allowed in any phase). Any pending
+    // grace advance re-checks on expiry, so a returning player acts for themselves.
     const existing = room.players.find((p) => p.id === userId);
     if (existing) {
+      if (existing.socketId && existing.socketId !== socketId) this.socketToRoom.delete(existing.socketId);
       existing.socketId = socketId;
       this.socketToRoom.set(socketId, roomId);
       return room;
@@ -396,7 +517,8 @@ export class DraftRoomManager {
         this.createEvent("system", `${player.name} se desconectó`),
       );
       this.socketToRoom.delete(socketId);
-      return room;
+      this.evaluateProgress(room);
+      return this.rooms.has(roomId) ? room : null;
     }
 
     // In lobby, fully remove the player
@@ -453,38 +575,63 @@ export class DraftRoomManager {
     return player;
   }
 
-  deleteRoom(roomId: string, socketId: string): boolean {
+  /**
+   * Whether `userId` runs this draft: its creator (room.adminId, playing or spectating, from
+   * any socket) or the player holding the admin seat (passed on when the admin left the lobby).
+   */
+  isRoomAdmin(room: DraftRoom, userId: string): boolean {
+    return room.adminId === userId || room.players.some((p) => p.id === userId && p.isAdmin);
+  }
+
+  /**
+   * Close a room on request: its admin (by user id, from any socket) or a site admin
+   * (backoffice). Throws a Spanish reason otherwise. Entry fees of a room closed before its
+   * tournament are refunded (onRoomClosed).
+   */
+  deleteRoom(roomId: string, userId: string, isSiteAdmin = false): DraftRoom {
     const room = this.rooms.get(roomId);
-    if (!room) return false;
+    if (!room) throw new Error("Sala no encontrada");
+    if (!isSiteAdmin && !this.isRoomAdmin(room, userId)) {
+      throw new Error("Solo el admin puede cerrar el draft");
+    }
+    this.closeRoom(room, "La sala fue cerrada por el admin");
+    return room;
+  }
 
-    // Check if the requesting socket is the admin (either in players or as spectating admin)
-    const isAdminPlayer = room.players.find((p) => p.socketId === socketId)?.isAdmin;
-    const isAdminSpectator = room.adminSocketId === socketId;
-    if (!isAdminPlayer && !isAdminSpectator) return false;
-
-    if (room.pickTimer) clearTimeout(room.pickTimer);
+  /** Remove the room, its timers and mappings; refunds / credits go through onRoomClosed. */
+  private closeRoom(room: DraftRoom, reason: string): void {
+    if (!this.rooms.has(room.id)) return;
+    this.clearTimers(room);
     for (const p of room.players) {
       if (p.socketId) this.socketToRoom.delete(p.socketId);
     }
-    // Also clean up spectating admin socket mapping
     if (room.adminSocketId) this.socketToRoom.delete(room.adminSocketId);
-    this.rooms.delete(roomId);
-    return true;
+    for (const [gameRoomId, info] of this.gameRoomToDraft) {
+      if (info.draftRoomId === room.id) this.gameRoomToDraft.delete(gameRoomId);
+    }
+    this.rooms.delete(room.id);
+    const unplayed = room.phase !== "matching" && room.phase !== "finished";
+    this.hooks.onRoomClosed?.(room, { unplayed, reason });
+  }
+
+  private clearTimers(room: DraftRoom): void {
+    if (room.pickTimer) clearTimeout(room.pickTimer);
+    if (room.graceTimer) clearTimeout(room.graceTimer);
+    room.pickTimer = null;
+    room.graceTimer = null;
   }
 
   // --------------------------------------------------------------------------
   // Draft Flow
   // --------------------------------------------------------------------------
 
-  /** Throws unless `socketId` is the room admin and the room can start. Does not mutate. */
-  assertCanStart(roomId: string, socketId: string): DraftRoom {
+  /** Throws unless `userId` is the room admin and the room can start. Does not mutate. */
+  assertCanStart(roomId: string, userId: string): DraftRoom {
     const room = this.rooms.get(roomId);
     if (!room) throw new Error("Sala no encontrada");
 
-    // Admin can be in players array (adminPlays) or spectating (adminSocketId)
-    const isAdminPlayer = room.players.find((p) => p.socketId === socketId)?.isAdmin;
-    const isAdminSpectator = room.adminSocketId === socketId;
-    if (!isAdminPlayer && !isAdminSpectator)
+    // Admin can be in players array (adminPlays) or spectating, from any socket
+    if (!this.isRoomAdmin(room, userId))
       throw new Error("Solo el admin puede iniciar el draft");
     if (room.players.length < 2)
       throw new Error("Se necesitan al menos 2 jugadores");
@@ -492,13 +639,14 @@ export class DraftRoomManager {
     return room;
   }
 
-  startDraft(roomId: string, socketId: string): DraftRoom {
-    const room = this.assertCanStart(roomId, socketId);
+  startDraft(roomId: string, userId: string, entryPaidIds: string[] = []): DraftRoom {
+    const room = this.assertCanStart(roomId, userId);
 
     room.phase = "drafting";
     room.currentRound = 1;
     room.currentPick = 1;
     room.direction = "clockwise";
+    room.entryPaidIds = [...entryPaidIds];
 
     // Defensive: ensure clean state before starting
     for (const p of room.players) {
@@ -535,11 +683,7 @@ export class DraftRoomManager {
       this.createEvent("pick", `${player.name} eligió una carta`),
     );
 
-    // Advance when all connected players have picked
-    if (this.allPlayersPicked(room)) {
-      this.advancePick(room);
-    }
-
+    this.evaluateProgress(room);
     return room;
   }
 
@@ -551,27 +695,21 @@ export class DraftRoomManager {
     const player = room.players.find((p) => p.socketId === socketId);
     if (!player) throw new Error("Jugador no encontrado");
     if (player.isReady) throw new Error("Ya elegiste tus cartas bonus");
-    if (cardDefIds.length !== 3) throw new Error("Debes elegir exactamente 3 cartas");
+    if (cardDefIds.length !== BONUS_PICKS) throw new Error("Debes elegir exactamente 3 cartas");
 
-    // Find cards from the bonus pool by their draft ID
-    for (const defId of cardDefIds) {
+    // Find cards from the bonus pool by their draft ID (all of them before adding any)
+    const templates = cardDefIds.map((defId) => {
       const template = room.bonusPickPool.find((c) => c.id === defId);
       if (!template) throw new Error(`Carta ${defId} no encontrada en el pool`);
-      // Create a new GameCard instance with unique draft ID
-      player.draftedCards.push({ ...template, id: generateCardId() });
-    }
+      return template;
+    });
+    // Create a new GameCard instance with unique draft ID
+    for (const template of templates) player.draftedCards.push({ ...template, id: generateCardId() });
 
     player.isReady = true;
     room.events.push(this.createEvent("pick", `${player.name} eligió sus 3 cartas bonus`));
 
-    // When all players have picked, transition to building
-    if (room.players.every((p) => p.isReady || p.socketId === null)) {
-      room.phase = "building";
-      for (const p of room.players) p.isReady = false;
-      room.bonusPickPool = []; // Free memory
-      room.events.push(this.createEvent("system", "Hora de construir tu mazo."));
-    }
-
+    this.evaluateProgress(room);
     return room;
   }
 
@@ -589,7 +727,8 @@ export class DraftRoomManager {
     const player = room.players.find((p) => p.socketId === socketId);
     if (!player) throw new Error("Jugador no encontrado");
 
-    // Validate drafted card IDs
+    // Validate drafted card IDs (each drafted card at most once)
+    if (new Set(deckCardIds).size !== deckCardIds.length) throw new Error("Carta repetida en el mazo");
     const draftedIdSet = new Set(player.draftedCards.map((c) => c.id));
     for (const id of deckCardIds) {
       if (!draftedIdSet.has(id))
@@ -614,6 +753,10 @@ export class DraftRoomManager {
         `El mazo necesita al menos ${room.config.minDeckSize} cartas (tiene ${deckCards.length})`,
       );
     }
+    // Without a card playable as a Basic Pokémon the game's opening mulligans forever
+    if (!deckCards.some((card) => isPlayableAsBasic(card))) {
+      throw new Error("El mazo necesita al menos un Pokémon básico");
+    }
 
     player.deck = deckCards;
     player.isReady = true;
@@ -622,13 +765,50 @@ export class DraftRoomManager {
     );
 
     // All decks submitted → generate round-robin schedule and start tournament
-    if (room.players.every((p) => p.isReady)) {
-      room.tournament = this.generateRoundRobinSchedule(room);
-      this.startTournamentRound(room, 1);
-      room.phase = "matching";
-    }
-
+    this.evaluateProgress(room);
     return room;
+  }
+
+  // --------------------------------------------------------------------------
+  // Progress: who is the room waiting on?
+  // --------------------------------------------------------------------------
+
+  /**
+   * After a pick / bonus pick / deck, or a disconnect: when every player is done, move on at
+   * once; when only disconnected players are missing, give them the grace period to come back
+   * (lobby -> table navigation drops every socket for a moment) and then act for them.
+   * Disconnected players never block the room.
+   */
+  private evaluateProgress(room: DraftRoom): void {
+    if (!["drafting", "bonus-pick", "building"].includes(room.phase)) return;
+    if (room.players.every((p) => p.isReady)) {
+      this.advancePhase(room);
+      return;
+    }
+    const onlyDisconnectedLeft = room.players.every((p) => p.isReady || p.socketId === null);
+    if (onlyDisconnectedLeft && !room.graceTimer) {
+      const phase = room.phase;
+      const pick = room.currentPick;
+      const round = room.currentRound;
+      room.graceTimer = setTimeout(() => {
+        room.graceTimer = null;
+        if (!this.rooms.has(room.id) || room.phase !== phase || room.currentPick !== pick || room.currentRound !== round) return;
+        // Someone came back and hasn't acted yet: the phase timer handles them
+        if (!room.players.every((p) => p.isReady || p.socketId === null)) return;
+        this.advancePhase(room);
+      }, this.timings.disconnectGraceMs);
+    }
+  }
+
+  /** Move on from the current step, acting for whoever didn't (timeout or grace expired). */
+  private advancePhase(room: DraftRoom): void {
+    if (room.graceTimer) {
+      clearTimeout(room.graceTimer);
+      room.graceTimer = null;
+    }
+    if (room.phase === "drafting") this.advancePick(room);
+    else if (room.phase === "bonus-pick") this.finishBonusPick(room);
+    else if (room.phase === "building") this.finishBuilding(room);
   }
 
   // --------------------------------------------------------------------------
@@ -656,6 +836,10 @@ export class DraftRoomManager {
       };
     });
 
+    const viewerId =
+      room.players.find((p) => p.socketId === forSocketId)?.id ??
+      (room.adminSocketId === forSocketId ? room.adminId : null);
+
     return {
       roomId: room.id,
       config: room.config,
@@ -669,6 +853,7 @@ export class DraftRoomManager {
       matchPairings: room.matchPairings,
       tournament: room.tournament,
       bonusPickPool: room.phase === "bonus-pick" ? room.bonusPickPool : [],
+      isAdminViewer: viewerId !== null && this.isRoomAdmin(room, viewerId),
     };
   }
 
@@ -758,27 +943,21 @@ export class DraftRoomManager {
       return room.players.length > 0 ? room : null;
     }
 
-    // During active draft: mark disconnected, auto-pick will handle them
+    // During active draft: mark disconnected. They don't block the room: once only
+    // disconnected players are missing, the grace period starts (evaluateProgress), and
+    // their pick / bonus picks / deck are made for them if they don't come back.
     player.socketId = null;
     room.events.push(
       this.createEvent("system", `${player.name} se desconectó`),
     );
 
-    // If all players were waiting on this player, advance
-    if (room.phase === "drafting" && this.allPlayersPicked(room)) {
-      this.advancePick(room);
-    }
-
-    return room;
+    this.evaluateProgress(room);
+    return this.rooms.has(roomId) ? room : null;
   }
 
   // --------------------------------------------------------------------------
   // Internal: Draft Logic
   // --------------------------------------------------------------------------
-
-  private allPlayersPicked(room: DraftRoom): boolean {
-    return room.players.every((p) => p.isReady || p.socketId === null);
-  }
 
   private advancePick(room: DraftRoom): void {
     if (room.pickTimer) {
@@ -786,7 +965,7 @@ export class DraftRoomManager {
       room.pickTimer = null;
     }
 
-    // Auto-pick for disconnected players who haven't picked
+    // Auto-pick for players who haven't picked (disconnected past the grace period)
     for (const player of room.players) {
       if (!player.isReady && player.currentPack.length > 0) {
         const randomIdx = Math.floor(
@@ -817,7 +996,7 @@ export class DraftRoomManager {
       room.currentRound++;
 
       if (room.currentRound > room.config.packsPerPlayer) {
-        // All rounds done → bonus-pick phase
+        // All rounds done → bonus-pick phase (with its own deadline)
         room.phase = "bonus-pick";
         room.bonusPickPool = draftPool.map(toGameCard);
         for (const p of room.players) p.isReady = false;
@@ -827,7 +1006,9 @@ export class DraftRoomManager {
             "¡Draft completado! Elige 3 cartas bonus del catálogo.",
           ),
         );
+        this.startPhaseTimer(room, this.timings.bonusPickSeconds);
         this.broadcast(room.id);
+        this.evaluateProgress(room); // everyone may already be gone
         return;
       }
 
@@ -847,6 +1028,66 @@ export class DraftRoomManager {
 
     this.startPickTimer(room);
     this.broadcast(room.id);
+    this.evaluateProgress(room);
+  }
+
+  /** Bonus-pick over (all picked, deadline, or grace): 3 random bonus cards for whoever didn't. */
+  private finishBonusPick(room: DraftRoom): void {
+    if (room.phase !== "bonus-pick") return;
+    this.clearTimers(room);
+    for (const player of room.players) {
+      if (player.isReady) continue;
+      const picks = shuffle(room.bonusPickPool).slice(0, BONUS_PICKS);
+      for (const template of picks) player.draftedCards.push({ ...template, id: generateCardId() });
+      player.isReady = true;
+      room.events.push(this.createEvent("system", `Cartas bonus al azar para ${player.name}`));
+    }
+    room.phase = "building";
+    for (const p of room.players) p.isReady = false;
+    room.bonusPickPool = []; // Free memory
+    room.events.push(this.createEvent("system", "Hora de construir tu mazo."));
+    this.startPhaseTimer(room, this.timings.buildingSeconds);
+    this.broadcast(room.id);
+    this.evaluateProgress(room);
+  }
+
+  /**
+   * Deck building over (all decks in, deadline, or grace): whoever has no deck gets an
+   * automatic one from their drafted cards, or leaves the tournament when none can be built
+   * (no card playable as a Basic Pokémon). With fewer than 2 players left the room closes
+   * unplayed (entry fees refunded).
+   */
+  private finishBuilding(room: DraftRoom): void {
+    if (room.phase !== "building") return;
+    this.clearTimers(room);
+    for (const player of [...room.players]) {
+      if (player.isReady && player.deck) continue;
+      const deck = buildAutoDeck(player.draftedCards, room.config.minDeckSize, (type) => this.createBasicEnergyCard(type));
+      if (deck) {
+        player.deck = deck;
+        player.isReady = true;
+        room.events.push(this.createEvent("system", `Mazo automático para ${player.name}`));
+      } else {
+        this.removePlayer(room.id, player.id);
+        room.events.push(this.createEvent("system", `${player.name} no tiene un mazo jugable y queda fuera del torneo`));
+      }
+    }
+    if (room.players.length < 2) {
+      this.closeRoom(room, "No quedan jugadores suficientes para el torneo");
+      return;
+    }
+    this.startTournament(room);
+  }
+
+  /** Every deck is in: round-robin schedule, round 1, and the game rooms (onTournamentStart). */
+  private startTournament(room: DraftRoom): void {
+    this.clearTimers(room);
+    room.pickDeadline = 0;
+    room.tournament = this.generateRoundRobinSchedule(room);
+    this.startTournamentRound(room, 1);
+    room.phase = "matching";
+    this.broadcast(room.id);
+    this.hooks.onTournamentStart?.(room);
   }
 
   private rotatePacks(room: DraftRoom): void {
@@ -880,7 +1121,19 @@ export class DraftRoomManager {
     }, room.config.pickTimeSeconds * 1000);
   }
 
+  /** Deadline of the bonus-pick / building phase (pickDeadline: the clients' countdown). */
+  private startPhaseTimer(room: DraftRoom, seconds: number): void {
+    if (room.pickTimer) clearTimeout(room.pickTimer);
+    room.pickDeadline = Date.now() + seconds * 1000;
+    room.pickTimer = setTimeout(() => {
+      room.pickTimer = null;
+      if (!this.rooms.has(room.id)) return;
+      this.advancePhase(room);
+    }, seconds * 1000);
+  }
+
   private handlePickTimeout(room: DraftRoom): void {
+    if (!this.rooms.has(room.id) || room.phase !== "drafting") return;
     for (const player of room.players) {
       if (!player.isReady && player.currentPack.length > 0) {
         const randomIdx = Math.floor(
@@ -898,7 +1151,7 @@ export class DraftRoomManager {
       }
     }
 
-    this.advancePick(room);
+    this.advancePhase(room);
   }
 
   // --------------------------------------------------------------------------
@@ -1196,6 +1449,7 @@ export class DraftRoomManager {
           this.createEvent("system", "¡Torneo finalizado!"),
         );
         this.broadcast(room.id);
+        this.hooks.onFinished?.(room);
         return { newRoundStarted: false, tournamentFinished: true };
       }
 

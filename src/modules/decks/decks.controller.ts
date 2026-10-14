@@ -11,7 +11,7 @@ import {
   type NextFunction,
 } from "express";
 import { z } from "zod";
-import { requireAuth } from "../../middleware/auth.js";
+import { requireAuth, requireVerifiedEmail } from "../../middleware/auth.js";
 import { Errors } from "../../middleware/error-handler.js";
 import * as decksService from "./decks.service.js";
 
@@ -180,6 +180,7 @@ router.post(
 router.post(
   "/me/deck-slots/purchase",
   requireAuth,
+  requireVerifiedEmail,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const result = await decksService.purchaseDeckSlot(req.user!.userId);

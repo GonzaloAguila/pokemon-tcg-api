@@ -1,14 +1,28 @@
-# Prisma migrations: baseline and how to adopt it in production
+# Prisma migrations: baseline, production adoption and pending migrations
 
-Status (2026-10-10): `prisma/migrations/` exists in the repo with one baseline migration,
-`20261010000000_baseline`, generated from the current `prisma/schema.prisma`:
+**Status (2026-10-14): production uses `prisma migrate deploy`.** It adopted migrations on
+2026-10-13: the baseline `20261010000000_baseline` was marked applied there with
+`migrate resolve --applied` (steps 1–4 below), so deploys run `npx prisma migrate deploy`,
+never `db push`. The hotfix running in production since 2026-10-14 (master 9e30cd1) added no
+migration, so production has exactly the baseline.
+
+**Pending in production** (applied by `npx prisma migrate deploy` with the economy-v2 release,
+after the backup of step 1; both additive):
+
+1. `20261013000000_match_settlement`
+2. `20261014000000_economy_v2`
+
+`npx prisma migrate status` must list exactly those two as not applied before the deploy and
+"Database schema is up to date!" after it.
+
+The baseline was generated from `prisma/schema.prisma`:
 
 ```bash
 npx prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script \
   > prisma/migrations/20261010000000_baseline/migration.sql
 ```
 
-Later migrations (apply with `migrate deploy` once the baseline is resolved, step 4 below):
+Later migrations (applied with `migrate deploy`):
 
 - `20261013000000_match_settlement` (2026-10-13): `matches` gets `mode`, `roomId`, `betAmount`,
   `player1Xp`, `player2Xp`, `settledAt` and three indexes; `player1Id` becomes nullable with
@@ -21,9 +35,11 @@ Later migrations (apply with `migrate deploy` once the baseline is resolved, ste
   statement: `user_battle_passes.steps` = highest day already claimed (max 30), so the battle pass
   switches from calendar to activity without taking anything away.
 
-**Nothing has been applied to production.** Production was built with `prisma db push`. Its
-`_prisma_migrations` table holds a single row, `0001_init` (applied 2026-02-09), from an earlier
-attempt. The VPS also has an untracked `prisma/migrations/` folder from that attempt.
+History: production was built with `prisma db push`. Before the adoption its
+`_prisma_migrations` table held a single row, `0001_init` (applied 2026-02-09), from an earlier
+attempt, and the VPS had an untracked `prisma/migrations/` folder from that attempt. The
+procedure below is how it was adopted (kept for reference and for rebuilding a database that was
+created with `db push`).
 
 `test/migrations.test.ts` replays `prisma/migrations` into a shadow database in the Docker test
 container and fails if the result differs from `schema.prisma`. After the switch, every schema
@@ -46,7 +62,7 @@ On throwaway databases inside `ptcg-test-db`:
      "Database schema is up to date!". This works with the old `0001_init` row still there.
    - A follow-up migration (`ALTER TABLE ... ADD COLUMN`) then applied cleanly with `migrate deploy`.
 
-## Production procedure (run on the VPS, in this order)
+## Adoption procedure (done in production on 2026-10-13; run on the VPS, in this order)
 
 All commands run from `/var/www/pokemon-tcg-api`. Load the env first:
 
@@ -120,12 +136,13 @@ tries to create every table again and fails with P3018, as above.
 - Never run `prisma migrate dev` or `prisma migrate reset` against production. They can drop data.
 - Last resort: restore the step 1 dump.
 
-## Day-to-day after the switch
+## Day-to-day (since the switch)
 
 - Schema change in development (local Docker DB `ptcg-dev-db` only):
   `npx prisma migrate dev --name <change>`, then commit the new folder under `prisma/migrations/`.
-- Deploy: replace `npx prisma db push` in the deploy pipeline (frontend repo
-  `.claude/skills/api-deploy/SKILL.md`) with `npx prisma migrate deploy`.
+- Deploy: `npx prisma migrate deploy` after `npm ci` and before the PM2 reload (frontend repo
+  `.claude/skills/api-deploy/SKILL.md`; if that skill still says `db push`, it is stale). Back up
+  first (step 1) whenever a deploy brings migrations.
 - `npm run db:push` remains fine for throwaway databases. The test suite still resets
   `ptcg_test` with `db push --force-reset`. `test/migrations.test.ts` catches a schema edit
   that has no migration.

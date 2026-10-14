@@ -2,7 +2,7 @@ import { Router, type Request, type Response, type NextFunction } from "express"
 import { z } from "zod";
 import * as usersService from "./users.service.js";
 import * as rewardsService from "./rewards.service.js";
-import { requireAuth, checkUserStatus } from "../../middleware/auth.js";
+import { requireAuth, requireVerifiedEmail, checkUserStatus } from "../../middleware/auth.js";
 import { AppError, Errors } from "../../middleware/error-handler.js";
 
 const router = Router();
@@ -158,6 +158,7 @@ router.post("/me/claim-daily-coins", requireAuth, (_req: Request, _res: Response
 router.post(
   "/me/claim-wheel-spin",
   requireAuth,
+  requireVerifiedEmail,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const result = await rewardsService.claimFreeWheelSpin(req.user!.userId);
@@ -175,6 +176,7 @@ router.post(
 router.post(
   "/me/claim-slot-spin",
   requireAuth,
+  requireVerifiedEmail,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const result = await rewardsService.claimFreeSlotSpin(req.user!.userId);

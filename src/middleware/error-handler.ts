@@ -14,6 +14,9 @@ export class AppError extends Error {
   }
 }
 
+/** Error code of an economy action from an account without a verified email. */
+export const EMAIL_NOT_VERIFIED = "EMAIL_NOT_VERIFIED";
+
 /**
  * Common error types
  */
@@ -38,6 +41,10 @@ export const Errors = {
 
   RateLimited: () =>
     new AppError("Too many requests", 429, "RATE_LIMITED"),
+
+  /** Economy action from an account whose email isn't verified (requireVerifiedEmail). */
+  EmailNotVerified: () =>
+    new AppError("Verificá tu email para continuar", 403, EMAIL_NOT_VERIFIED),
 };
 
 /**
@@ -57,6 +64,9 @@ export function errorHandler(
         message: err.message,
         code: err.code,
       },
+      // EMAIL_NOT_VERIFIED is also readable at the top level ({ code, message }) for clients
+      // that check the body directly
+      ...(err.code === EMAIL_NOT_VERIFIED ? { code: err.code, message: err.message } : {}),
     });
     return;
   }

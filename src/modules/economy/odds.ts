@@ -48,7 +48,7 @@ const PATTERN_PRIZES: Record<SlotPattern, string> = {
   corners: "Moneda coleccionable al azar",
   diagonal: "Carta Pokémon poco común (2/3) o rara (1/3)",
   horizontal: "Según el símbolo de la línea",
-  vertical: "Según el símbolo de la línea",
+  vertical: "Según el símbolo de la columna (premio básico: cartas y variantes dan dorso o moneda coleccionable)",
   none: "Nada",
 };
 
@@ -60,11 +60,14 @@ const LINE_PRIZES: Record<"horizontal" | "vertical", Partial<Record<SlotSymbol, 
     overlay: "Variante al azar",
     playmat: "Tapete al azar",
   },
+  // The column is the basic line (slots.service resolvePatternPrize): coins, card backs and
+  // playmats pay their own prize, but a column of cards or of variants pays a card back or a
+  // collectible coin (50/50), never a card or a variant. Say so per symbol.
   vertical: {
-    card: "Dorso o moneda coleccionable (50/50)",
+    card: "Dorso o moneda coleccionable (50/50); en columna no da carta",
     coins: "50, 75 o 100 monedas",
     card_back: "Dorso de carta al azar",
-    overlay: "Dorso o moneda coleccionable (50/50)",
+    overlay: "Dorso o moneda coleccionable (50/50); en columna no da variante",
     playmat: "Tapete al azar",
   },
 };

@@ -1,7 +1,7 @@
 import { Router, type Request, type Response, type NextFunction } from "express";
 import { z } from "zod";
 import { CARD_SETS } from "@gonzaloaguila/game-core";
-import { requireAuth } from "../../middleware/auth.js";
+import { requireAuth, requireVerifiedEmail } from "../../middleware/auth.js";
 import { Errors } from "../../middleware/error-handler.js";
 import { STANDARD_BOOSTER_IDS } from "../boosters/boosters.service.js";
 import { ECONOMY } from "./config.js";
@@ -81,12 +81,15 @@ function publicConfig() {
 router.get("/economy/config", wrap(() => publicConfig()));
 router.get("/economy/odds", wrap(() => getOdds()));
 
-// Status and daily
+// Status and daily. Check-in stays open to unverified accounts (it is called on every app load)
+// but grants them nothing and doesn't use up the day (economyService.checkIn); every route that
+// grants or spends goes through requireVerifiedEmail (403 EMAIL_NOT_VERIFIED).
 router.get("/economy/status", requireAuth, wrap((req) => economyService.getEconomyStatus(req.user!.userId)));
 router.post("/economy/check-in", requireAuth, wrap((req) => economyService.checkIn(req.user!.userId)));
 router.post(
   "/economy/daily-pack",
   requireAuth,
+  requireVerifiedEmail,
   wrap((req) => economyService.claimDailyPack(req.user!.userId, parseBody(dailyPackSchema, req.body).packId)),
 );
 
@@ -95,6 +98,7 @@ router.get("/economy/packs", requireAuth, wrap(async (req) => ({ packs: await li
 router.post(
   "/economy/packs/:userPackId/open",
   requireAuth,
+  requireVerifiedEmail,
   wrap((req) => {
     const id = uuidSchema.safeParse(req.params.userPackId);
     if (!id.success) throw Errors.NotFound("Sobre");
@@ -106,6 +110,7 @@ router.post(
 router.post(
   "/economy/exchange",
   requireAuth,
+  requireVerifiedEmail,
   wrap((req) => economyService.redeemExchangeToken(req.user!.userId, parseBody(exchangeSchema, req.body).cardDefId)),
 );
 
@@ -114,6 +119,7 @@ router.get("/economy/milestones", requireAuth, wrap((req) => economyService.getS
 router.post(
   "/economy/milestones/claim",
   requireAuth,
+  requireVerifiedEmail,
   wrap((req) => {
     const { setId, percent } = parseBody(milestoneSchema, req.body);
     return economyService.claimSetMilestone(req.user!.userId, setId, percent);

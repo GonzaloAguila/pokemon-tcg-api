@@ -5,7 +5,7 @@
  */
 
 import type { Prisma } from "@prisma/client";
-import { findCardById, isLimitedInDeck } from "@gonzaloaguila/game-core";
+import { findCardById, getDeckById as getThemeDeckById, isLimitedInDeck, isPlayableAsBasic } from "@gonzaloaguila/game-core";
 import { prisma } from "../../lib/prisma.js";
 import { Errors } from "../../middleware/error-handler.js";
 import * as usersService from "../users/users.service.js";
@@ -23,6 +23,7 @@ export interface DeckCardEntry {
 const DECK_SLOT_PRICE = 500;
 const MIN_DECK_SIZE = 60;
 const MAX_COPIES_PER_CARD = 4;
+export const NO_BASIC_ERROR = "El mazo necesita al menos un Pokémon básico";
 
 /**
  * Basic Energy is the only unlimited card (game-core isLimitedInDeck): special Energy (Double
@@ -68,6 +69,15 @@ export function validateDeckCards(cards: DeckCardEntry[]): {
     }
   }
 
+  // A deck needs a card to start with: at least one card playable as a Basic Pokémon
+  // (game-core isPlayableAsBasic: Basic Pokémon, Mysterious Fossil, Clefairy Doll). Without one
+  // the opening mulligans forever.
+  const hasBasic = cards.some((entry) => {
+    const card = findCardById(entry.cardDefId);
+    return entry.quantity > 0 && !!card && isPlayableAsBasic(card);
+  });
+  if (!hasBasic) errors.push(NO_BASIC_ERROR);
+
   return { valid: errors.length === 0, errors };
 }
 
@@ -111,7 +121,9 @@ export async function validateDeckForUser(userId: string, cards: DeckCardEntry[]
  * current collection. Returns an error message, or null when playable.
  */
 export async function checkDeckPlayable(userId: string, deckId: string | undefined | null): Promise<string | null> {
-  if (!deckId || !UUID_RE.test(deckId)) return null;
+  // A seat in a room always needs a deck (a room without one started with default theme decks)
+  if (!deckId) return "Debes elegir un mazo";
+  if (!UUID_RE.test(deckId)) return getThemeDeckById(deckId) ? null : "Mazo no encontrado";
   const deck = await prisma.deck.findFirst({ where: { id: deckId, userId }, select: { cards: true } });
   if (!deck) return "Mazo no encontrado";
   const validation = await validateDeckForUser(userId, (deck.cards ?? []) as unknown as DeckCardEntry[]);
@@ -138,12 +150,23 @@ const deckSelect = {
 // CRUD
 // ---------------------------------------------------------------------------
 
+/**
+ * isValid as stored (rules + ownership when saved) AND the current rules: decks saved before a
+ * rule existed (e.g. no Basic Pokémon) show as invalid without a migration.
+ */
+function withCurrentRules<T extends { isValid: boolean; cards: Prisma.JsonValue }>(deck: T): T {
+  if (!deck.isValid) return deck;
+  const rules = validateDeckCards((deck.cards ?? []) as unknown as DeckCardEntry[]);
+  return rules.valid ? deck : { ...deck, isValid: false };
+}
+
 export async function getUserDecks(userId: string) {
-  return prisma.deck.findMany({
+  const decks = await prisma.deck.findMany({
     where: { userId },
     select: deckSelect,
     orderBy: { createdAt: "asc" },
   });
+  return decks.map(withCurrentRules);
 }
 
 export async function getDeckById(userId: string, deckId: string) {
@@ -153,7 +176,7 @@ export async function getDeckById(userId: string, deckId: string) {
   });
 
   if (!deck) throw Errors.NotFound("Mazo");
-  return deck;
+  return withCurrentRules(deck);
 }
 
 export async function createDeck(

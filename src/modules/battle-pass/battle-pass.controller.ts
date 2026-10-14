@@ -11,7 +11,7 @@ import {
   type NextFunction,
 } from "express";
 import { z } from "zod";
-import { requireAuth, optionalAuth } from "../../middleware/auth.js";
+import { requireAuth, requireVerifiedEmail, optionalAuth } from "../../middleware/auth.js";
 import { Errors } from "../../middleware/error-handler.js";
 import * as battlePassService from "./battle-pass.service.js";
 
@@ -92,6 +92,7 @@ router.get(
 router.post(
   "/battle-pass/:id/upgrade",
   requireAuth,
+  requireVerifiedEmail,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const result = await battlePassService.upgradeToPremium(
@@ -112,6 +113,7 @@ router.post(
 router.post(
   "/battle-pass/:id/claim/:day",
   requireAuth,
+  requireVerifiedEmail,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       // `day` is the step number (1..30)

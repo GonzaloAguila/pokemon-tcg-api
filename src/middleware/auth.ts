@@ -4,6 +4,7 @@ import { verifyAccessToken, type TokenPayload } from "../lib/jwt.js";
 import { Errors } from "./error-handler.js";
 import { prisma } from "../lib/prisma.js";
 import { accountBlockReason, getAccountState, invalidateAccountState } from "../lib/account-state.js";
+import { hasVerifiedEmail } from "../lib/email-verification.js";
 
 // Augment Express Request
 declare global {
@@ -57,6 +58,23 @@ export function requireAuth(
     },
     next,
   );
+}
+
+/**
+ * Require a verified email for economy actions (purchases, claims, rewards, spins, market,
+ * battle pass, achievement claims, economy v2: daily pack, opening inventory packs, Fichas de
+ * canje, set milestones). Must be used after requireAuth. OAuth accounts count as verified (the
+ * provider verified the email; lib/email-verification.ts). Login, profile reads, deck building,
+ * playing and the daily check-in don't use it (check-in and match settlement grant nothing to an
+ * unverified account instead). Rejects with 403 { code: "EMAIL_NOT_VERIFIED" }.
+ */
+export function requireVerifiedEmail(req: Request, _res: Response, next: NextFunction): void {
+  if (!req.user) return next(Errors.Unauthorized("Token de acceso requerido"));
+  hasVerifiedEmail(req.user.userId).then((verified) => {
+    if (verified === null) return next(Errors.Unauthorized("Usuario no encontrado"));
+    if (!verified) return next(Errors.EmailNotVerified());
+    next();
+  }, next);
 }
 
 /**

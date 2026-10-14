@@ -7,6 +7,7 @@
 
 import { ALL_CARDS, CARD_SETS, findCardById, getSetById, isBasicEnergy } from "@gonzaloaguila/game-core";
 import { prisma } from "../../lib/prisma.js";
+import { isEconomyVerified } from "../../lib/email-verification.js";
 import { Errors } from "../../middleware/error-handler.js";
 import { creditBalance, debitBalance, type Db } from "../users/users.service.js";
 import { lockUsers } from "../users/xp.service.js";
@@ -65,6 +66,11 @@ export async function grantWelcomePackage(tx: Db, userId: string): Promise<boole
 
 export interface CheckInResult {
   alreadyCheckedIn: boolean;
+  /**
+   * False for a local account without a verified email: nothing was recorded or granted and the
+   * day is still open, so the first check-in after verifying the email grants it.
+   */
+  emailVerified: boolean;
   economyDay: string;
   loginDays: number;
   granted: {
@@ -77,7 +83,8 @@ export interface CheckInResult {
 /**
  * Record today's login day (once per economy day): +1 login day, "first steps" pack(s) on the
  * first days of new accounts, the login-calendar reward every N login days and one battle-pass
- * step. Idempotent: later calls the same day grant nothing.
+ * step. Idempotent: later calls the same day grant nothing. An account without a verified email
+ * gets nothing (no login day, packs, coupons or battle-pass step) and keeps the day unclaimed.
  */
 export async function checkIn(userId: string, now = new Date()): Promise<CheckInResult> {
   return prisma.$transaction(async (tx) => {
@@ -85,9 +92,16 @@ export async function checkIn(userId: string, now = new Date()): Promise<CheckIn
     const day = economyDay(now);
     const none = { firstStepsPacks: 0, calendar: null, battlePassStep: null };
 
+    const account = await tx.user.findUniqueOrThrow({
+      where: { id: userId },
+      select: { loginDays: true, emailVerified: true, provider: true },
+    });
+    if (!isEconomyVerified(account)) {
+      return { alreadyCheckedIn: false, emailVerified: false, economyDay: day, loginDays: account.loginDays, granted: none };
+    }
+
     if (!(await claimOnce(tx, userId, "check_in", day))) {
-      const { loginDays } = await tx.user.findUniqueOrThrow({ where: { id: userId }, select: { loginDays: true } });
-      return { alreadyCheckedIn: true, economyDay: day, loginDays, granted: none };
+      return { alreadyCheckedIn: true, emailVerified: true, economyDay: day, loginDays: account.loginDays, granted: none };
     }
 
     const { loginDays } = await tx.user.update({
@@ -114,7 +128,7 @@ export async function checkIn(userId: string, now = new Date()): Promise<CheckIn
     }
 
     const battlePassStep = await advanceStepForLogin(tx, userId, now);
-    return { alreadyCheckedIn: false, economyDay: day, loginDays, granted: { firstStepsPacks, calendar, battlePassStep } };
+    return { alreadyCheckedIn: false, emailVerified: true, economyDay: day, loginDays, granted: { firstStepsPacks, calendar, battlePassStep } };
   }, TX_OPTIONS);
 }
 
@@ -153,9 +167,10 @@ export async function getEconomyStatus(userId: string, now = new Date()) {
   const week = economyWeek(now);
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { loginDays: true, exchangeTokens: true },
+    select: { loginDays: true, exchangeTokens: true, emailVerified: true, provider: true },
   });
   if (!user) throw Errors.NotFound("Usuario");
+  const emailVerified = isEconomyVerified(user);
 
   const [checkedInToday, dailyPackClaimed, hasWelcome, candyClaims, missions, matchCoins, unopenedPacks] = await Promise.all([
     hasClaim(prisma, userId, "check_in", day),
@@ -175,6 +190,8 @@ export async function getEconomyStatus(userId: string, now = new Date()) {
     resetsAt: nextEconomyDayStart(now).toISOString(),
     economyWeek: week,
     weekResetsAt: nextEconomyWeekStart(now).toISOString(),
+    // false: every economy action answers 403 EMAIL_NOT_VERIFIED (show "Verificá tu email")
+    emailVerified,
     checkIn: {
       checkedInToday,
       loginDays: user.loginDays,

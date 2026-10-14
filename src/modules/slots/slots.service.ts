@@ -133,6 +133,8 @@ function resolvePatternPrize(pattern: SlotPattern, matchedSymbol: SlotSymbol): R
       if (matchedSymbol === "playmat") return resolvePlaymat();
       return resolveCard(pick([CardRarityPool.Common, CardRarityPool.Common, CardRarityPool.Uncommon]));
     case "vertical":
+      // The basic line (by design since the first slot machine): a column of cards or of variants
+      // pays a card back or a collectible coin, not a card / variant (economy/odds.ts says so)
       if (matchedSymbol === "coins") return resolveCoins(pick([50, 75, 100]));
       if (matchedSymbol === "card_back") return resolveCardBack();
       if (matchedSymbol === "playmat") return resolvePlaymat();

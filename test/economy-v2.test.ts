@@ -516,6 +516,9 @@ describe("daily market", () => {
     const bought = await marketService.buyDailyCard(user.id, "mystery");
     expect(bought.revealed).toBe(true);
     expect(ALL_CARDS.some((c) => c.id === bought.cardDefId)).toBe(true);
+    // The transaction history names the card that came out
+    const purchase = await prisma.transaction.findFirst({ where: { userId: user.id, type: "card_purchase" } });
+    expect(purchase?.description).toBe(`Compra de carta: Carta misteriosa (${bought.name})`);
     expect((await marketService.getDailyOffers(user.id)).purchasedToday).toContain("card:mystery");
     await expect(marketService.buyDailyCard(user.id, "mystery")).rejects.toThrow();
   });
@@ -609,6 +612,58 @@ describe("HTTP", () => {
       expect(status.body.missions.daily.find((m: { id: string }) => m.id === "open_daily_pack")).toMatchObject({ completed: true });
 
       expect((await app.request("POST", "/api/users/me/claim-daily-coins", { token })).status).toBe(410);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+describe("accounts without a verified email (requireVerifiedEmail)", () => {
+  it("check-in grants nothing and keeps the day open until the email is verified", async () => {
+    const user = await newAccount();
+    await prisma.user.update({ where: { id: user.id }, data: { emailVerified: false } });
+    const now = at("2026-10-14T15:00:00Z");
+
+    const blocked = await economy.checkIn(user.id, now);
+    expect(blocked).toMatchObject({ alreadyCheckedIn: false, emailVerified: false, loginDays: 0, granted: { firstStepsPacks: 0, calendar: null, battlePassStep: null } });
+    expect(await prisma.economyClaim.count({ where: { userId: user.id, kind: "check_in" } })).toBe(0);
+    expect(await prisma.userPack.count({ where: { userId: user.id, source: "first_steps" } })).toBe(0);
+
+    // Verified later the same day: that day's check-in still pays
+    await prisma.user.update({ where: { id: user.id }, data: { emailVerified: true } });
+    const paid = await economy.checkIn(user.id, now);
+    expect(paid).toMatchObject({ alreadyCheckedIn: false, emailVerified: true, loginDays: 1, granted: { firstStepsPacks: 1 } });
+  });
+
+  it("OAuth accounts count as verified", async () => {
+    const user = await createUser({}, { emailVerified: false, provider: "google" });
+    expect(await economy.checkIn(user.id, at("2026-10-14T15:00:00Z"))).toMatchObject({ emailVerified: true, loginDays: 1 });
+  });
+
+  it("every economy v2 route that grants or spends answers 403 EMAIL_NOT_VERIFIED", async () => {
+    const user = await newAccount();
+    await prisma.user.update({ where: { id: user.id }, data: { emailVerified: false, exchangeTokens: 5 } });
+    const [pack] = await unopened(user.id);
+    const token = tokenFor(user);
+    const app = await startHttpApp((a) => a.use("/api", economyRouter));
+    try {
+      const blocked = [
+        await app.request("POST", "/api/economy/daily-pack", { token, body: { packId: "base-set-booster" } }),
+        await app.request("POST", `/api/economy/packs/${pack.id}/open`, { token, body: {} }),
+        await app.request("POST", "/api/economy/exchange", { token, body: { cardDefId: "base-set-071-computer-search" } }),
+        await app.request("POST", "/api/economy/milestones/claim", { token, body: { setId: "jungle", percent: 50 } }),
+      ];
+      for (const res of blocked) {
+        expect(res.status).toBe(403);
+        expect(res.body).toMatchObject({ code: "EMAIL_NOT_VERIFIED", error: { code: "EMAIL_NOT_VERIFIED" } });
+      }
+      const checkIn = await app.request("POST", "/api/economy/check-in", { token });
+      expect(checkIn.status).toBe(200);
+      expect(checkIn.body).toMatchObject({ emailVerified: false, granted: { firstStepsPacks: 0 } });
+      const status = await app.request("GET", "/api/economy/status", { token });
+      expect(status.body).toMatchObject({ emailVerified: false, checkIn: { checkedInToday: false } });
+      expect(await prisma.userPack.count({ where: { userId: user.id, openedAt: { not: null } } })).toBe(0);
+      expect((await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).exchangeTokens).toBe(5);
     } finally {
       await app.close();
     }

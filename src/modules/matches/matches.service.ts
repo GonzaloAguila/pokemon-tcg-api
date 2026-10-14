@@ -1,4 +1,5 @@
 import { prisma } from "../../lib/prisma.js";
+import { hasVerifiedEmail } from "../../lib/email-verification.js";
 import { AppError, Errors } from "../../middleware/error-handler.js";
 import { creditBalance, debitBalance, recordMatchResult, type Db } from "../users/users.service.js";
 import {
@@ -184,6 +185,11 @@ export interface PlayerSettlement {
   experience: number;
   coins: number;
   missionsCompleted: MissionCompletion[];
+  /**
+   * False for a local account without a verified email: a counted game still gives it stats and
+   * XP, but no match coins and no mission progress (rewardCoins 0, missionsCompleted []).
+   */
+  emailVerified: boolean;
 }
 
 export interface SettlementResult {
@@ -218,6 +224,12 @@ export async function settleMatch(matchId: string, input: SettleInput, now = new
     else winnerId = input.winnerId && players.includes(input.winnerId) ? input.winnerId : null;
     const decided = input.kind === "ai" || winnerId !== null;
 
+    // Lock the players' rows (id order) BEFORE anything else: the claim below writes winnerId, a
+    // foreign key to users (a key-share lock on the winner's row), so locking afterwards takes
+    // the users out of order and deadlocks with any other ordered locker of the same pair (the
+    // drafted-cards credit at the end of a draft tournament, another settlement)
+    await lockUsers(tx, players);
+
     // Claim the settlement: a concurrent call blocks on this row, then matches nothing
     const { count } = await tx.match.updateMany({
       where: { id: matchId, settledAt: null },
@@ -230,8 +242,6 @@ export async function settleMatch(matchId: string, input: SettleInput, now = new
       },
     });
     if (count === 0) return null;
-
-    await lockUsers(tx, players);
 
     const counted = decided && (await isCounted(tx, match, mode, input, winnerId, now));
 
@@ -256,15 +266,17 @@ export async function settleMatch(matchId: string, input: SettleInput, now = new
       for (const p of players) await recordMatchResult(p, mode, p === winnerId, tx);
     }
 
-    // XP, match coins and missions (counted only)
+    // XP, match coins and missions (counted only; coins and missions need a verified email)
     const grants = new Map<string, ExperienceGrant>();
     const coinGrants = new Map<string, MatchCoinGrant>();
     const missions = new Map<string, MissionCompletion[]>();
+    const verified = new Map<string, boolean>();
+    for (const p of players) verified.set(p, (await hasVerifiedEmail(p, tx)) ?? false);
     for (const p of players) {
       const outcome = p === winnerId ? "win" : "loss";
       const grant = await grantExperience(tx, p, counted ? XP_REWARDS[mode][outcome] : 0, now);
       if (grant) grants.set(p, grant);
-      if (!counted) continue;
+      if (!counted || !verified.get(p)) continue;
       coinGrants.set(p, await grantMatchCoins(tx, p, isAi ? "ai" : "online", outcome, matchId, now));
       const completed = await recordMissionEvent(tx, p, "game_played", now);
       if (outcome === "win") completed.push(...(await recordMissionEvent(tx, p, "game_won", now)));
@@ -305,6 +317,7 @@ export async function settleMatch(matchId: string, input: SettleInput, now = new
           experience: grant?.experience ?? 0,
           coins: balances.find((b) => b.id === p)?.coins ?? 0,
           missionsCompleted: missions.get(p) ?? [],
+          emailVerified: verified.get(p) ?? false,
         };
       }),
     };
@@ -400,5 +413,6 @@ export async function finishAiMatch(userId: string, matchId: string, victory: bo
     rewardCoinsCapped: me.rewardCoinsCapped,
     coins: me.coins,
     missionsCompleted: me.missionsCompleted,
+    emailVerified: me.emailVerified,
   };
 }

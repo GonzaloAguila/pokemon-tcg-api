@@ -144,7 +144,7 @@ describe("table bets over the socket (re-enabled with the flag)", () => {
   });
 
   it("an inexperienced or unverified creator can't open a bet table", async () => {
-    const fresh = await createUser({ coins: 1000 });
+    const fresh = await createUser({ coins: 1000 }, { emailVerified: false });
     const sf = await server.connect(tokenFor(fresh));
     sf.emit("createRoom", { deckId: "brushfire", prizeCount: 6, betAmount: 10, friendly: false });
     expect((await nextEvent<{ message: string }>(sf, "error")).message).toMatch(/verificar tu email/);

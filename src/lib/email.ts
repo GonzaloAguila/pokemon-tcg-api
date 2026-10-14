@@ -1,4 +1,5 @@
 import { Resend } from "resend";
+import { AppError } from "../middleware/error-handler.js";
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const FROM_EMAIL = process.env.FROM_EMAIL || "noreply@nostalgic-tcg.online";
@@ -14,6 +15,28 @@ function getResend(): Resend | null {
     resend = new Resend(RESEND_API_KEY);
   }
   return resend;
+}
+
+/** Resend answered with an error (it reports failures in the result instead of throwing). */
+export class EmailDeliveryError extends AppError {
+  constructor(kind: string, detail: unknown) {
+    super("No se pudo enviar el correo. Intenta de nuevo en unos minutos.", 502, "EMAIL_DELIVERY_FAILED");
+    this.name = "EmailDeliveryError";
+    console.error(`[email] ${kind} email failed:`, detail);
+  }
+}
+
+type SendPayload = Parameters<Resend["emails"]["send"]>[0];
+
+/** Send through Resend and throw EmailDeliveryError when the result carries an error. */
+async function deliver(client: Resend, kind: string, payload: SendPayload): Promise<void> {
+  let result: Awaited<ReturnType<Resend["emails"]["send"]>>;
+  try {
+    result = await client.emails.send(payload);
+  } catch (err) {
+    throw new EmailDeliveryError(kind, err);
+  }
+  if (result.error) throw new EmailDeliveryError(kind, result.error);
 }
 
 export async function sendPasswordResetEmail(
@@ -34,7 +57,7 @@ export async function sendPasswordResetEmail(
 
   const resetUrl = `${FRONTEND_URL}/reset-password?token=${resetToken}`;
 
-  await client.emails.send({
+  await deliver(client, "password reset", {
     from: FROM_EMAIL,
     to,
     subject: "Restablece tu contraseña - Nostalgic TCG",
@@ -92,7 +115,7 @@ export async function sendBugReportEmail(
 
   const descriptionHtml = description.replace(/\n/g, "<br />");
 
-  await client.emails.send({
+  await deliver(client, "bug report", {
     from: FROM_EMAIL,
     to: adminEmail,
     subject: `[Bug Report] ${title}`,
@@ -142,7 +165,7 @@ export async function sendVerificationEmail(
 
   const verifyUrl = `${FRONTEND_URL}/verify-email?token=${verificationToken}`;
 
-  await client.emails.send({
+  await deliver(client, "verification", {
     from: FROM_EMAIL,
     to,
     subject: "Verifica tu correo electrónico - Nostalgic TCG",

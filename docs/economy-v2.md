@@ -1,6 +1,7 @@
 # Economy v2 — frontend contract
 
-Branch `feat/economy-v2` (API), built on `fix/alpha-xp-bets-accents`. Source of the design: the
+Branch `feat/economy-v2` (API), built on `fix/alpha-xp-bets-accents`, with the production hotfix
+(`fix/critical-bugs`, 2026-10-14) merged in (section 10). Source of the design: the
 economy analysis of 2026-10-14 (section 4). **Not built on purpose:** dust/crafting for duplicates
 ("Polvo") and the "new rare" pity guarantee. Out of scope: 1st Edition / Shadowless variants, draft
 prizes, tournaments, trading, level rewards, DB-backed pack config, crypto RNG for packs.
@@ -12,8 +13,11 @@ odds endpoints).
 Conventions (unchanged):
 
 - Base URL `/api`. Auth = `Authorization: Bearer <accessToken>` (the existing `apiClient`).
-- Errors: `{ "error": { "message": "<Spanish, show it as a toast>", "code": "BAD_REQUEST" | "CONFLICT" | "NOT_FOUND" | "VALIDATION_ERROR" | "UNAUTHORIZED" | "GONE" | ... } }`
-  with HTTP 400 / 409 / 404 / 422 / 401 / 410.
+- Errors: `{ "error": { "message": "<Spanish, show it as a toast>", "code": "BAD_REQUEST" | "CONFLICT" | "NOT_FOUND" | "VALIDATION_ERROR" | "UNAUTHORIZED" | "GONE" | "EMAIL_NOT_VERIFIED" | ... } }`
+  with HTTP 400 / 409 / 404 / 422 / 401 / 410 / 403.
+- **403 `EMAIL_NOT_VERIFIED`** (`{ "error": { "code": "EMAIL_NOT_VERIFIED", "message": "Verificá tu email para continuar" }, "code": "EMAIL_NOT_VERIFIED", "message": "..." }`):
+  every economy action of a local account whose email isn't verified (section 11). Show a
+  "Verificá tu email" state, not a generic error toast.
 - Every reward is decided and granted by the server. The client never sends amounts, prizes,
   results or rewards (extra fields are ignored).
 
@@ -57,13 +61,17 @@ Conventions (unchanged):
     `POST /api/matches/ai/:matchId/finish { result, turnNumber }` when it ends; toast the rewards.
 11. **Lobby**: table bets are **off**. Hide the bet selector (the server forces 0). Keep the code
     behind `config.tableBets.enabled` / `status.tableBetsEnabled`.
-12. Remove every call to `POST /api/users/me/claim-daily-coins` (now 410) and the dead
+12. **Unverified email** (section 11): `status.emailVerified === false` → show "Verificá tu email"
+    on the daily pack, missions, battle pass, unopened packs, Fichas de canje and milestones
+    instead of their actions; treat a 403 `EMAIL_NOT_VERIFIED` from any economy call the same way.
+    The check-in answers 200 `emailVerified: false` with nothing granted (no toast).
+13. Remove every call to `POST /api/users/me/claim-daily-coins` (now 410) and the dead
     `ECONOMY_REWARDS` constant (Victoria 100 / Login 50).
-13. Market: Trainers and special Energy can now appear in the daily cards; the mystery card is
+14. Market: Trainers and special Energy can now appear in the daily cards; the mystery card is
     bought by its listed id `"mystery"` (no change if you send `offer.cardDefId`).
-14. Rare Candy → coins: max 2 per week; show `status.rareCandy` and the error toast.
-15. Profile: new fields `exchangeTokens`, `loginDays`.
-16. New cosmetics ids to add to the frontend catalogs: card backs `set-base-set`, `set-jungle`,
+15. Rare Candy → coins: max 2 per week; show `status.rareCandy` and the error toast.
+16. Profile: new fields `exchangeTokens`, `loginDays`.
+17. New cosmetics ids to add to the frontend catalogs: card backs `set-base-set`, `set-jungle`,
     `set-fossil`, `set-team-rocket` (75% milestone) and medals/titles `title-maestro-base-set`,
     `title-maestro-jungle`, `title-maestro-fossil`, `title-maestro-team-rocket`,
     `title-maestro-coleccionista` (they arrive in `profile.medals[].medalId`). The 100% holo
@@ -138,6 +146,7 @@ Returns the config as JSON (no functions). Shape (abridged):
   "resetsAt": "2026-10-15T03:00:00.000Z",
   "economyWeek": "2026-10-12",
   "weekResetsAt": "2026-10-19T03:00:00.000Z",
+  "emailVerified": true,
   "checkIn": {
     "checkedInToday": true,
     "loginDays": 3,
@@ -163,6 +172,8 @@ Returns the config as JSON (no functions). Shape (abridged):
 }
 ```
 
+`emailVerified`: false for a local account whose email isn't verified (section 11); every economy
+action then answers 403 `EMAIL_NOT_VERIFIED`.
 `firstSteps.daysLeft` = login days still granting a pack (0 for accounts from before v2).
 `calendar.nextRewardInDays` = login days until the next calendar reward (7 right after one).
 
@@ -173,6 +184,7 @@ Records today's login day. Call it on app load. First call of the economy day:
 ```json
 {
   "alreadyCheckedIn": false,
+  "emailVerified": true,
   "economyDay": "2026-10-14",
   "loginDays": 7,
   "granted": {
@@ -187,6 +199,10 @@ Later calls the same day: `alreadyCheckedIn: true` and `granted` all zero/null. 
 except every 7th login day; `battlePassStep` is the new step count or null (already stepped today /
 month's steps exhausted). Granted packs go to the pack inventory (section "packs").
 
+Unverified account: `{ "alreadyCheckedIn": false, "emailVerified": false, "loginDays": <unchanged>, "granted": { all zero/null } }`.
+Nothing is recorded (no login day, no first-steps/calendar pack, no coupons, no battle-pass step) and
+the day stays open: the first check-in after verifying the email (same day) grants it normally.
+
 ### POST /api/economy/daily-pack (auth)
 
 Body `{ "packId": "base-set-booster" | "jungle-booster" | "fossil-booster" | "team-rocket-booster" }`.
@@ -200,7 +216,7 @@ Opens today's free pack (cards added to the collection) and also checks the user
 }
 ```
 
-Errors: 422 missing/invalid body · 400 `Sobre inválido` (not a standard booster) · 409 `Ya abriste tu sobre diario de hoy`.
+Errors: 403 `EMAIL_NOT_VERIFIED` · 422 missing/invalid body · 400 `Sobre inválido` (not a standard booster) · 409 `Ya abriste tu sobre diario de hoy`.
 
 ### GET /api/economy/packs (auth)
 
@@ -220,7 +236,7 @@ visitas) · `weekly_mission` (Misión semanal) · `battle_pass` (Pase de batalla
 
 Body `{ "packId"?: "<booster id>" }` — required when the pack has `chooseSet: true`, must match (or
 be omitted) for a fixed pack. Response `{ "pack": PackOpeningResult, "unopenedPacks": 3 }`.
-Errors: 404 `Sobre not found` (bad id / not yours) · 400 `Elige el set del sobre` · 400 `Sobre inválido`
+Errors: 403 `EMAIL_NOT_VERIFIED` · 404 `Sobre not found` (bad id / not yours) · 400 `Elige el set del sobre` · 400 `Sobre inválido`
 · 400 `Este sobre es de otro set` · 409 `Este sobre ya fue abierto`.
 
 ### POST /api/economy/exchange (auth)
@@ -232,7 +248,7 @@ uncommon / rare, 2 for rare-holo; Trainers and special Energy included) and adds
 { "cardDefId": "base-set-071-computer-search", "cardName": "Computer Search", "cost": 1, "exchangeTokens": 0, "quantity": 2 }
 ```
 
-Errors: 404 `Carta not found` · 400 `Esta carta no se puede canjear` (basic Energy) · 400 `No tienes
+Errors: 403 `EMAIL_NOT_VERIFIED` · 404 `Carta not found` · 400 `Esta carta no se puede canjear` (basic Energy) · 400 `No tienes
 suficientes Fichas de canje`. Rare Candy can't be turned into fichas.
 
 ### GET /api/economy/milestones (auth)
@@ -258,7 +274,7 @@ quantity > 0.
 
 Body `{ "setId": "jungle" | ... | "all", "percent": 50 | 75 | 100 }` (`"all"` only with 100).
 Response `{ "setId", "percent", "coins", "cardBackId", "titleMedalId", "skinId" }`.
-Errors: 422 bad body · 404 `Hito not found` · 400 `Todavía no tienes el 75% de Jungle` · 409 `Ya reclamaste este hito`.
+Errors: 403 `EMAIL_NOT_VERIFIED` · 422 bad body · 404 `Hito not found` · 400 `Todavía no tienes el 75% de Jungle` · 409 `Ya reclamaste este hito`.
 
 ### GET /api/economy/odds (public)
 
@@ -285,6 +301,10 @@ Computed from the real generators (same slot definitions and pools).
 }
 ```
 
+Slots `vertical` (a column) is the basic line: coins, card backs and playmats pay their own prize,
+but a column of `card` or `overlay` symbols pays a card back or a collectible coin (50/50), never a
+card or a variant; its `bySymbol[].prize` texts say so ("…; en columna no da carta" / "…no da variante").
+
 All probabilities are 0–1 (multiply by 100 for %). `chancePerCard` / `cardChances` = chance of at least
 one copy of that card in one pack. Wheel `segments[].id` are the existing segment ids.
 
@@ -302,7 +322,7 @@ one copy of that card in one pack. Wheel `segments[].id` are the existing segmen
 ### GET /api/users/me (and the login/register profile)
 
 New fields: `exchangeTokens: number` (Fichas de canje), `loginDays: number`. New medals in
-`medals[]` from milestones (ids in section 2.16).
+`medals[]` from milestones (ids in section 2.17).
 
 ### POST /api/users/me/claim-daily-coins — retired
 
@@ -375,12 +395,14 @@ Same routes. `:day` in `POST /api/battle-pass/:id/claim/:day` is now the **step*
   "matchId": "uuid", "counted": true,
   "xpGained": 50, "xpCapped": false, "levelsGained": 0, "level": 1, "experience": 50,
   "rewardCoins": 10, "rewardCoinsCapped": false, "coins": 1060,
-  "missionsCompleted": [{ "missionId": "win_game", "title": "Gana 1 partida", "kind": "daily", "rewardCoins": 50, "rewardPacks": 0, "rewardExchangeTokens": 0 }]
+  "missionsCompleted": [{ "missionId": "win_game", "title": "Gana 1 partida", "kind": "daily", "rewardCoins": 50, "rewardPacks": 0, "rewardExchangeTokens": 0 }],
+  "emailVerified": true
 }
 ```
 
 `counted: false` (no XP/coins/missions) when the game lasted < 3 min, ended before turn 3 or the
-user already had 10 counted AI games today. Errors: 404 (not yours / unknown), 409 already reported,
+user already had 10 counted AI games today. `emailVerified: false` (section 11): XP only, `rewardCoins: 0`,
+no missions. Errors: 404 (not yours / unknown), 409 already reported,
 422 bad body.
 
 ---
@@ -406,6 +428,7 @@ reached turn 3, otherwise both stakes are refunded.)
   "coinsDelta": 0,
   "rewardCoins": 25, "rewardCoinsCapped": false,
   "missionsCompleted": [ ...MissionCompletion ],
+  "emailVerified": true,
   "coins": 1125,
   "xpGained": 100, "xpCapped": false, "levelsGained": 0, "level": 2, "experience": 300
 }
@@ -417,6 +440,8 @@ reached turn 3, otherwise both stakes are refunded.)
   (se necesita llegar al turno 3 y jugar 2 minutos)".
 - A surrender during the mulligan/setup is `outcome: "win"` for the opponent but `counted: false`.
 - `coinsDelta` is only the table bet (0 while bets are off); `rewardCoins` are the match coins.
+- `emailVerified: false`: a counted game gave that player stats and XP but no match coins or
+  missions (section 11). Suggested copy: "Verificá tu email para ganar monedas y misiones".
 
 ---
 
@@ -465,3 +490,48 @@ lasted ≥ 2 minutes since the game started, and the winner has fewer than 3 cou
 opponent in the economy day. Only counted games touch `UserStats` (wins, losses, streaks → ranking,
 titles, win/game/streak achievements), XP, match coins and missions. vs AI: ≥ 3 minutes, turn ≥ 3
 (client-reported) and the first 10 counted AI games per day; AI games never touch stats.
+
+---
+
+## 10. Merged production hotfix (2026-10-14, `fix/critical-bugs`)
+
+Already live in production; what it means on this branch:
+
+- **Settlement**: every game end (game over, surrender, turn-timer kick, disconnect / setup
+  forfeit, leaving a game in progress, draft forfeit) goes through `finishRoomGame` →
+  `settleRoomResult` exactly once (`room.resultSettled`) → economy v2's `settleMatch`
+  (`matchSettled`). A finished room rejects every further action (`La partida ya terminó`), so a
+  second `gameOver` / settlement can't happen.
+- **Rooms**: `joinRoom` on a room that no longer exists → `error { code: "ROOM_NOT_FOUND", message:
+  "La partida ya no existe" }` (go back to the lobby); every game state carries `awaitingUserId`
+  (the player the game waits on; only they can be kicked once the turn timer runs out); a waiting
+  room whose creator left is removed after 15 s (`roomDeleted`); decks need a Basic Pokémon.
+- **Achievements**: the hotfix made the Base Set collection achievements count only Base Set cards.
+  Here they are retired (section 5), so that rule has nothing left to apply to: the two collection
+  achievements still active (Coleccionista Novato, Coleccionista) are "de cualquier set" by
+  definition and count owned cards (quantity > 0) of any set.
+- **Accounts**: session revocation on password reset / change (change returns a fresh
+  `accessToken`), idempotent email verification (`alreadyVerified`), Resend errors surfaced.
+- **Draft**: timers, refunds of unplayed drafts, re-entry, `isAdminViewer`, `keepInCollection`
+  credit (it locks the players' rows in the same order as the settlement, which runs at the same
+  moment when the last game ends), validated forfeit.
+
+---
+
+## 11. Accounts without a verified email
+
+Local accounts (email + password) whose email isn't verified can log in, build decks and play, but
+take no part in the economy. OAuth accounts (Google / Discord) count as verified.
+
+| What | Unverified account |
+|---|---|
+| Welcome package | Granted at signup (in the account-creation transaction), but nothing in it can be used until the email is verified: packs can't be opened, coins/coupons can't be spent in the shop |
+| `POST /economy/check-in` | 200, `emailVerified: false`, nothing granted or recorded; the day stays open |
+| Daily pack, open inventory packs, Fichas de canje, set milestones claim | 403 `EMAIL_NOT_VERIFIED` |
+| Battle pass claim / premium upgrade, market (cards, cosmetics, energy, Rare Candy conversion), pack purchase, wheel/slots (paid and free), deck slots, achievement claims | 403 `EMAIL_NOT_VERIFIED` |
+| Counted games (online and vs AI) | Stats, ranking, XP and achievement progress as usual; no match coins and no mission progress (`emailVerified: false` in `matchSettled` / AI finish) |
+| Battle-pass steps | Only come from check-ins, so none until verified |
+| Table bets (when re-enabled) | Not eligible (`Necesitas verificar tu email para apostar`) |
+
+Missions don't progress while unverified: their rewards (coins, packs, fichas) are paid
+automatically on completion, so the progress itself is what is withheld.

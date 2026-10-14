@@ -93,6 +93,7 @@ function notifySettlement(io: Server | null, roomId: string, result: SettlementR
       rewardCoins: p.rewardCoins,
       rewardCoinsCapped: p.rewardCoinsCapped,
       missionsCompleted: p.missionsCompleted,
+      emailVerified: p.emailVerified,
       coins: p.coins,
       xpGained: p.xpGained,
       xpCapped: p.xpCapped,
