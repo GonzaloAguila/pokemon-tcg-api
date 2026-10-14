@@ -5,6 +5,22 @@ import * as achievementsService from "./achievements.service.js";
 const router = Router();
 
 // ---------------------------------------------------------------------------
+// GET /achievements — Definitions (name, description, status, target, reward) + user state
+// ---------------------------------------------------------------------------
+
+router.get(
+  "/achievements",
+  requireAuth,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      res.json({ achievements: await achievementsService.listAchievements(req.user!.userId) });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
 // POST /achievements/check — Check and update achievement progress
 // ---------------------------------------------------------------------------
 

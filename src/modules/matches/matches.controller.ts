@@ -7,7 +7,11 @@ import * as matchesService from "./matches.service.js";
 const router = Router();
 
 const matchIdSchema = z.string().uuid();
-const finishAiSchema = z.object({ result: z.enum(["victory", "defeat"]) });
+// turnNumber: last turn the game reached (a game counts from turn 3, like multiplayer)
+const finishAiSchema = z.object({
+  result: z.enum(["victory", "defeat"]),
+  turnNumber: z.number().int().min(0).max(10_000),
+});
 
 // ---------------------------------------------------------------------------
 // POST /matches/ai — A single-player game vs the AI starts. Returns { matchId }.
@@ -26,9 +30,9 @@ router.post(
 );
 
 // ---------------------------------------------------------------------------
-// POST /matches/ai/:matchId/finish — { result: "victory" | "defeat" }.
-// The XP amount is decided here (never sent by the client); the game must have
-// lasted a few minutes and only the first games of the day earn XP.
+// POST /matches/ai/:matchId/finish — { result: "victory" | "defeat", turnNumber }.
+// XP, coins and missions are decided here (never sent by the client); the game must have
+// reached turn 3, lasted a few minutes, and only the first games of the day count.
 // ---------------------------------------------------------------------------
 
 router.post(
@@ -41,7 +45,7 @@ router.post(
       const body = finishAiSchema.safeParse(req.body);
       if (!body.success) throw Errors.ValidationError("Resultado inválido");
       res.json(
-        await matchesService.finishAiMatch(req.user!.userId, matchId.data, body.data.result === "victory"),
+        await matchesService.finishAiMatch(req.user!.userId, matchId.data, body.data.result === "victory", body.data.turnNumber),
       );
     } catch (err) {
       next(err);

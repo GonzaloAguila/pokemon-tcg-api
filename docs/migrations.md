@@ -15,6 +15,12 @@ Later migrations (apply with `migrate deploy` once the baseline is resolved, ste
   `ON DELETE SET NULL` (deleting an account no longer fails once it has matches). Additive, no
   data rewrite (nothing wrote to `matches` before this change).
 
+- `20261014000000_economy_v2` (2026-10-14): `users.exchangeTokens`, `users.loginDays`;
+  `matches.counted`, `player1Coins`, `player2Coins`; `user_battle_passes.steps`, `lastStepDay`;
+  new tables `economy_claims`, `user_packs`, `user_missions`. All additive with defaults. One data
+  statement: `user_battle_passes.steps` = highest day already claimed (max 30), so the battle pass
+  switches from calendar to activity without taking anything away.
+
 **Nothing has been applied to production.** Production was built with `prisma db push`. Its
 `_prisma_migrations` table holds a single row, `0001_init` (applied 2026-02-09), from an earlier
 attempt. The VPS also has an untracked `prisma/migrations/` folder from that attempt.

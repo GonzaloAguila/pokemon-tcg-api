@@ -1,11 +1,11 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { prisma } from "../src/lib/prisma.js";
 import * as usersService from "../src/modules/users/users.service.js";
-import * as rewardsService from "../src/modules/users/rewards.service.js";
 import * as marketService from "../src/modules/market/market.service.js";
 import * as achievementsService from "../src/modules/achievements/achievements.service.js";
 import * as battlePassService from "../src/modules/battle-pass/battle-pass.service.js";
 import { purchaseDeckSlot } from "../src/modules/decks/decks.service.js";
+import { economyCalendar } from "../src/modules/economy/economy-time.js";
 import { createUser, getBalances, race } from "./helpers.js";
 
 afterAll(async () => {
@@ -72,14 +72,6 @@ describe("market", () => {
 });
 
 describe("one-time rewards", () => {
-  it("grants the daily coins once under concurrency", async () => {
-    const user = await createUser({ coins: 0 });
-    const { fulfilled } = await race(6, () => rewardsService.claimDailyCoins(user.id));
-    const awarded = fulfilled.filter((r) => r.value.alreadyClaimed === false);
-    expect(awarded).toHaveLength(1);
-    expect((await getBalances(user.id)).coins).toBe(awarded[0].value.awardedCoins);
-  });
-
   it("pays an achievement reward once under concurrency", async () => {
     const user = await createUser({ coins: 0 });
     await prisma.userAchievement.create({ data: { userId: user.id, achievementId: "bronze-1", progress: 1 } });
@@ -89,16 +81,16 @@ describe("one-time rewards", () => {
   });
 
   it("charges the battle pass premium upgrade once under concurrency", async () => {
-    const now = new Date();
+    const { year, month } = economyCalendar();
     const pass = await prisma.battlePass.upsert({
-      where: { year_month: { year: now.getUTCFullYear(), month: now.getUTCMonth() + 1 } },
+      where: { year_month: { year, month } },
       update: {},
       create: {
-        slug: `test-${now.getUTCFullYear()}-${now.getUTCMonth() + 1}`,
+        slug: `test-${year}-${month}`,
         name: "Test pass",
         premiumPrice: 10,
-        year: now.getUTCFullYear(),
-        month: now.getUTCMonth() + 1,
+        year,
+        month,
       },
     });
     const user = await createUser({ rareCandy: 1000 });

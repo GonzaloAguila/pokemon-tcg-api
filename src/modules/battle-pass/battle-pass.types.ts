@@ -15,7 +15,8 @@ export interface BattlePassRewardDef {
     | "avatar"
     | "playmat"
     | "random_card"
-    | "card_skin";
+    | "card_skin"
+    | "unowned_holo";
   rewardId?: string;
   amount?: number;
   label: string;
@@ -38,6 +39,12 @@ export interface BattlePassWithProgress {
   enrollment: {
     activatedAt: string;
     isPremium: boolean;
+    /** Steps reached this month (one per login day) */
+    steps: number;
+    maxSteps: number;
+    /** Today's login already gave its step */
+    steppedToday: boolean;
+    /** Deprecated alias of steps (calendar pass) */
     currentDay: number;
     claimedRewards: Array<{ day: number; track: string }>;
   } | null;
@@ -55,6 +62,8 @@ export interface BattlePassListItem {
   isEnrolled: boolean;
   isPremium: boolean;
   currentDay: number | null;
+  steps: number;
+  maxSteps: number;
   year?: number;
   month?: number;
   daysRemaining?: number;

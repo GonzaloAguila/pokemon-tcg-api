@@ -24,7 +24,6 @@ describe("set registry consumers", () => {
     expect(STANDARD_BOOSTER_IDS).toEqual(["base-set-booster", "jungle-booster", "fossil-booster", "team-rocket-booster"]);
     expect(getAllPacks().map((p) => p.id)).toEqual([
       "base-set-booster",
-      "base-set-theme-pack",
       "jungle-booster",
       "fossil-booster",
       "team-rocket-booster",
@@ -113,9 +112,8 @@ describe("set registry consumers", () => {
     expect(draftPool.filter((c) => trIds.has(c.id))).toHaveLength(66);
   });
 
-  it("the theme pack has no energy", () => {
-    const result = openPack("base-set-theme-pack");
-    expect(result.cards).toHaveLength(5);
-    expect(result.cards.some((c) => c.slotType === "energy")).toBe(false);
+  it("every booster costs the same (the 5-card Theme Pack was retired in economy v2)", () => {
+    expect(getAllPacks().every((p) => p.price === 200)).toBe(true);
+    expect(getPackById("base-set-theme-pack")).toBeUndefined();
   });
 });

@@ -58,27 +58,6 @@ export interface PulledCard {
 }
 
 /**
- * Daily limit tracking (in-memory for now)
- */
-export interface UserDailyLimit {
-  userId: string;
-  date: string; // YYYY-MM-DD
-  packsOpened: number;
-}
-
-/**
- * Response for daily limit check
- */
-export interface DailyLimitStatus {
-  userId: string;
-  date: string;
-  packsOpened: number;
-  packsRemaining: number;
-  dailyLimit: number;
-  canOpen: boolean;
-}
-
-/**
  * List item for pack display
  */
 export interface BoosterPackListItem {
@@ -90,4 +69,31 @@ export interface BoosterPackListItem {
   cardCount: number;
   price: number;
   available: boolean;
+}
+
+/** Odds of one rarity inside a pack (see getPackOdds). */
+export interface RarityOdds {
+  /** "rare-holo" | "rare" | "uncommon" | "common" | "basic-energy" */
+  rarity: string;
+  /** Distinct cards of this rarity the pack can give */
+  cards: number;
+  /** Chance (0-1) of getting at least one copy of a given card of this rarity per pack */
+  chancePerCard: number;
+  /** Chance (0-1) of at least one card of this rarity per pack */
+  chanceAtLeastOne: number;
+  /** Expected cards of this rarity per pack */
+  expectedPerPack: number;
+}
+
+export interface PackOdds {
+  packId: string;
+  name: string;
+  setId: string;
+  price: number;
+  cardCount: number;
+  /** Chance (0-1) of at least one holo per pack */
+  holoChance: number;
+  rarities: RarityOdds[];
+  /** cardDefId -> chance (0-1) of at least one copy per pack */
+  cardChances: Record<string, number>;
 }

@@ -3,7 +3,7 @@ import { z } from "zod";
 import * as usersService from "./users.service.js";
 import * as rewardsService from "./rewards.service.js";
 import { requireAuth, checkUserStatus } from "../../middleware/auth.js";
-import { Errors } from "../../middleware/error-handler.js";
+import { AppError, Errors } from "../../middleware/error-handler.js";
 
 const router = Router();
 
@@ -143,21 +143,13 @@ router.get(
 );
 
 // ---------------------------------------------------------------------------
-// POST /me/claim-daily-coins
+// POST /me/claim-daily-coins — retired in economy v2 (the daily reward is the free daily
+// pack + missions, see /api/economy). Kept as 410 so old clients get a clear answer.
 // ---------------------------------------------------------------------------
 
-router.post(
-  "/me/claim-daily-coins",
-  requireAuth,
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const result = await rewardsService.claimDailyCoins(req.user!.userId);
-      res.json(result);
-    } catch (err) {
-      next(err);
-    }
-  },
-);
+router.post("/me/claim-daily-coins", requireAuth, (_req: Request, _res: Response, next: NextFunction) => {
+  next(new AppError("Las monedas diarias se reemplazaron por el sobre diario y las misiones", 410, "GONE"));
+});
 
 // ---------------------------------------------------------------------------
 // POST /me/claim-wheel-spin

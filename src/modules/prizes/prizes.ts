@@ -213,14 +213,7 @@ export async function grantPrize(
     case "free_pack": {
       const ids = boosterService.STANDARD_BOOSTER_IDS;
       const packId = ids[Math.min(ids.length - 1, Math.floor(random() * ids.length))];
-      const packResult = boosterService.openPack(packId);
-      for (const pulled of packResult.cards) {
-        await tx.userCard.upsert({
-          where: { userId_cardDefId: { userId, cardDefId: pulled.card.id } },
-          update: { quantity: { increment: 1 } },
-          create: { userId, cardDefId: pulled.card.id, quantity: 1 },
-        });
-      }
+      const packResult = await boosterService.openPackForUser(tx, userId, packId);
       return { packResult };
     }
 

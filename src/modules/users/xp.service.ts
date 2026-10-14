@@ -1,4 +1,6 @@
 import type { Db } from "./users.service.js";
+import { ECONOMY } from "../economy/config.js";
+import { startOfEconomyDay } from "../economy/economy-time.js";
 
 // ---------------------------------------------------------------------------
 // Experience and levels
@@ -24,14 +26,15 @@ export const XP_REWARDS = {
   ai: { win: 50, loss: 20 },
 } as const;
 
-/** Most XP a user can earn per UTC day across all modes (anti-farming). */
+/** Most XP a user can earn per economy day (00:00 Argentina) across all modes (anti-farming). */
 export const DAILY_XP_CAP = 2000;
 
 /**
- * A multiplayer game must reach this turn number for anyone to get XP (each player had a turn),
- * so instant surrenders between two accounts can't farm it. Stats and bets still settle.
+ * A game must reach this turn number to count (each player had a turn), so instant surrenders
+ * between two accounts can't farm anything. Same rule for stats, coins and missions
+ * (ECONOMY.antiFarming, see modules/matches).
  */
-export const MIN_TURN_FOR_XP = 3;
+export const MIN_TURN_FOR_XP = ECONOMY.antiFarming.minTurn;
 
 export type XpMode = keyof typeof XP_REWARDS;
 
@@ -54,8 +57,9 @@ export function applyExperience(level: number, experience: number, gained: numbe
   return { level: lvl, experience: xp, levelsGained: lvl - Math.max(1, Math.floor(level)) };
 }
 
-export function startOfTodayUtc(now = new Date()): Date {
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+/** Start of the current economy day (00:00 Argentina); the daily XP cap resets then. */
+export function startOfToday(now = new Date()): Date {
+  return startOfEconomyDay(now);
 }
 
 /**
@@ -69,9 +73,9 @@ export async function lockUsers(tx: Db, userIds: string[]) {
   }
 }
 
-/** XP already granted to `userId` by matches settled today (UTC). */
+/** XP already granted to `userId` by matches settled this economy day. */
 export async function experienceEarnedToday(tx: Db, userId: string, now = new Date()): Promise<number> {
-  const since = startOfTodayUtc(now);
+  const since = startOfToday(now);
   const [asP1, asP2] = await Promise.all([
     tx.match.aggregate({ where: { player1Id: userId, settledAt: { gte: since } }, _sum: { player1Xp: true } }),
     tx.match.aggregate({ where: { player2Id: userId, settledAt: { gte: since } }, _sum: { player2Xp: true } }),

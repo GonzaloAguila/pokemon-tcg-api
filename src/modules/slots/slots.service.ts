@@ -28,8 +28,8 @@ import {
 
 export const SLOTS_SPIN_COST = 50;
 
-type SlotSymbol = "card" | "coins" | "card_back" | "overlay" | "playmat" | "nothing";
-type SlotPattern =
+export type SlotSymbol = "card" | "coins" | "card_back" | "overlay" | "playmat" | "nothing";
+export type SlotPattern =
   | "full_grid"
   | "pokeball"
   | "cross"
@@ -40,7 +40,7 @@ type SlotPattern =
   | "vertical"
   | "none";
 
-const PATTERN_WEIGHTS: { value: SlotPattern; weight: number }[] = [
+export const PATTERN_WEIGHTS: { value: SlotPattern; weight: number }[] = [
   { value: "full_grid", weight: 0.5 },
   { value: "pokeball", weight: 1.5 },
   { value: "cross", weight: 4 },
@@ -52,7 +52,7 @@ const PATTERN_WEIGHTS: { value: SlotPattern; weight: number }[] = [
   { value: "none", weight: 55 },
 ];
 
-const SYMBOL_WEIGHTS: { value: SlotSymbol; weight: number }[] = [
+export const SYMBOL_WEIGHTS: { value: SlotSymbol; weight: number }[] = [
   { value: "card", weight: 30 },
   { value: "coins", weight: 30 },
   { value: "card_back", weight: 20 },

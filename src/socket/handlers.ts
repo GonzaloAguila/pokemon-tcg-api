@@ -17,7 +17,8 @@ import {
   draftRoomManager,
   createMatchGames,
 } from "./draft-handlers.js";
-import { InsufficientStakeError } from "../modules/matches/matches.service.js";
+import { InsufficientStakeError, betIneligibilityReason } from "../modules/matches/matches.service.js";
+import { ECONOMY } from "../modules/economy/config.js";
 import { openRoomMatch, roomMatchMode, settleRoomResult } from "./match-settlement.js";
 import { socketSchemas, parsePayload } from "./schemas.js";
 import { setIo, userRoom } from "./io-registry.js";
@@ -400,10 +401,17 @@ export function setupSocketHandlers(io: Server): void {
         if ("error" in identity) { socket.emit("error", { message: identity.error }); return; }
         const deckError = await checkDeckPlayable(userId, deckId);
         if (deckError) { socket.emit("error", { message: deckError }); return; }
-        // Friendly tables carry no bet; otherwise the bet is capped by the creator's title (lobby
-        // slider) and must be covered now (it's charged to both players when the game starts)
-        const betAmount = friendly ? 0 : (parsed.data.betAmount ?? 0);
+        // Table bets are off unless ECONOMY.tableBets.enabled (the bet is forced to 0). When on:
+        // friendly tables carry no bet; otherwise the bet is capped by the creator's title (lobby
+        // slider), the creator must be eligible and cover it now (it's charged to both players
+        // when the game starts)
+        const betAmount = friendly || !ECONOMY.tableBets.enabled ? 0 : (parsed.data.betAmount ?? 0);
         if (betAmount > 0) {
+          const notEligible = await betIneligibilityReason(userId);
+          if (notEligible) {
+            socket.emit("error", { message: notEligible });
+            return;
+          }
           const maxBet = maxBetForTitle(identity.titleId);
           if (betAmount > maxBet) {
             socket.emit("error", { message: `Tu título permite apostar hasta ${maxBet} monedas` });
@@ -488,6 +496,11 @@ export function setupSocketHandlers(io: Server): void {
         // (charged when the game starts, in the same transaction as the creator's stake)
         const target = roomManager.getRoom(roomId);
         if (target && target.config.betAmount > 0 && target.player1Id !== userId && target.player2Id !== userId) {
+          const notEligible = await betIneligibilityReason(userId);
+          if (notEligible) {
+            socket.emit("error", { message: notEligible });
+            return;
+          }
           if ((await getCoins(userId)) < target.config.betAmount) {
             socket.emit("error", { message: `No tienes suficientes monedas para la apuesta de esta mesa (${target.config.betAmount} monedas)` });
             return;

@@ -1,35 +1,26 @@
 import { prisma } from "../../lib/prisma.js";
 import { Errors } from "../../middleware/error-handler.js";
-import { creditBalance, type Db } from "./users.service.js";
+import type { Db } from "./users.service.js";
+import { startOfEconomyDay } from "../economy/economy-time.js";
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Daily free wheel / slot spin stamps (one per economy day, 00:00 Argentina).
+//
+// The old "daily coins" claim (200/day + Sunday bonus, POST /me/claim-daily-coins) was retired
+// in economy v2: the daily reward is now the free daily pack + missions + check-in
+// (modules/economy). The endpoint answers 410.
 // ---------------------------------------------------------------------------
 
-function isSameUTCDay(d1: Date, d2: Date): boolean {
-  return (
-    d1.getUTCFullYear() === d2.getUTCFullYear() &&
-    d1.getUTCMonth() === d2.getUTCMonth() &&
-    d1.getUTCDate() === d2.getUTCDate()
-  );
+type DailyClaimField = "lastWheelSpinAt" | "lastSlotSpinAt";
+
+function isAvailableToday(lastClaimAt: Date | null, now = new Date()): boolean {
+  return !lastClaimAt || lastClaimAt < startOfEconomyDay(now);
 }
 
-function isAvailableToday(lastClaimAt: Date | null): boolean {
-  if (!lastClaimAt) return true;
-  return !isSameUTCDay(lastClaimAt, new Date());
-}
-
-type DailyClaimField = "lastDailyCoinsAt" | "lastWheelSpinAt" | "lastSlotSpinAt";
-
-function startOfTodayUtc(): Date {
-  const now = new Date();
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-}
-
-/** Sets `field` to now only if it wasn't already set today (UTC). Returns whether this call won the claim. */
+/** Sets `field` to now only if it wasn't already set this economy day. Returns whether this call won the claim. */
 async function markClaimedToday(tx: Db, userId: string, field: DailyClaimField): Promise<boolean> {
   const { count } = await tx.user.updateMany({
-    where: { id: userId, OR: [{ [field]: null }, { [field]: { lt: startOfTodayUtc() } }] },
+    where: { id: userId, OR: [{ [field]: null }, { [field]: { lt: startOfEconomyDay() } }] },
     data: { [field]: new Date() },
   });
   return count === 1;
@@ -48,7 +39,6 @@ export async function getDailyRewardsStatus(userId: string) {
   const user = await prisma.user.findUnique({
     where: { id: userId },
     select: {
-      lastDailyCoinsAt: true,
       lastWheelSpinAt: true,
       lastSlotSpinAt: true,
     },
@@ -57,52 +47,11 @@ export async function getDailyRewardsStatus(userId: string) {
   if (!user) throw Errors.NotFound("Usuario");
 
   return {
-    dailyCoinsAvailable: isAvailableToday(user.lastDailyCoinsAt),
+    /** Retired (economy v2): always false. Use GET /api/economy/status. */
+    dailyCoinsAvailable: false,
     wheelSpinAvailable: isAvailableToday(user.lastWheelSpinAt),
     slotSpinAvailable: isAvailableToday(user.lastSlotSpinAt),
   };
-}
-
-// ---------------------------------------------------------------------------
-// Claim daily coins (200/day, Sundays: +500 coins & +5 coupons)
-// ---------------------------------------------------------------------------
-
-const DAILY_COINS_AMOUNT = 200;
-const SUNDAY_BONUS_COINS = 500;
-const SUNDAY_BONUS_COUPONS = 5;
-
-export async function claimDailyCoins(userId: string) {
-  const isSunday = new Date().getUTCDay() === 0;
-  const totalCoins = DAILY_COINS_AMOUNT + (isSunday ? SUNDAY_BONUS_COINS : 0);
-  const totalCoupons = isSunday ? SUNDAY_BONUS_COUPONS : 0;
-
-  return prisma.$transaction(async (tx) => {
-    // Atomically mark today's claim; a concurrent request re-checks the WHERE and matches nothing.
-    const claimed = await markClaimedToday(tx, userId, "lastDailyCoinsAt");
-    if (!claimed) {
-      const user = await tx.user.findUnique({ where: { id: userId }, select: { coins: true, coupons: true } });
-      if (!user) throw Errors.NotFound("Usuario");
-      return { coins: user.coins, coupons: user.coupons, awardedCoins: 0, awardedCoupons: 0, alreadyClaimed: true };
-    }
-
-    const description = isSunday
-      ? `Recompensa diaria: ${totalCoins} monedas + ${totalCoupons} cupones (bonus domingo)`
-      : `Recompensa diaria: ${totalCoins} monedas`;
-    const coins = await creditBalance(userId, "coins", totalCoins, "daily_login", description, tx);
-    const coupons =
-      totalCoupons > 0
-        ? await creditBalance(userId, "coupons", totalCoupons, "daily_login", description, tx)
-        : (await tx.user.findUniqueOrThrow({ where: { id: userId }, select: { coupons: true } })).coupons;
-
-    return {
-      coins,
-      coupons,
-      awardedCoins: totalCoins,
-      awardedCoupons: totalCoupons,
-      isSunday,
-      alreadyClaimed: false,
-    };
-  });
 }
 
 // ---------------------------------------------------------------------------

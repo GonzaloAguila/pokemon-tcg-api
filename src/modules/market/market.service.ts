@@ -4,13 +4,15 @@ import {
   isEnergyCard,
   isTrainerCard,
   CardRarity,
-  EnergyType,
 } from "@gonzaloaguila/game-core";
 import type { Card } from "@gonzaloaguila/game-core";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../../lib/prisma.js";
 import { Errors } from "../../middleware/error-handler.js";
 import * as usersService from "../users/users.service.js";
+import { ECONOMY } from "../economy/config.js";
+import { economyDay, economyWeek } from "../economy/economy-time.js";
+import { claimOnce } from "../economy/claims.js";
 import {
   AVAILABLE_AVATARS,
   AVAILABLE_CARD_BACKS,
@@ -31,16 +33,21 @@ import type {
 
 const allCards: Card[] = [...ALL_CARDS];
 
-const rareCards = allCards.filter(
-  (c) => isPokemonCard(c) && c.rarity === CardRarity.RareHolo,
-);
-const uncommonCards = allCards.filter(
-  (c) => isPokemonCard(c) && c.rarity === CardRarity.Uncommon,
-);
-const commonCards = allCards.filter(
-  (c) => isPokemonCard(c) && c.rarity === CardRarity.Common,
-);
-const allPokemonCards = allCards.filter((c) => isPokemonCard(c));
+// Every card but basic Energy (Pokémon, Trainers and special Energy). "Rare" offers come from
+// rare ∪ rare-holo, so the Base Set rares (Computer Search, Item Finder, ...) can show up.
+const sellableCards = allCards.filter((c) => !(isEnergyCard(c) && c.isBasic));
+const rareCards = sellableCards.filter((c) => c.rarity === CardRarity.Rare || c.rarity === CardRarity.RareHolo);
+const uncommonCards = sellableCards.filter((c) => c.rarity === CardRarity.Uncommon);
+const commonCards = sellableCards.filter((c) => c.rarity === CardRarity.Common);
+
+function cardKind(card: Card): "pokemon" | "trainer" | "energy" {
+  if (isPokemonCard(card)) return "pokemon";
+  if (isTrainerCard(card)) return "trainer";
+  return "energy";
+}
+
+/** Id the mystery offer is listed and bought with; the real card is only revealed after buying. */
+export const MYSTERY_OFFER_ID = "mystery";
 
 const basicEnergyCards = allCards.filter(
   (c) => isEnergyCard(c) && c.isBasic,
@@ -50,12 +57,7 @@ const basicEnergyCards = allCards.filter(
 // Prices
 // ---------------------------------------------------------------------------
 
-const CARD_PRICES: Record<string, number> = {
-  rare: 150,
-  uncommon: 50,
-  common: 20,
-  mystery: 100,
-};
+const CARD_PRICES: Record<string, number> = ECONOMY.market.cardPrices;
 
 const COSMETIC_PRICES: Record<string, number> = {
   coin: 15,
@@ -68,17 +70,16 @@ const COSMETIC_PRICES: Record<string, number> = {
 const ENERGY_PRICE = 10;
 export const MAX_ENERGY_PER_PURCHASE = 99;
 
-// Rare Candy conversion rates
-const CANDY_TO_COINS = 2000;
-const CANDY_TO_COUPONS = 50;
+// Rare Candy conversion rates (coins conversions are capped per economy week)
+const CANDY_TO_COINS = ECONOMY.rareCandy.toCoins;
+const CANDY_TO_COUPONS = ECONOMY.rareCandy.toCoupons;
 
 // ---------------------------------------------------------------------------
-// Deterministic daily seed (same picks for all users on the same day)
+// Deterministic daily seed (same picks for all users on the same economy day, 00:00 Argentina)
 // ---------------------------------------------------------------------------
 
-function getUtcDateString(): string {
-  const now = new Date();
-  return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}-${String(now.getUTCDate()).padStart(2, "0")}`;
+function getEconomyDateString(now = new Date()): string {
+  return economyDay(now);
 }
 
 /**
@@ -87,7 +88,7 @@ function getUtcDateString(): string {
  */
 async function recordDailyPurchase(tx: usersService.Db, userId: string, itemKey: string, alreadyBoughtMessage: string) {
   try {
-    await tx.dailyPurchase.create({ data: { userId, itemKey, date: getUtcDateString() } });
+    await tx.dailyPurchase.create({ data: { userId, itemKey, date: getEconomyDateString() } });
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
       throw Errors.BadRequest(alreadyBoughtMessage);
@@ -96,8 +97,8 @@ async function recordDailyPurchase(tx: usersService.Db, userId: string, itemKey:
   }
 }
 
-function getDailySeed(): number {
-  const dateStr = getUtcDateString();
+function getDailySeed(now = new Date()): number {
+  const dateStr = getEconomyDateString(now);
   let hash = 0;
   for (let i = 0; i < dateStr.length; i++) {
     const char = dateStr.charCodeAt(i);
@@ -114,50 +115,35 @@ function seededPick<T>(arr: T[], seed: number, offset: number): T {
 // Get daily offers (with user-specific purchase/ownership status)
 // ---------------------------------------------------------------------------
 
-export async function getDailyOffers(userId?: string): Promise<DailyOffersResponse> {
-  const seed = getDailySeed();
+export async function getDailyOffers(userId?: string, now = new Date()): Promise<DailyOffersResponse> {
+  const seed = getDailySeed(now);
 
   // Card offers (4 daily rotating cards)
   const rareCard = seededPick(rareCards, seed, 1);
   const uncommonCard = seededPick(uncommonCards, seed, 2);
   const commonCard = seededPick(commonCards, seed, 3);
-  const mysteryCard = seededPick(allPokemonCards, seed, 4);
 
+  const offer = (card: Card, rarity: string, price: number): DailyCardOffer => ({
+    cardDefId: card.id,
+    name: card.name,
+    number: card.number,
+    set: card.set,
+    rarity,
+    kind: cardKind(card),
+    price,
+  });
   const cardOffers: DailyCardOffer[] = [
+    offer(rareCard, rareCard.rarity, CARD_PRICES.rare),
+    offer(uncommonCard, "uncommon", CARD_PRICES.uncommon),
+    offer(commonCard, "common", CARD_PRICES.common),
     {
-      cardDefId: rareCard.id,
-      name: isPokemonCard(rareCard) ? rareCard.name : rareCard.id,
-      number: rareCard.number,
-      set: rareCard.set,
-      rarity: "rare-holo",
-      kind: "pokemon",
-      price: CARD_PRICES.rare,
-    },
-    {
-      cardDefId: uncommonCard.id,
-      name: isPokemonCard(uncommonCard) ? uncommonCard.name : uncommonCard.id,
-      number: uncommonCard.number,
-      set: uncommonCard.set,
-      rarity: "uncommon",
-      kind: "pokemon",
-      price: CARD_PRICES.uncommon,
-    },
-    {
-      cardDefId: commonCard.id,
-      name: isPokemonCard(commonCard) ? commonCard.name : commonCard.id,
-      number: commonCard.number,
-      set: commonCard.set,
-      rarity: "common",
-      kind: "pokemon",
-      price: CARD_PRICES.common,
-    },
-    {
-      cardDefId: mysteryCard.id,
+      // The real card stays on the server until it's bought
+      cardDefId: MYSTERY_OFFER_ID,
       name: "???",
       number: 0,
       set: "unknown",
       rarity: "mystery",
-      kind: "pokemon",
+      kind: "mystery",
       price: CARD_PRICES.mystery,
       isMystery: true,
     },
@@ -191,7 +177,7 @@ export async function getDailyOffers(userId?: string): Promise<DailyOffersRespon
   let ownedItems: string[] = [];
 
   if (userId) {
-    const today = getUtcDateString();
+    const today = getEconomyDateString(now);
 
     // Get today's purchases
     const purchases = await prisma.dailyPurchase.findMany({
@@ -248,6 +234,11 @@ export async function getDailyOffers(userId?: string): Promise<DailyOffersRespon
 // Buy a daily card (monedas) — one-time per day
 // ---------------------------------------------------------------------------
 
+/** Today's mystery card (same for everyone, never sent before purchase). */
+function todaysMysteryCard(): Card {
+  return seededPick(sellableCards, getDailySeed(), 4);
+}
+
 export async function buyDailyCard(userId: string, cardDefId: string) {
   const offers = await getDailyOffers(userId);
   const offer = offers.cardOffers.find((o) => o.cardDefId === cardDefId);
@@ -255,30 +246,34 @@ export async function buyDailyCard(userId: string, cardDefId: string) {
     throw Errors.BadRequest("Esta carta no está disponible en la tienda hoy");
   }
 
-  const itemKey = `card:${cardDefId}`;
+  // The mystery offer is bought by its slot id; the card it gives is resolved here
+  const card = offer.isMystery ? todaysMysteryCard() : allCards.find((c) => c.id === cardDefId);
+  if (!card) throw Errors.BadRequest("Esta carta no está disponible en la tienda hoy");
+
+  const itemKey = `card:${offer.cardDefId}`;
   await prisma.$transaction(async (tx) => {
     await recordDailyPurchase(tx, userId, itemKey, "Ya compraste esta carta hoy");
-    await usersService.spendCoins(userId, offer.price, "card_purchase", `Compra de carta: ${offer.name}`, tx);
+    await usersService.spendCoins(
+      userId,
+      offer.price,
+      "card_purchase",
+      `Compra de carta: ${offer.isMystery ? `Carta misteriosa (${card.name})` : offer.name}`,
+      tx,
+    );
     await tx.userCard.upsert({
-      where: { userId_cardDefId: { userId, cardDefId } },
+      where: { userId_cardDefId: { userId, cardDefId: card.id } },
       update: { quantity: { increment: 1 } },
-      create: { userId, cardDefId, quantity: 1 },
+      create: { userId, cardDefId: card.id, quantity: 1 },
     });
   });
 
-  // For mystery card, reveal the real card info
-  if (offer.isMystery) {
-    const realCard = allCards.find((c) => c.id === cardDefId);
-    return {
-      cardDefId,
-      name: realCard && isPokemonCard(realCard) ? realCard.name : cardDefId,
-      number: realCard?.number ?? 0,
-      set: realCard?.set ?? "unknown",
-      revealed: true,
-    };
-  }
-
-  return { cardDefId, name: offer.name, number: offer.number, set: offer.set, revealed: false };
+  return {
+    cardDefId: card.id,
+    name: card.name,
+    number: card.number,
+    set: card.set,
+    revealed: !!offer.isMystery,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -378,14 +373,25 @@ export async function buyEnergy(
 export async function convertRareCandy(
   userId: string,
   target: "coins" | "coupons",
+  now = new Date(),
 ) {
   return prisma.$transaction(async (tx) => {
-    await usersService.spendRareCandy(userId, 1, "rare_candy_conversion", `Conversión de Caramelo Raro a ${target}`, tx);
-
     if (target === "coins") {
+      // Take one of this week's conversion slots ("<week>:1", "<week>:2"); none left = rejected
+      const week = economyWeek(now);
+      const max = ECONOMY.rareCandy.maxCoinConversionsPerWeek;
+      let slot = 0;
+      for (let n = 1; n <= max && slot === 0; n++) {
+        if (await claimOnce(tx, userId, "candy_coins", `${week}:${n}`)) slot = n;
+      }
+      if (slot === 0) {
+        throw Errors.BadRequest(`Solo puedes convertir ${max} Caramelos Raros en monedas por semana`);
+      }
+      await usersService.spendRareCandy(userId, 1, "rare_candy_conversion", "Conversión de Caramelo Raro a monedas", tx);
       const result = await usersService.addCoins(userId, CANDY_TO_COINS, "rare_candy_conversion", `Conversión: 1 Caramelo Raro → ${CANDY_TO_COINS} monedas`, tx);
-      return { target, amount: CANDY_TO_COINS, newBalance: result.coins };
+      return { target, amount: CANDY_TO_COINS, newBalance: result.coins, coinConversionsLeftThisWeek: max - slot };
     }
+    await usersService.spendRareCandy(userId, 1, "rare_candy_conversion", "Conversión de Caramelo Raro a cupones", tx);
     const result = await usersService.addCoupons(userId, CANDY_TO_COUPONS, "rare_candy_conversion", `Conversión: 1 Caramelo Raro → ${CANDY_TO_COUPONS} cupones`, tx);
     return { target, amount: CANDY_TO_COUPONS, newBalance: result.coupons };
   });

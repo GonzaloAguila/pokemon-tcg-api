@@ -25,6 +25,8 @@ const claimRewardSchema = z.object({
   track: z.enum(["standard", "premium"]),
 });
 
+const stepSchema = z.string().regex(/^\d{1,2}$/).transform(Number).pipe(z.number().int().min(1).max(31));
+
 // ---------------------------------------------------------------------------
 // GET /battle-pass/current — Current month's pass with auto-enrollment
 // ---------------------------------------------------------------------------
@@ -112,10 +114,12 @@ router.post(
   requireAuth,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const day = parseInt(req.params.day, 10);
-      if (isNaN(day) || day < 1) {
-        throw Errors.BadRequest("Día inválido");
+      // `day` is the step number (1..30)
+      const stepParsed = stepSchema.safeParse(req.params.day);
+      if (!stepParsed.success) {
+        throw Errors.BadRequest("Paso inválido");
       }
+      const day = stepParsed.data;
 
       const parsed = claimRewardSchema.safeParse(req.body);
       if (!parsed.success) {

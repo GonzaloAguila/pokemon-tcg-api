@@ -1,7 +1,11 @@
 /**
  * Booster Pack Service
  *
- * Handles pack definitions, opening logic, and daily limits.
+ * Pack definitions, opening logic and the odds derived from it.
+ *
+ * There is no daily pack limit: the old in-memory DAILY_PACK_LIMIT was never enforced (and would
+ * reset on every restart). Economy v2 bounds pack income through its faucets instead (daily
+ * free pack, capped match coins, Rare Candy → coins capped per week), see modules/economy.
  */
 
 import {
@@ -11,37 +15,30 @@ import {
   type Card,
 } from "@gonzaloaguila/game-core";
 
+import type { Db } from "../users/users.service.js";
+import { ECONOMY } from "../economy/config.js";
 import type {
   BoosterPackType,
   BoosterPackListItem,
   PackOpeningResult,
   PulledCard,
-  UserDailyLimit,
-  DailyLimitStatus,
+  PackOdds,
 } from "./boosters.types.js";
 
 // =============================================================================
-// Configuration
-// =============================================================================
-
-const DAILY_PACK_LIMIT = 5;
-
-// =============================================================================
-// In-Memory Storage (will be replaced with DB later)
+// In-Memory Storage (pack definitions; DB-backed config is a later item)
 // =============================================================================
 
 /** Pack type definitions */
 const packTypes: Map<string, BoosterPackType> = new Map();
-
-/** Daily limit tracking by oderId */
-const dailyLimits: Map<string, UserDailyLimit> = new Map();
 
 // =============================================================================
 // Initialize Default Packs
 // =============================================================================
 
 /**
- * Standard 11-card booster: 1 rare (33% holo), 3 uncommons, 5 commons, 2 basic Energy.
+ * Standard 11-card booster: 1 rare slot (33% holo, otherwise rare ∪ holo), 3 uncommons
+ * (1% each to upgrade to the rare pool), 5 commons, 2 distinct basic Energy.
  * Every set listed here gets one; adding a set's booster = one entry (the cards come from
  * game-core's set registry).
  */
@@ -56,79 +53,63 @@ interface SetBoosterDef {
   name: string;
   description: string;
   image: string;
-  price: number;
-  /** Other packs of the set, listed right after its booster */
-  extraPacks?: Omit<BoosterPackType, "setId">[];
 }
 
-/** Booster per set id (keys must be ids in game-core's CARD_SETS). */
+/**
+ * Booster per set id (keys must be ids in game-core's CARD_SETS). Every booster costs
+ * ECONOMY.packs.price. (Base Set's 5-card "Theme Pack" for 100 was retired in economy v2: it was
+ * API-only and its advertised 10% holo chance was never applied.)
+ */
 const SET_BOOSTERS: Record<string, SetBoosterDef> = {
   "base-set": {
     id: "base-set-booster",
     name: "Booster Pack",
     description: "Contains 11 random cards from the original Base Set. Includes 1 guaranteed Rare!",
     image: "/packs/booster_chari.png",
-    price: 200,
-    extraPacks: [
-      {
-        // Smaller/cheaper option
-        id: "base-set-theme-pack",
-        name: "Theme Pack",
-        description: "A smaller pack with 5 cards. Good for quick collection building!",
-        image: "/packs/booster_venu.png",
-        cardCount: 5,
-        slots: [
-          { rarity: "uncommon", count: 1, holoChance: 0.1 },
-          { rarity: "common", count: 4 },
-        ],
-        price: 100,
-        available: true,
-      },
-    ],
   },
   jungle: {
     id: "jungle-booster",
     name: "Jungle Booster",
     description: "Contains 11 random cards from the Jungle expansion. Includes 1 guaranteed Rare!",
     image: "/packs/jungle/Jungle_Booster_Scyther.webp",
-    price: 200,
   },
   fossil: {
     id: "fossil-booster",
     name: "Fossil Booster",
     description: "Contains 11 random cards from the Fossil expansion. Includes 1 guaranteed Rare!",
     image: "/packs/fossil/booster.png",
-    price: 200,
   },
   "team-rocket": {
     id: "team-rocket-booster",
     name: "Team Rocket Booster",
     description: "Contains 11 random cards from the Team Rocket expansion. Includes 1 guaranteed Rare!",
     image: "/packs/team-rocket/booster.png",
-    price: 200,
   },
 };
 
-/** Ids of the standard boosters, in set-registry order (prizes pick one at random). */
+/** Ids of the standard boosters, in set-registry order (one per set). */
 export const STANDARD_BOOSTER_IDS: string[] = CARD_SETS.flatMap((set) => {
   const def = SET_BOOSTERS[set.id];
   return def ? [def.id] : [];
 });
 
+export function isStandardBoosterId(packId: string): boolean {
+  return STANDARD_BOOSTER_IDS.includes(packId);
+}
+
 function initializeDefaultPacks(): void {
   for (const set of CARD_SETS) {
     const def = SET_BOOSTERS[set.id];
     if (!def) continue;
-    const { extraPacks = [], ...booster } = def;
-    packTypes.set(booster.id, {
-      ...booster,
+    packTypes.set(def.id, {
+      ...def,
       setId: set.id,
       cardCount: 11,
       slots: STANDARD_BOOSTER_SLOTS,
       energyCount: 2,
+      price: ECONOMY.packs.price,
       available: true,
     });
-    for (const pack of extraPacks) packTypes.set(pack.id, { ...pack, setId: set.id });
   }
 }
 
@@ -203,7 +184,8 @@ function setCards(setId: string): Card[] {
 }
 
 /**
- * Get cards by rarity from a set
+ * Get cards by rarity from a set. The "rare" pool is rare ∪ rare-holo (sets without non-holo
+ * rares — Jungle, Fossil, Team Rocket — therefore always give a holo in the rare slot).
  */
 function getCardsByRarity(setId: string, rarity: string): Card[] {
   const cards = setCards(setId);
@@ -230,12 +212,33 @@ function getEnergyCards(setId: string): Card[] {
   return CARD_SETS.map((set) => set.cards.filter(isBasicEnergy)).find((cards) => cards.length > 0) ?? [];
 }
 
-/**
- * Pick random items from an array
- */
+/** `count` distinct items, uniformly (partial Fisher–Yates). */
 function pickRandom<T>(array: T[], count: number): T[] {
-  const shuffled = [...array].sort(() => Math.random() - 0.5);
-  return shuffled.slice(0, count);
+  const items = [...array];
+  const n = Math.min(count, items.length);
+  for (let i = 0; i < n; i++) {
+    const j = i + Math.floor(Math.random() * (items.length - i));
+    [items[i], items[j]] = [items[j], items[i]];
+  }
+  return items.slice(0, n);
+}
+
+/** Possible rarity targets of one draw of `slot`, with their probabilities (mirrors openPack). */
+function slotOutcomes(slot: BoosterPackType["slots"][number]): { probability: number; rarity: string; isHolo: boolean }[] {
+  const base: { probability: number; rarity: string; isHolo: boolean }[] =
+    slot.rarity === "rare" && slot.holoChance
+      ? [
+          { probability: slot.holoChance, rarity: "rare-holo", isHolo: true },
+          { probability: 1 - slot.holoChance, rarity: "rare", isHolo: false },
+        ]
+      : [{ probability: 1, rarity: slot.rarity, isHolo: false }];
+  if (!slot.upgradeChance) return base;
+  const upgraded = slot.rarity === "uncommon" ? "rare" : slot.rarity === "common" ? "uncommon" : null;
+  if (!upgraded) return base;
+  return base.flatMap((o) => [
+    { ...o, probability: o.probability * (1 - slot.upgradeChance!) },
+    { probability: o.probability * slot.upgradeChance!, rarity: upgraded, isHolo: o.isHolo },
+  ]);
 }
 
 /**
@@ -306,100 +309,122 @@ export function openPack(packId: string): PackOpeningResult {
   };
 }
 
-// =============================================================================
-// Daily Limit Management
-// =============================================================================
-
-/**
- * Get today's date string
- */
-function getTodayString(): string {
-  return new Date().toISOString().split("T")[0];
-}
-
-/**
- * Get or create daily limit record for a user
- */
-function getUserDailyLimit(userId: string): UserDailyLimit {
-  const today = getTodayString();
-  const key = `${userId}-${today}`;
-
-  let record = dailyLimits.get(key);
-
-  if (!record || record.date !== today) {
-    // New day or new user, reset counter
-    record = {
-      userId,
-      date: today,
-      packsOpened: 0,
-    };
-    dailyLimits.set(key, record);
+/** Add the pulled cards to the user's collection (inside the caller's transaction). */
+export async function addPulledCards(tx: Db, userId: string, result: PackOpeningResult): Promise<void> {
+  for (const pulled of result.cards) {
+    await tx.userCard.upsert({
+      where: { userId_cardDefId: { userId, cardDefId: pulled.card.id } },
+      update: { quantity: { increment: 1 } },
+      create: { userId, cardDefId: pulled.card.id, quantity: 1 },
+    });
   }
-
-  return record;
 }
 
-/**
- * Check daily limit status for a user
- */
-export function getDailyLimitStatus(userId: string): DailyLimitStatus {
-  const record = getUserDailyLimit(userId);
-  const remaining = Math.max(0, DAILY_PACK_LIMIT - record.packsOpened);
-
-  return {
-    userId,
-    date: record.date,
-    packsOpened: record.packsOpened,
-    packsRemaining: remaining,
-    dailyLimit: DAILY_PACK_LIMIT,
-    canOpen: remaining > 0,
-  };
-}
-
-/**
- * Increment pack opened counter for a user
- */
-export function recordPackOpening(userId: string): void {
-  const record = getUserDailyLimit(userId);
-  record.packsOpened++;
-  dailyLimits.set(`${userId}-${record.date}`, record);
-}
-
-/**
- * Check if user can open a pack (has remaining daily limit)
- */
-export function canUserOpenPack(userId: string): boolean {
-  const status = getDailyLimitStatus(userId);
-  return status.canOpen;
-}
-
-/**
- * Open a pack with daily limit check
- */
-export function openPackWithLimit(packId: string, userId: string): PackOpeningResult {
-  if (!canUserOpenPack(userId)) {
-    throw new Error("Daily pack limit reached. Come back tomorrow!");
-  }
-
+/** Open `packId` and add its cards to the user's collection, inside the caller's transaction. */
+export async function openPackForUser(tx: Db, userId: string, packId: string): Promise<PackOpeningResult> {
   const result = openPack(packId);
-  recordPackOpening(userId);
-
+  await addPulledCards(tx, userId, result);
   return result;
 }
 
 // =============================================================================
-// Cleanup (for memory management)
+// Odds (computed from the same slot definitions and pools openPack uses)
 // =============================================================================
 
-/**
- * Clean up old daily limit records (call periodically)
- */
-export function cleanupOldRecords(): void {
-  const today = getTodayString();
+const round = (n: number) => Math.round(n * 1e6) / 1e6;
 
-  for (const [key, record] of dailyLimits.entries()) {
-    if (record.date !== today) {
-      dailyLimits.delete(key);
+function rarityGroup(card: Card): string {
+  return isBasicEnergy(card) ? "basic-energy" : card.rarity;
+}
+
+/**
+ * Exact odds of a pack: for every card, the chance to get at least one copy per pack; per
+ * rarity, the pool size, the chance of a given card and the chance of at least one card of
+ * that rarity. Draws are independent (the energy slot picks distinct cards).
+ */
+export function getPackOdds(packId: string): PackOdds | null {
+  const pack = packTypes.get(packId);
+  if (!pack) return null;
+
+  // Per draw: probability of each card id
+  const draws: Map<string, number>[] = [];
+  for (const slot of pack.slots) {
+    const outcomes = slotOutcomes(slot);
+    for (let i = 0; i < slot.count; i++) {
+      const dist = new Map<string, number>();
+      for (const outcome of outcomes) {
+        const pool = getCardsByRarity(pack.setId, outcome.rarity);
+        if (pool.length === 0) continue; // openPack skips the card
+        for (const card of pool) dist.set(card.id, (dist.get(card.id) ?? 0) + outcome.probability / pool.length);
+      }
+      draws.push(dist);
     }
   }
+  const energyChance = new Map<string, number>();
+  if (pack.energyCount) {
+    const energy = getEnergyCards(pack.setId);
+    for (const card of energy) energyChance.set(card.id, Math.min(1, pack.energyCount / energy.length));
+  }
+
+  const cardsById = new Map<string, Card>();
+  for (const card of [...setCards(pack.setId), ...getEnergyCards(pack.setId)]) cardsById.set(card.id, card);
+
+  const cardChances: Record<string, number> = {};
+  for (const [id] of cardsById) {
+    let none = 1 - (energyChance.get(id) ?? 0);
+    for (const dist of draws) none *= 1 - (dist.get(id) ?? 0);
+    const p = 1 - none;
+    if (p > 0) cardChances[id] = round(p);
+  }
+
+  const groups = new Map<string, Card[]>();
+  for (const card of cardsById.values()) {
+    if (!cardChances[card.id]) continue;
+    const key = rarityGroup(card);
+    groups.set(key, [...(groups.get(key) ?? []), card]);
+  }
+  const groupOrder = ["rare-holo", "rare", "uncommon", "common", "basic-energy"];
+  const rarities = [...groups.entries()]
+    .sort(([a], [b]) => groupOrder.indexOf(a) - groupOrder.indexOf(b))
+    .map(([rarity, cards]) => {
+      const ids = new Set(cards.map((c) => c.id));
+      let none = 1;
+      for (const dist of draws) {
+        let p = 0;
+        for (const id of ids) p += dist.get(id) ?? 0;
+        none *= 1 - p;
+      }
+      // Energy slot: at least one of these energies (they are all basic Energy or none)
+      if (rarity === "basic-energy" && pack.energyCount) none *= 0;
+      let expected = 0;
+      for (const id of ids) {
+        expected += energyChance.has(id) ? energyChance.get(id)! : 0;
+        for (const dist of draws) expected += dist.get(id) ?? 0;
+      }
+      return {
+        rarity,
+        cards: cards.length,
+        chancePerCard: cardChances[cards[0].id],
+        chanceAtLeastOne: round(1 - none),
+        expectedPerPack: round(expected),
+      };
+    });
+
+  return {
+    packId: pack.id,
+    name: pack.name,
+    setId: pack.setId,
+    price: pack.price ?? 0,
+    cardCount: pack.cardCount,
+    holoChance: rarities.find((r) => r.rarity === "rare-holo")?.chanceAtLeastOne ?? 0,
+    rarities,
+    cardChances,
+  };
+}
+
+export function getAllPackOdds(): PackOdds[] {
+  return [...packTypes.keys()].flatMap((id) => {
+    const odds = getPackOdds(id);
+    return odds && packTypes.get(id)?.available ? [odds] : [];
+  });
 }

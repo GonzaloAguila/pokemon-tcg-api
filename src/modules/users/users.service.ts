@@ -19,6 +19,8 @@ const fullProfileSelect = {
   coins: true,
   coupons: true,
   rareCandy: true,
+  exchangeTokens: true,
+  loginDays: true,
   freeWheelSpins: true,
   level: true,
   experience: true,
@@ -176,16 +178,17 @@ export async function updateCosmetics(
 // in its own transaction.
 // ---------------------------------------------------------------------------
 
-export type Currency = "coins" | "coupons" | "rareCandy";
+export type Currency = "coins" | "coupons" | "rareCandy" | "exchangeTokens";
 export type Db = Prisma.TransactionClient;
 
 const INSUFFICIENT_FUNDS: Record<Currency, string> = {
   coins: "No tienes suficientes monedas",
   coupons: "No tienes suficientes cupones",
   rareCandy: "No tienes suficientes Caramelos Raros",
+  exchangeTokens: "No tienes suficientes Fichas de canje",
 };
 
-const balanceSelect = { coins: true, coupons: true, rareCandy: true } as const;
+const balanceSelect = { coins: true, coupons: true, rareCandy: true, exchangeTokens: true } as const;
 
 function assertPositiveAmount(amount: number) {
   if (!Number.isSafeInteger(amount) || amount <= 0) {

@@ -119,11 +119,8 @@ router.post(
     const price = pack.price ?? 0;
 
     try {
-      // Generate cards
-      const result = boosterService.openPack(packId);
-
       // Charge and persist in one transaction: no coins lost without cards, no cards without paying
-      await prisma.$transaction(async (tx) => {
+      const result = await prisma.$transaction(async (tx) => {
         if (price > 0) {
           await usersService.spendCoins(
             userId,
@@ -133,13 +130,7 @@ router.post(
             tx,
           );
         }
-        for (const pulled of result.cards) {
-          await tx.userCard.upsert({
-            where: { userId_cardDefId: { userId, cardDefId: pulled.card.id } },
-            update: { quantity: { increment: 1 } },
-            create: { userId, cardDefId: pulled.card.id, quantity: 1 },
-          });
-        }
+        return boosterService.openPackForUser(tx, userId, packId);
       });
 
       res.json(result);

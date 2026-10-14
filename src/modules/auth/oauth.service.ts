@@ -7,6 +7,7 @@ import {
   type OAuthUser,
 } from "../../lib/oauth.js";
 import { Errors } from "../../middleware/error-handler.js";
+import { grantWelcomePackage, welcomeGiftLine } from "../economy/economy.service.js";
 import {
   generateAccessToken,
   generateRefreshToken,
@@ -41,7 +42,8 @@ async function generateUniqueUsername(baseName: string): Promise<string> {
   return `${username.slice(0, 15)}_${suffix}`;
 }
 
-async function handleOAuthCallback(
+/** Exported for tests; production entry points are handleGoogleCallback / handleDiscordCallback. */
+export async function handleOAuthCallback(
   oauthUser: OAuthUser,
   provider: AuthProvider,
 ) {
@@ -87,18 +89,21 @@ async function handleOAuthCallback(
         ? "superadmin"
         : "user";
 
-    user = await prisma.user.create({
-      data: {
-        email,
-        username,
-        provider,
-        providerId: oauthUser.id,
-        role,
-        emailVerified: true,
-        coins: 2000,
-        coupons: 100,
-        stats: { create: {} },
-      },
+    // The account and its welcome package (economy v2) are created together
+    user = await prisma.$transaction(async (tx) => {
+      const createdUser = await tx.user.create({
+        data: {
+          email,
+          username,
+          provider,
+          providerId: oauthUser.id,
+          role,
+          emailVerified: true,
+          stats: { create: {} },
+        },
+      });
+      await grantWelcomePackage(tx, createdUser.id);
+      return createdUser;
     });
     isNewUser = true;
 
@@ -120,7 +125,7 @@ async function handleOAuthCallback(
             "",
             "Para que puedas empezar tu aventura, te hemos otorgado:",
             "",
-            "**2.000 PokeCoins** y **100 Cupones** para que explores el mercado, abras sobres y armes tus mazos.",
+            welcomeGiftLine(),
             "",
             "Buena suerte en tus batallas!",
           ].join("\n"),

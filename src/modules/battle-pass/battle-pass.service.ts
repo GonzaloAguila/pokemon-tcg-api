@@ -1,25 +1,34 @@
 /**
- * Battle Pass Service — Calendar-based Monthly System
+ * Battle Pass Service — monthly pass by activity (economy v2)
  *
- * Each month has its own BattlePass, auto-created on first access.
- * All users are auto-enrolled. Day progression follows the calendar.
- * Premium is a monthly purchase that expires with the month.
+ * Each economy month (Argentina time) has its own BattlePass row, auto-created on first access;
+ * every user is enrolled. A user advances one step per login day of the month (the daily
+ * check-in, modules/economy), up to 30 steps (or the month's length). Rewards are claimed per
+ * reached step; there is no calendar progress, so missing days can't be claimed afterwards.
+ * Premium (2 Rare Candies) adds the premium track for the month.
+ *
+ * `day` in the routes and in UserBattlePassReward is the step number. Claims made under the old
+ * calendar pass stay claimed (the migration set `steps` to the highest day claimed).
  */
 
-import { Prisma } from "@prisma/client";
+import { randomInt } from "crypto";
+import { ALL_CARDS, CardRarity, type Card } from "@gonzaloaguila/game-core";
 import { prisma } from "../../lib/prisma.js";
 import { Errors } from "../../middleware/error-handler.js";
 import * as usersService from "../users/users.service.js";
-import * as boosterService from "../boosters/boosters.service.js";
-import { DEFAULT_MONTHLY_REWARDS } from "./seed-data.js";
+import { ECONOMY, type BattlePassStepReward } from "../economy/config.js";
+import { economyCalendar, economyDay } from "../economy/economy-time.js";
+import { grantPacks } from "../economy/pack-inventory.js";
 import type {
   BattlePassRewardDef,
   BattlePassWithProgress,
   BattlePassListItem,
 } from "./battle-pass.types.js";
 
+type Db = usersService.Db;
+
 // =============================================================================
-// Calendar Helpers
+// Calendar helpers (economy month)
 // =============================================================================
 
 const MONTH_NAMES = [
@@ -27,126 +36,126 @@ const MONTH_NAMES = [
   "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
 ];
 
-function getCurrentDayOfMonth(): number {
-  return new Date().getUTCDate();
+/** Steps reachable in a month: one per day, at most ECONOMY.battlePass.maxSteps. */
+export function maxStepsForMonth(daysInMonth: number): number {
+  return Math.min(ECONOMY.battlePass.maxSteps, daysInMonth);
 }
 
-function getDaysInMonth(year: number, month: number): number {
-  return new Date(year, month, 0).getDate();
-}
-
-function getCurrentYearMonth(): { year: number; month: number } {
-  const now = new Date();
-  return { year: now.getUTCFullYear(), month: now.getUTCMonth() + 1 };
-}
-
-function getDaysRemaining(year: number, month: number): number {
-  const total = getDaysInMonth(year, month);
-  const current = getCurrentDayOfMonth();
-  return Math.max(total - current, 0);
-}
-
-function isCurrentMonth(pass: { year: number | null; month: number | null }): boolean {
+function isCurrentMonth(pass: { year: number | null; month: number | null }, now = new Date()): boolean {
   if (pass.year == null || pass.month == null) return false;
-  const { year, month } = getCurrentYearMonth();
+  const { year, month } = economyCalendar(now);
   return pass.year === year && pass.month === month;
 }
 
 /**
- * Build rewards array for a specific month length.
- * - Months < 30 days: filter to day <= durationDays
- * - 31-day months: add day 31 as 100/200 coins
+ * Both tracks for a month with `maxSteps` steps. Free track: coins per step, packs at 10/20,
+ * an unowned holo at the last step. Premium: ECONOMY.battlePass.premium; in shorter months the
+ * step-30 rewards move to the last step.
  */
-function buildRewardsForMonth(durationDays: number): BattlePassRewardDef[] {
-  const rewards = DEFAULT_MONTHLY_REWARDS.filter((r) => r.day <= durationDays);
-
-  if (durationDays === 31) {
-    rewards.push(
-      { day: 31, track: "standard", rewardType: "coins", amount: 100, label: "100 Monedas", icon: "🪙" },
-      { day: 31, track: "premium",  rewardType: "coins", amount: 200, label: "200 Monedas", icon: "🪙" },
-    );
+export function buildRewards(maxSteps: number): BattlePassRewardDef[] {
+  const cfg = ECONOMY.battlePass;
+  const full = cfg.maxSteps;
+  const standard: BattlePassStepReward[] = [];
+  for (let step = 1; step <= full; step++) {
+    if (step === full) standard.push({ step, rewardType: "unowned_holo", label: "Carta holo que no tengas" });
+    else if (cfg.standardPackSteps.includes(step)) standard.push({ step, rewardType: "pack", label: "Sobre a elección" });
+    else standard.push({ step, rewardType: "coins", amount: cfg.standardCoinsPerStep, label: `${cfg.standardCoinsPerStep} Monedas` });
   }
 
-  return rewards;
+  const toDefs = (track: "standard" | "premium", rewards: BattlePassStepReward[]): BattlePassRewardDef[] => {
+    const kept = rewards.filter((r) => r.step < maxSteps);
+    const last = rewards.filter((r) => r.step === full).map((r) => ({ ...r, step: maxSteps }));
+    return [...kept, ...last].map((r) => ({
+      day: r.step,
+      track,
+      rewardType: r.rewardType,
+      ...(r.amount !== undefined ? { amount: r.amount } : {}),
+      ...(r.rewardId !== undefined ? { rewardId: r.rewardId } : {}),
+      label: r.label,
+    }));
+  };
+  return [...toDefs("standard", standard), ...toDefs("premium", cfg.premium)].sort(
+    (a, b) => a.day - b.day || (a.track === "standard" ? -1 : 1),
+  );
 }
 
 // =============================================================================
-// Auto-create monthly pass
+// Monthly pass + enrollment (idempotent, safe inside a transaction)
 // =============================================================================
 
-async function getOrCreateMonthlyPass(year: number, month: number) {
-  const existing = await prisma.battlePass.findUnique({
-    where: { year_month: { year, month } },
-  });
+export async function getOrCreateMonthlyPass(db: Db = prisma, now = new Date()) {
+  const { year, month, daysInMonth } = economyCalendar(now);
+  const existing = await db.battlePass.findUnique({ where: { year_month: { year, month } } });
   if (existing) return existing;
 
-  const durationDays = getDaysInMonth(year, month);
   const monthName = MONTH_NAMES[month - 1];
-  const slug = `${year}-${String(month).padStart(2, "0")}`;
-  const name = `Pase de Batalla — ${monthName} ${year}`;
-
-  const rewards = buildRewardsForMonth(durationDays);
-
   // Expire any previous active passes
-  await prisma.battlePass.updateMany({
-    where: { status: "active" },
-    data: { status: "expired" },
-  });
-
-  return prisma.battlePass.create({
-    data: {
-      slug,
-      name,
-      description: `Pase de batalla mensual de ${monthName} ${year}.`,
+  await db.battlePass.updateMany({ where: { status: "active" }, data: { status: "expired" } });
+  // ON CONFLICT DO NOTHING: a concurrent first visit may create it at the same time
+  await db.battlePass.createMany({
+    data: [{
+      slug: `${year}-${String(month).padStart(2, "0")}`,
+      name: `Pase de Batalla — ${monthName} ${year}`,
+      description: `Pase de batalla mensual de ${monthName} ${year}. Avanza un paso por cada día que entras.`,
       imageUrl: "",
-      durationDays,
-      premiumPrice: 2,
+      durationDays: daysInMonth,
+      premiumPrice: ECONOMY.battlePass.premiumPriceRareCandy,
       status: "active",
-      rewards: rewards as any,
+      rewards: buildRewards(maxStepsForMonth(daysInMonth)) as any,
       year,
       month,
-    },
+    }],
+    skipDuplicates: true,
+  });
+  return db.battlePass.findUniqueOrThrow({ where: { year_month: { year, month } } });
+}
+
+async function getOrCreateEnrollment(userId: string, passId: string, db: Db = prisma) {
+  await db.userBattlePass.createMany({ data: [{ userId, battlePassId: passId }], skipDuplicates: true });
+  return db.userBattlePass.findUniqueOrThrow({
+    where: { userId_battlePassId: { userId, battlePassId: passId } },
+    include: { claimedRewards: true },
   });
 }
 
-// =============================================================================
-// Auto-enrollment
-// =============================================================================
-
-async function getOrCreateEnrollment(userId: string, passId: string) {
-  const where = { userId_battlePassId: { userId, battlePassId: passId } };
-  const existing = await prisma.userBattlePass.findUnique({ where, include: { claimedRewards: true } });
-  if (existing) return existing;
-
-  try {
-    return await prisma.userBattlePass.create({
-      data: { userId, battlePassId: passId },
-      include: { claimedRewards: true },
-    });
-  } catch (err) {
-    // A concurrent first visit created it between our read and insert
-    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
-      return prisma.userBattlePass.findUniqueOrThrow({ where, include: { claimedRewards: true } });
-    }
-    throw err;
-  }
+/**
+ * One battle-pass step for today's login (called by the daily check-in, inside its
+ * transaction). Returns the new step count, or null when today's step was already taken or
+ * the month's steps are exhausted.
+ */
+export async function advanceStepForLogin(tx: Db, userId: string, now = new Date()): Promise<number | null> {
+  const pass = await getOrCreateMonthlyPass(tx, now);
+  const enrollment = await getOrCreateEnrollment(userId, pass.id, tx);
+  const today = economyDay(now);
+  const maxSteps = maxStepsForMonth(pass.durationDays);
+  const { count } = await tx.userBattlePass.updateMany({
+    where: {
+      id: enrollment.id,
+      steps: { lt: maxSteps },
+      OR: [{ lastStepDay: null }, { lastStepDay: { not: today } }],
+    },
+    data: { steps: { increment: 1 }, lastStepDay: today },
+  });
+  if (count === 0) return null;
+  const { steps } = await tx.userBattlePass.findUniqueOrThrow({ where: { id: enrollment.id }, select: { steps: true } });
+  return steps;
 }
 
 // =============================================================================
-// Get current month's pass with full progress (main endpoint)
+// Read
 // =============================================================================
 
-export async function getCurrentPassWithProgress(
-  userId: string,
-): Promise<BattlePassWithProgress> {
-  const { year, month } = getCurrentYearMonth();
-  const pass = await getOrCreateMonthlyPass(year, month);
-  const enrollment = await getOrCreateEnrollment(userId, pass.id);
+function rewardsOf(pass: { durationDays: number }): BattlePassRewardDef[] {
+  return buildRewards(maxStepsForMonth(pass.durationDays));
+}
 
-  const currentDay = getCurrentDayOfMonth();
-  const daysRemaining = getDaysRemaining(year, month);
-  const rewards = pass.rewards as unknown as BattlePassRewardDef[];
-
+function toProgress(
+  pass: Awaited<ReturnType<typeof getOrCreateMonthlyPass>>,
+  enrollment: Awaited<ReturnType<typeof getOrCreateEnrollment>>,
+  now: Date,
+): BattlePassWithProgress {
+  const { dayOfMonth, daysInMonth } = economyCalendar(now);
+  const maxSteps = maxStepsForMonth(pass.durationDays);
   return {
     id: pass.id,
     slug: pass.slug,
@@ -156,41 +165,34 @@ export async function getCurrentPassWithProgress(
     durationDays: pass.durationDays,
     premiumPrice: pass.premiumPrice,
     status: pass.status,
-    rewards,
-    year,
-    month,
-    daysRemaining,
+    rewards: rewardsOf(pass),
+    year: pass.year ?? undefined,
+    month: pass.month ?? undefined,
+    daysRemaining: Math.max(daysInMonth - dayOfMonth, 0),
     enrollment: {
       activatedAt: enrollment.activatedAt.toISOString(),
       isPremium: enrollment.isPremium,
-      currentDay,
-      claimedRewards: enrollment.claimedRewards.map((r) => ({
-        day: r.day,
-        track: r.track,
-      })),
+      steps: enrollment.steps,
+      maxSteps,
+      steppedToday: enrollment.lastStepDay === economyDay(now),
+      currentDay: enrollment.steps,
+      claimedRewards: enrollment.claimedRewards.map((r) => ({ day: r.day, track: r.track })),
     },
   };
 }
 
-// =============================================================================
-// List available passes (kept for backwards compatibility)
-// =============================================================================
+export async function getCurrentPassWithProgress(userId: string, now = new Date()): Promise<BattlePassWithProgress> {
+  const pass = await getOrCreateMonthlyPass(prisma, now);
+  const enrollment = await getOrCreateEnrollment(userId, pass.id);
+  return toProgress(pass, enrollment, now);
+}
 
-export async function getAvailablePasses(
-  userId?: string,
-): Promise<BattlePassListItem[]> {
-  const { year, month } = getCurrentYearMonth();
-  const pass = await getOrCreateMonthlyPass(year, month);
-
+export async function getAvailablePasses(userId?: string, now = new Date()): Promise<BattlePassListItem[]> {
+  const pass = await getOrCreateMonthlyPass(prisma, now);
   const enrollment = userId
-    ? await prisma.userBattlePass.findUnique({
-        where: { userId_battlePassId: { userId, battlePassId: pass.id } },
-      })
+    ? await prisma.userBattlePass.findUnique({ where: { userId_battlePassId: { userId, battlePassId: pass.id } } })
     : null;
-
-  const currentDay = getCurrentDayOfMonth();
-  const daysRemaining = getDaysRemaining(year, month);
-
+  const { dayOfMonth, daysInMonth } = economyCalendar(now);
   return [
     {
       id: pass.id,
@@ -201,73 +203,35 @@ export async function getAvailablePasses(
       durationDays: pass.durationDays,
       premiumPrice: pass.premiumPrice,
       status: pass.status,
-      isEnrolled: true, // always enrolled in calendar system
+      isEnrolled: true,
       isPremium: enrollment?.isPremium ?? false,
-      currentDay,
-      year,
-      month,
-      daysRemaining,
+      currentDay: enrollment?.steps ?? 0,
+      steps: enrollment?.steps ?? 0,
+      maxSteps: maxStepsForMonth(pass.durationDays),
+      year: pass.year ?? undefined,
+      month: pass.month ?? undefined,
+      daysRemaining: Math.max(daysInMonth - dayOfMonth, 0),
     },
   ];
 }
 
-// =============================================================================
-// Get pass details by ID (kept for backwards compatibility)
-// =============================================================================
-
-export async function getPassWithProgress(
-  passId: string,
-  userId: string,
-): Promise<BattlePassWithProgress> {
-  const pass = await prisma.battlePass.findUnique({
-    where: { id: passId },
-  });
+export async function getPassWithProgress(passId: string, userId: string, now = new Date()): Promise<BattlePassWithProgress> {
+  const pass = await prisma.battlePass.findUnique({ where: { id: passId } });
   if (!pass) throw Errors.NotFound("Pase de batalla");
-
-  // Only allow fetching current month's pass
-  if (!isCurrentMonth(pass)) {
-    throw Errors.BadRequest("Este pase ya expiró");
-  }
-
+  if (!isCurrentMonth(pass, now)) throw Errors.BadRequest("Este pase ya expiró");
   const enrollment = await getOrCreateEnrollment(userId, pass.id);
-  const currentDay = getCurrentDayOfMonth();
-  const daysRemaining = getDaysRemaining(pass.year!, pass.month!);
-  const rewards = pass.rewards as unknown as BattlePassRewardDef[];
-
-  return {
-    id: pass.id,
-    slug: pass.slug,
-    name: pass.name,
-    description: pass.description,
-    imageUrl: pass.imageUrl,
-    durationDays: pass.durationDays,
-    premiumPrice: pass.premiumPrice,
-    status: pass.status,
-    rewards,
-    year: pass.year ?? undefined,
-    month: pass.month ?? undefined,
-    daysRemaining,
-    enrollment: {
-      activatedAt: enrollment.activatedAt.toISOString(),
-      isPremium: enrollment.isPremium,
-      currentDay,
-      claimedRewards: enrollment.claimedRewards.map((r) => ({
-        day: r.day,
-        track: r.track,
-      })),
-    },
-  };
+  return toProgress(pass, enrollment, now);
 }
 
 // =============================================================================
 // Upgrade to premium
 // =============================================================================
 
-export async function upgradeToPremium(passId: string, userId: string) {
+export async function upgradeToPremium(passId: string, userId: string, now = new Date()) {
   const pass = await prisma.battlePass.findUnique({ where: { id: passId } });
   if (!pass) throw Errors.NotFound("Pase de batalla");
 
-  if (!isCurrentMonth(pass)) {
+  if (!isCurrentMonth(pass, now)) {
     throw Errors.BadRequest("Solo puedes comprar premium del mes actual");
   }
 
@@ -298,63 +262,38 @@ export async function upgradeToPremium(passId: string, userId: string) {
 // Claim reward
 // =============================================================================
 
-export async function claimReward(
-  passId: string,
-  userId: string,
-  day: number,
-  track: string,
-) {
+export async function claimReward(passId: string, userId: string, step: number, track: string, now = new Date()) {
   if (track !== "standard" && track !== "premium") {
     throw Errors.BadRequest("Track inválido");
   }
 
   const pass = await prisma.battlePass.findUnique({ where: { id: passId } });
   if (!pass) throw Errors.NotFound("Pase de batalla");
-
-  if (!isCurrentMonth(pass)) {
+  if (!isCurrentMonth(pass, now)) {
     throw Errors.BadRequest("Este pase ya expiró, no puedes reclamar recompensas");
   }
 
-  const enrollment = await getOrCreateEnrollment(userId, pass.id);
+  const rewardDef = rewardsOf(pass).find((r) => r.day === step && r.track === track);
+  if (!rewardDef) throw Errors.NotFound("Recompensa");
 
-  // Validate day is unlocked (calendar day)
-  const currentDay = getCurrentDayOfMonth();
-  if (day < 1 || day > currentDay) {
-    throw Errors.BadRequest("Este día aún no está disponible");
-  }
-
-  // Validate premium track
-  if (track === "premium" && !enrollment.isPremium) {
-    throw Errors.BadRequest(
-      "Necesitas el pase premium para reclamar esta recompensa",
-    );
-  }
-
-  // Check not already claimed
-  const alreadyClaimed = enrollment.claimedRewards.some(
-    (r) => r.day === day && r.track === track,
-  );
-  if (alreadyClaimed) {
-    throw Errors.Conflict("Ya reclamaste esta recompensa");
-  }
-
-  // Find the reward definition
-  const rewards = pass.rewards as unknown as BattlePassRewardDef[];
-  const rewardDef = rewards.find((r) => r.day === day && r.track === track);
-  if (!rewardDef) throw Errors.NotFound("Definición de recompensa");
-
-  // Grant reward inside a transaction
   return prisma.$transaction(async (tx) => {
-    await tx.userBattlePassReward.create({
-      data: {
-        userBattlePassId: enrollment.id,
-        day,
-        track,
-      },
+    const enrollment = await getOrCreateEnrollment(userId, pass.id, tx);
+    if (step < 1 || step > enrollment.steps) {
+      throw Errors.BadRequest("Todavía no llegaste a este paso: avanzas un paso por cada día que entras");
+    }
+    if (track === "premium" && !enrollment.isPremium) {
+      throw Errors.BadRequest("Necesitas el pase premium para reclamar esta recompensa");
+    }
+
+    // ON CONFLICT DO NOTHING: a concurrent claim of the same step inserts nothing and grants nothing
+    const { count } = await tx.userBattlePassReward.createMany({
+      data: [{ userBattlePassId: enrollment.id, day: step, track }],
+      skipDuplicates: true,
     });
+    if (count === 0) throw Errors.Conflict("Ya reclamaste esta recompensa");
 
     const granted = await grantReward(tx, userId, rewardDef);
-    return { day, track, rewardType: rewardDef.rewardType, label: rewardDef.label, granted };
+    return { day: step, step, track, rewardType: rewardDef.rewardType, label: rewardDef.label, granted };
   });
 }
 
@@ -362,38 +301,48 @@ export async function claimReward(
 // Reward granting (inside transaction)
 // =============================================================================
 
-type Tx = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
+const holoCards: Card[] = ALL_CARDS.filter((c) => c.rarity === CardRarity.RareHolo);
 
-async function grantReward(
-  tx: Tx,
-  userId: string,
-  reward: BattlePassRewardDef,
-) {
+/** A random rare-holo the user doesn't own (any quantity); any holo when they own them all. */
+export async function pickUnownedHolo(tx: Db, userId: string): Promise<Card> {
+  const owned = await tx.userCard.findMany({
+    where: { userId, quantity: { gt: 0 }, cardDefId: { in: holoCards.map((c) => c.id) } },
+    select: { cardDefId: true },
+  });
+  const ownedIds = new Set(owned.map((o) => o.cardDefId));
+  const unowned = holoCards.filter((c) => !ownedIds.has(c.id));
+  const pool = unowned.length > 0 ? unowned : holoCards;
+  return pool[randomInt(0, pool.length)];
+}
+
+async function grantReward(tx: Db, userId: string, reward: BattlePassRewardDef) {
+  const label = `Pase de batalla: ${reward.label}`;
   switch (reward.rewardType) {
     case "coins": {
       const amount = reward.amount ?? 0;
-      const { coins: newBalance } = await usersService.addCoins(
-        userId,
-        amount,
-        "battle_pass_reward",
-        `Pase de batalla: ${reward.label}`,
-        tx,
-      );
+      const { coins: newBalance } = await usersService.addCoins(userId, amount, "battle_pass_reward", label, tx);
       return { type: "coins", amount, newBalance };
     }
 
-    case "ticket": {
-      const amount = reward.amount ?? 1;
-      await usersService.addCoupons(userId, amount, "battle_pass_reward", `Pase de batalla: ${reward.label}`, tx);
-      return { type: "ticket", amount };
+    case "pack": {
+      await grantPacks(tx, userId, 1, "battle_pass");
+      return { type: "pack", amount: 1, toInventory: true };
+    }
+
+    case "unowned_holo": {
+      const card = await pickUnownedHolo(tx, userId);
+      await tx.userCard.upsert({
+        where: { userId_cardDefId: { userId, cardDefId: card.id } },
+        update: { quantity: { increment: 1 } },
+        create: { userId, cardDefId: card.id, quantity: 1 },
+      });
+      return { type: "card", cardDefId: card.id, cardName: card.name };
     }
 
     case "card_back": {
       if (!reward.rewardId) throw Errors.BadRequest("Reward missing rewardId");
       await tx.userCardBack.upsert({
-        where: {
-          userId_cardBackId: { userId, cardBackId: reward.rewardId },
-        },
+        where: { userId_cardBackId: { userId, cardBackId: reward.rewardId } },
         update: {},
         create: { userId, cardBackId: reward.rewardId },
       });
@@ -408,36 +357,6 @@ async function grantReward(
         create: { userId, coinId: reward.rewardId },
       });
       return { type: "profile_coin", coinId: reward.rewardId };
-    }
-
-    case "card": {
-      if (!reward.rewardId) throw Errors.BadRequest("Reward missing rewardId");
-      await tx.userCard.upsert({
-        where: {
-          userId_cardDefId: { userId, cardDefId: reward.rewardId },
-        },
-        update: { quantity: { increment: 1 } },
-        create: { userId, cardDefId: reward.rewardId, quantity: 1 },
-      });
-      return { type: "card", cardDefId: reward.rewardId };
-    }
-
-    case "pack": {
-      // Pick a random standard booster (one per set)
-      const ids = boosterService.STANDARD_BOOSTER_IDS;
-      const packId = ids[Math.floor(Math.random() * ids.length)];
-      const packResult = boosterService.openPack(packId);
-
-      // Persist pulled cards to user's collection
-      for (const pulled of packResult.cards) {
-        await tx.userCard.upsert({
-          where: { userId_cardDefId: { userId, cardDefId: pulled.card.id } },
-          update: { quantity: { increment: 1 } },
-          create: { userId, cardDefId: pulled.card.id, quantity: 1 },
-        });
-      }
-
-      return { type: "pack", packId, packName: packResult.packName, cards: packResult.cards };
     }
 
     case "avatar": {
@@ -458,20 +377,6 @@ async function grantReward(
         create: { userId, playmatId: reward.rewardId },
       });
       return { type: "playmat", playmatId: reward.rewardId };
-    }
-
-    case "random_card": {
-      // Pick a random card from the full catalog
-      const { ALL_CARDS: allCards } = await import("@gonzaloaguila/game-core");
-      const randomCard = allCards[Math.floor(Math.random() * allCards.length)];
-      const cardDefId = randomCard.id;
-
-      await tx.userCard.upsert({
-        where: { userId_cardDefId: { userId, cardDefId } },
-        update: { quantity: { increment: 1 } },
-        create: { userId, cardDefId, quantity: 1 },
-      });
-      return { type: "random_card", cardDefId, cardName: randomCard.name };
     }
 
     case "card_skin": {

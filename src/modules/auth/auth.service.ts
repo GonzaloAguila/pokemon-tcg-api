@@ -14,6 +14,9 @@ import {
 import { sendPasswordResetEmail, sendVerificationEmail } from "../../lib/email.js";
 import { Errors } from "../../middleware/error-handler.js";
 import type { RegisterRequest } from "./auth.types.js";
+import { grantWelcomePackage, welcomeGiftLine } from "../economy/economy.service.js";
+import { setStarterDeck } from "../users/users.service.js";
+
 
 const SUPERADMIN_EMAIL = process.env.SUPERADMIN_EMAIL || "";
 const MAX_FAILED_ATTEMPTS = parseInt(
@@ -49,6 +52,8 @@ const profileSelect = {
   coins: true,
   coupons: true,
   rareCandy: true,
+  exchangeTokens: true,
+  loginDays: true,
   level: true,
   experience: true,
   stats: {
@@ -116,20 +121,29 @@ export async function registerUser(data: RegisterRequest) {
       ? "superadmin"
       : "user";
 
-  const created = await prisma.user.create({
-    data: {
-      email: data.email.toLowerCase(),
-      username: data.username,
-      passwordHash,
-      role,
-      provider: "local",
-      starterColor: data.starterColor ?? null,
-      coins: 2000,
-      coupons: 100,
-      termsAcceptedAt: new Date(),
-      stats: { create: {} },
-    },
+  // The account and its welcome package (economy v2) are created together
+  const created = await prisma.$transaction(async (tx) => {
+    const user = await tx.user.create({
+      data: {
+        email: data.email.toLowerCase(),
+        username: data.username,
+        passwordHash,
+        role,
+        provider: "local",
+        termsAcceptedAt: new Date(),
+        stats: { create: {} },
+      },
+    });
+    await grantWelcomePackage(tx, user.id);
+    return user;
   });
+
+  // Starter color sent at signup: same flow as POST /users/me/starter (cards + active deck),
+  // so the account never ends up with a color but no starter cards
+  if (data.starterColor) {
+    // A failure here leaves the account without a starter; POST /users/me/starter can still pick it
+    await setStarterDeck(created.id, data.starterColor).catch((err) => console.error("[register] starter deck failed:", err));
+  }
 
   // Send verification email
   await generateVerificationToken(created.id);
@@ -152,7 +166,7 @@ export async function registerUser(data: RegisterRequest) {
           "",
           "Para que puedas empezar tu aventura, te hemos otorgado:",
           "",
-          "**2.000 PokeCoins** y **100 Cupones** para que explores el mercado, abras sobres y armes tus mazos.",
+          welcomeGiftLine(),
           "",
           "Buena suerte en tus batallas!",
         ].join("\n"),

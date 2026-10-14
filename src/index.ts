@@ -24,6 +24,7 @@ import { adminRouter } from "./modules/admin/index.js";
 import { bugReportRouter } from "./modules/bug-report/index.js";
 import { waitlistRouter } from "./modules/waitlist/index.js";
 import { matchesRouter } from "./modules/matches/index.js";
+import { economyRouter } from "./modules/economy/index.js";
 import { refundUnsettledMatches } from "./modules/matches/matches.service.js";
 import { cleanupOldMessages } from "./modules/chat/chat.service.js";
 
@@ -72,11 +73,11 @@ app.use(
     "/api/packs",
     "/api/battle-pass",
     "/api/achievements",
-    "/api/users/me/claim-daily-coins",
     "/api/users/me/claim-wheel-spin",
     "/api/users/me/claim-slot-spin",
     "/api/users/me/deck-slots",
     "/api/matches",
+    "/api/economy",
   ],
   economyRateLimiter,
 );
@@ -98,6 +99,7 @@ app.use("/api", adminRouter);
 app.use("/api", express.json({ limit: "10mb" }), bugReportRouter);
 app.use("/api", waitlistRouter);
 app.use("/api", matchesRouter);
+app.use("/api", economyRouter);
 // app.use("/api/matchmaking", matchmakingRouter);
 
 // Error handler

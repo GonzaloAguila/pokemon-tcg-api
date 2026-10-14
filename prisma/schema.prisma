@@ -47,8 +47,8 @@ model User {
   resetTokenExpiry DateTime?
 
   // Email verification
-  emailVerified          Boolean   @default(false)
-  verificationToken      String?   @unique
+  emailVerified           Boolean   @default(false)
+  verificationToken       String?   @unique
   verificationTokenExpiry DateTime?
 
   // Account status
@@ -71,9 +71,14 @@ model User {
   avatarPresetId String?
 
   // Economy
-  coins     Int @default(0)
-  coupons   Int @default(0)
-  rareCandy Int @default(0)
+  coins          Int @default(0)
+  coupons        Int @default(0)
+  rareCandy      Int @default(0)
+  // "Fichas de canje": redeemed for a chosen card (economy v2)
+  exchangeTokens Int @default(0)
+
+  // Economy v2: distinct economy days (00:00 Argentina) with a check-in. Never resets.
+  loginDays Int @default(0)
 
   // Level / XP
   level      Int @default(1)
@@ -109,11 +114,11 @@ model User {
   medals           UserMedal[]
   achievements     UserAchievement[]
   decks            Deck[]
-  matchesAsPlayer1 Match[]        @relation("Player1")
-  matchesAsPlayer2 Match[]        @relation("Player2")
-  matchesWon       Match[]        @relation("Winner")
-  roomsAsPlayer1   GameRoom[]     @relation("RoomPlayer1")
-  roomsAsPlayer2   GameRoom[]     @relation("RoomPlayer2")
+  matchesAsPlayer1 Match[]           @relation("Player1")
+  matchesAsPlayer2 Match[]           @relation("Player2")
+  matchesWon       Match[]           @relation("Winner")
+  roomsAsPlayer1   GameRoom[]        @relation("RoomPlayer1")
+  roomsAsPlayer2   GameRoom[]        @relation("RoomPlayer2")
   cards            UserCard[]
   transactions     Transaction[]
   ownedCoins       UserCoin[]
@@ -124,9 +129,12 @@ model User {
   battlePasses     UserBattlePass[]
   dailyPurchases   DailyPurchase[]
   chatMessages     ChatMessage[]
-  sentMessages     SystemMessage[] @relation("SentMessages")
-  receivedMessages SystemMessage[] @relation("ReceivedMessages")
+  sentMessages     SystemMessage[]   @relation("SentMessages")
+  receivedMessages SystemMessage[]   @relation("ReceivedMessages")
   messageReads     MessageRead[]
+  economyClaims    EconomyClaim[]
+  packs            UserPack[]
+  missions         UserMission[]
 
   @@index([providerId, provider])
   @@map("users")
@@ -175,12 +183,18 @@ model Match {
   winReason String? // "prizes", "deck_out", "no_pokemon", "forfeit"
 
   // Economy: coins each player staked (escrowed when the game starts, paid/refunded on settlement)
-  betAmount Int       @default(0)
+  betAmount    Int       @default(0)
   // XP granted to each player when the match was settled
-  player1Xp Int       @default(0)
-  player2Xp Int       @default(0)
+  player1Xp    Int       @default(0)
+  player2Xp    Int       @default(0)
+  // Match coins credited to each player at settlement (daily cap is computed from these)
+  player1Coins Int       @default(0)
+  player2Coins Int       @default(0)
+  // The game passed the anti-farming rules (turn, duration, wins per opponent per day) and
+  // counted for stats, ranking, achievements, XP, match coins and missions
+  counted      Boolean   @default(false)
   // Set exactly once, when stakes, XP and stats were settled (guards against double settlement)
-  settledAt DateTime?
+  settledAt    DateTime?
 
   // Game data (for reconnection & replay)
   gameState  Json? // Full GameState JSON
@@ -256,7 +270,7 @@ model Transaction {
   userId       String
   type         String // "victory", "daily_login", "achievement", "pack_purchase", "trade", "wheel_spin", "slot_spin"
   description  String
-  currency     String   @default("coins") // "coins" | "coupons" | "rareCandy" (rows before 2026-10 are all "coins")
+  currency     String   @default("coins") // "coins" | "coupons" | "rareCandy" | "exchangeTokens" (rows before 2026-10 are all "coins")
   amount       Int // positive = income, negative = expense
   balanceAfter Int // snapshot of balance after transaction
   createdAt    DateTime @default(now())
@@ -357,12 +371,16 @@ model BattlePass {
 }
 
 model UserBattlePass {
-  id             String                 @id @default(uuid())
-  userId         String
-  battlePassId   String
-  activatedAt    DateTime               @default(now())
-  isPremium      Boolean                @default(false)
-  upgradedAt     DateTime?
+  id           String    @id @default(uuid())
+  userId       String
+  battlePassId String
+  activatedAt  DateTime  @default(now())
+  isPremium    Boolean   @default(false)
+  upgradedAt   DateTime?
+  // Economy v2: one step per login day in the month (max 30); rewards are claimed per step
+  steps        Int       @default(0)
+  lastStepDay  String? // economy day ("2026-10-14") of the last step
+
   user           User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
   battlePass     BattlePass             @relation(fields: [battlePassId], references: [id], onDelete: Cascade)
   claimedRewards UserBattlePassReward[]
@@ -393,14 +411,63 @@ model UserBattlePassReward {
 model DailyPurchase {
   id        String   @id @default(uuid())
   userId    String
-  itemKey   String   // e.g. "card:base-25", "cosmetic:coin:charizard"
-  date      String   // "2026-02-09" (UTC date string)
+  itemKey   String // e.g. "card:base-25", "cosmetic:coin:charizard"
+  date      String // economy day "2026-02-09" (00:00 Argentina; UTC before economy v2)
   createdAt DateTime @default(now())
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, itemKey, date])
   @@index([userId, date])
   @@map("daily_purchases")
+}
+
+// =============================================================================
+// Economy v2
+// =============================================================================
+
+// One-time claims (daily pack, check-in, welcome grant, set milestones, weekly mission,
+// Rare Candy weekly conversions...). The unique key makes every claim idempotent and race-safe.
+model EconomyClaim {
+  id        String   @id @default(uuid())
+  userId    String
+  kind      String // "check_in" | "daily_pack" | "welcome" | "set_milestone" | "candy_coins" | ...
+  key       String // economy day, economy week, "base-set:75", ...
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, kind, key])
+  @@index([userId, kind])
+  @@map("economy_claims")
+}
+
+// Unopened booster packs owned by a user (one row per pack).
+model UserPack {
+  id           String    @id @default(uuid())
+  userId       String
+  packId       String? // fixed booster id, or null = the player picks any standard booster
+  source       String // "welcome" | "first_steps" | "login_calendar" | "weekly_mission" | "battle_pass"
+  createdAt    DateTime  @default(now())
+  openedAt     DateTime?
+  openedPackId String?
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, openedAt])
+  @@map("user_packs")
+}
+
+// Daily / weekly mission progress (period = economy day or economy week).
+model UserMission {
+  id          String    @id @default(uuid())
+  userId      String
+  missionId   String
+  period      String
+  progress    Int       @default(0)
+  completedAt DateTime?
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, missionId, period])
+  @@index([userId, period])
+  @@map("user_missions")
 }
 
 // =============================================================================
@@ -460,15 +527,15 @@ model UserAchievement {
 
 model SystemMessage {
   id          String   @id @default(uuid())
-  type        String   // "broadcast" | "personal"
+  type        String // "broadcast" | "personal"
   title       String   @db.VarChar(200)
   content     String   @db.VarChar(2000)
   category    String   @default("info") // "info" | "reward" | "penalty" | "news" | "maintenance"
   senderId    String
   sender      User     @relation("SentMessages", fields: [senderId], references: [id])
-  recipientId String?  // null = broadcast, specific userId = personal
+  recipientId String? // null = broadcast, specific userId = personal
   recipient   User?    @relation("ReceivedMessages", fields: [recipientId], references: [id])
-  metadata    Json?    // optional payload: { coins: 500, reason: "..." }
+  metadata    Json? // optional payload: { coins: 500, reason: "..." }
   createdAt   DateTime @default(now())
 
   reads MessageRead[]
