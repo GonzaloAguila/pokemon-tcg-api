@@ -515,6 +515,13 @@ Already live in production; what it means on this branch:
 - **Draft**: timers, refunds of unplayed drafts, re-entry, `isAdminViewer`, `keepInCollection`
   credit (it locks the players' rows in the same order as the settlement, which runs at the same
   moment when the last game ends), validated forfeit.
+- **Draft tournament**: a bye is a rest, not a win. `draft:withdraw { roomId }` (only in
+  `matching`) charges `ECONOMY.draft.withdrawPenalty` (1000, or what the player has) into the
+  prize pool (`draft_withdraw` transaction), every match of theirs not played is lost
+  (`MatchResult.walkover`), answer `draft:withdrawn { roomId, penalty }`. The pool (entry fees +
+  penalties) is split by `ECONOMY.draft.prizeSplit` and paid once at the end (`draft_prize`);
+  `draft:state` carries `prizePool` and `prizes` (position, coins, withdrawn). Players have 5
+  minutes to show up in a draft game; `draft:matchEnded` carries `gameRoomId`.
 
 ---
 
