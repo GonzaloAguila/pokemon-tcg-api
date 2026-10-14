@@ -34,7 +34,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const card = (name: string, id: string): GameCard => ({ ...(ALL_CARDS.find((c) => c.name === name && c.set === "Base Set")!), id });
 
 async function createDraft(config: Record<string, unknown>) {
-  const admin = await createUser({}, { role: "admin" });
+  const admin = await createUser({}, { role: "admin", permissions: ["rooms:close"] });
   const adminSocket = await server.connect(tokenFor(admin));
   adminSocket.emit("draft:create", { config: { adminPlays: false, ...config } });
   const { roomId } = await nextEvent<{ roomId: string }>(adminSocket, "draft:created");
@@ -195,5 +195,22 @@ describe("bug 13: keepInCollection credits drafted cards once", () => {
     const off = await draftMatch(false);
     await creditDraftedCards(off.room);
     expect(await prisma.userCard.count({ where: { userId: off.a.id } })).toBe(0);
+  });
+});
+
+describe("draft rooms are managed only by admins who can close rooms", () => {
+  it("a news-only moderator can't create nor close a draft room; a rooms:close admin can", async () => {
+    const moderator = await createUser({}, { role: "admin", permissions: ["news"] });
+    const modSocket = await server.connect(tokenFor(moderator));
+    modSocket.emit("draft:create", { config: { adminPlays: false } });
+    expect((await nextEvent<{ message: string }>(modSocket, "draft:error")).message).toBe(
+      "Solo los administradores pueden crear salas de draft",
+    );
+
+    const { roomId } = await createDraft({ entryFee: 0 });
+    const denied = await modSocket.timeout(2000).emitWithAck("draft:delete", { roomId });
+    expect(denied.success).toBe(false);
+    expect(draftRoomManager.getRoom(roomId)).toBeDefined();
+    draftRoomManager.deleteRoom(roomId, "", true);
   });
 });

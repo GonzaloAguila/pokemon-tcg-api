@@ -16,3 +16,14 @@ export const ADMIN_PERMISSIONS = {
 
 export type AdminPermission = typeof ADMIN_PERMISSIONS[keyof typeof ADMIN_PERMISSIONS];
 export const ALL_PERMISSIONS: AdminPermission[] = Object.values(ADMIN_PERMISSIONS);
+
+/** Draft rooms are managed (created, closed from the backoffice) by whoever can close game rooms. */
+export function canManageDraftRooms(account: { role: string; permissions: unknown } | null): boolean {
+  if (!account) return false;
+  if (account.role === "superadmin") return true;
+  return (
+    account.role === "admin" &&
+    Array.isArray(account.permissions) &&
+    account.permissions.includes(ADMIN_PERMISSIONS.ROOMS_CLOSE)
+  );
+}

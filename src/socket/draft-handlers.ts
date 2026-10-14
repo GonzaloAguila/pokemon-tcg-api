@@ -16,6 +16,7 @@ import { lockUsers } from "../modules/users/xp.service.js";
 import { draftSchemas, parsePayload } from "./schemas.js";
 import { requireSocketUser } from "./session-guard.js";
 import { openRoomMatch, settleRoomResult } from "./match-settlement.js";
+import { canManageDraftRooms } from "../modules/admin/permissions.js";
 
 // Singleton draft room manager (exported for game-over reporting)
 export const draftRoomManager = new DraftRoomManager();
@@ -301,12 +302,12 @@ export function registerDraftEvents(
         if (!data) return;
         const config = data.config;
 
-        // Only admins and superadmins can create draft rooms
+        // Only admins who can manage rooms (not news-only moderators) create draft rooms
         const user = await prisma.user.findUnique({
           where: { id: userId },
-          select: { role: true, username: true },
+          select: { role: true, permissions: true, username: true },
         });
-        if (!user || (user.role !== "admin" && user.role !== "superadmin")) {
+        if (!user || !canManageDraftRooms(user)) {
           socket.emit("draft:error", {
             message: "Solo los administradores pueden crear salas de draft",
           });
@@ -440,8 +441,8 @@ export function registerDraftEvents(
         return;
       }
       const { roomId } = data;
-      const account = await prisma.user.findUnique({ where: { id: userId }, select: { role: true } });
-      const isSiteAdmin = account?.role === "admin" || account?.role === "superadmin";
+      const account = await prisma.user.findUnique({ where: { id: userId }, select: { role: true, permissions: true } });
+      const isSiteAdmin = canManageDraftRooms(account);
       draftRoomManager.deleteRoom(roomId, userId, isSiteAdmin);
       socket.emit("draft:roomDeleted", { roomId });
       reply({ success: true });

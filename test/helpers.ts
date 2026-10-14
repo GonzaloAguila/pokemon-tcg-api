@@ -12,6 +12,7 @@ export async function createUser(
     stats?: boolean;
     role?: "user" | "admin" | "superadmin";
     provider?: "local" | "google" | "discord";
+    permissions?: string[];
   } = {},
 ) {
   const tag = randomUUID().slice(0, 8);
@@ -25,6 +26,7 @@ export async function createUser(
       emailVerified: options.emailVerified ?? true,
       role: options.role ?? "user",
       provider: options.provider ?? "local",
+      ...(options.permissions ? { permissions: options.permissions } : {}),
       ...(options.stats ? { stats: { create: {} } } : {}),
     },
   });
