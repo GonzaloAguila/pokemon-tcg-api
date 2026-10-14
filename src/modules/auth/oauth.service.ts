@@ -7,10 +7,10 @@ import {
   type OAuthUser,
 } from "../../lib/oauth.js";
 import { Errors } from "../../middleware/error-handler.js";
+import { startRefreshSession } from "./refresh-sessions.js";
 import { grantWelcomePackage, welcomeGiftLine } from "../economy/economy.service.js";
 import {
   generateAccessToken,
-  generateRefreshToken,
   type TokenPayload,
 } from "../../lib/jwt.js";
 
@@ -139,11 +139,11 @@ export async function handleOAuthCallback(
   // Generate tokens
   const payload = toTokenPayload(user);
   const accessToken = generateAccessToken(payload);
-  const refreshToken = generateRefreshToken(payload);
+  const refreshToken = await startRefreshSession(payload);
 
   await prisma.user.update({
     where: { id: user.id },
-    data: { refreshToken, lastLoginAt: new Date() },
+    data: { lastLoginAt: new Date() },
   });
 
   return { accessToken, refreshToken, isNewUser };

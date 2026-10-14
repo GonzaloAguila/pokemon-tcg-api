@@ -1,5 +1,6 @@
 import { type UserRole, Prisma } from "@prisma/client";
 import { prisma } from "../../lib/prisma.js";
+import { endAllRefreshSessions } from "../auth/refresh-sessions.js";
 import { Errors } from "../../middleware/error-handler.js";
 import { ALL_PERMISSIONS } from "./permissions.js";
 import * as usersService from "../users/users.service.js";
@@ -244,10 +245,11 @@ export async function toggleUserBan(userId: string, banned: boolean, reason?: st
       // Clear suspension if unbanning
       ...(banned ? {} : { suspendedUntil: null, suspendedReason: null }),
       // Increment tokenVersion to invalidate all existing sessions
-      ...(banned ? { tokenVersion: { increment: 1 }, refreshToken: null } : {}),
+      ...(banned ? { tokenVersion: { increment: 1 } } : {}),
     },
     select: { status: true },
   });
+  if (banned) await endAllRefreshSessions(userId);
   applySessionChange(userId, banned ? "Tu cuenta ha sido deshabilitada" : undefined);
   return user;
 }
@@ -265,10 +267,10 @@ export async function suspendUser(userId: string, hours: number, reason?: string
       suspendedUntil,
       suspendedReason: reason || null,
       tokenVersion: { increment: 1 },
-      refreshToken: null,
     },
     select: { status: true, suspendedUntil: true },
   });
+  await endAllRefreshSessions(userId);
   applySessionChange(userId, "Tu cuenta está suspendida");
   return user;
 }

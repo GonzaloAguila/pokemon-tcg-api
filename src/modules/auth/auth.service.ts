@@ -7,7 +7,6 @@ import {
 } from "../../lib/password.js";
 import {
   generateAccessToken,
-  generateRefreshToken,
   verifyRefreshToken,
   type TokenPayload,
 } from "../../lib/jwt.js";
@@ -18,6 +17,7 @@ import { Errors } from "../../middleware/error-handler.js";
 import type { RegisterRequest } from "./auth.types.js";
 import { grantWelcomePackage, welcomeGiftLine } from "../economy/economy.service.js";
 import { setStarterDeck } from "../users/users.service.js";
+import { endAllRefreshSessions, endRefreshSession, startRefreshSession, useRefreshSession } from "./refresh-sessions.js";
 
 
 const SUPERADMIN_EMAIL = process.env.SUPERADMIN_EMAIL || "";
@@ -182,11 +182,11 @@ export async function registerUser(data: RegisterRequest) {
 
   const payload = toTokenPayload(created);
   const accessToken = generateAccessToken(payload);
-  const refreshToken = generateRefreshToken(payload);
+  const refreshToken = await startRefreshSession(payload);
 
   const user = await prisma.user.update({
     where: { id: created.id },
-    data: { refreshToken, lastLoginAt: new Date() },
+    data: { lastLoginAt: new Date() },
     select: profileSelect,
   });
 
@@ -262,14 +262,13 @@ export async function loginUser(email: string, password: string) {
   // Success — reset failed attempts
   const payload = toTokenPayload(user);
   const accessToken = generateAccessToken(payload);
-  const refreshToken = generateRefreshToken(payload);
+  const refreshToken = await startRefreshSession(payload);
 
   const updatedUser = await prisma.user.update({
     where: { id: user.id },
     data: {
       failedLoginAttempts: 0,
       lockedUntil: null,
-      refreshToken,
       lastLoginAt: new Date(),
     },
     select: profileSelect,
@@ -305,8 +304,8 @@ export async function refreshAccessToken(refreshToken: string) {
     throw Errors.Unauthorized("Cuenta suspendida");
   }
 
-  // Check stored refresh token matches
-  if (user.refreshToken !== refreshToken) {
+  // A live session of this device (logout or a revocation deletes it)
+  if (!(await useRefreshSession(user.id, refreshToken))) {
     throw Errors.Unauthorized("Refresh token no válido");
   }
 
@@ -316,11 +315,9 @@ export async function refreshAccessToken(refreshToken: string) {
   return { accessToken };
 }
 
-export async function logoutUser(userId: string) {
-  await prisma.user.update({
-    where: { id: userId },
-    data: { refreshToken: null },
-  });
+/** Ends this device's session only (other devices stay logged in). */
+export async function logoutUser(refreshToken: string | undefined) {
+  if (refreshToken) await endRefreshSession(refreshToken);
 }
 
 export async function changePassword(
@@ -354,8 +351,8 @@ export async function changePassword(
   });
   const payload = toTokenPayload(updated);
   const accessToken = generateAccessToken(payload);
-  const refreshToken = generateRefreshToken(payload);
-  await prisma.user.update({ where: { id: userId }, data: { refreshToken } });
+  await endAllRefreshSessions(userId);
+  const refreshToken = await startRefreshSession(payload);
   invalidateAccountState(userId);
   return { accessToken, refreshToken };
 }
@@ -413,11 +410,11 @@ export async function resetPassword(token: string, newPassword: string) {
       resetTokenExpiry: null,
       failedLoginAttempts: 0,
       lockedUntil: null,
-      refreshToken: null,
       tokenVersion: { increment: 1 },
     },
   });
   if (count === 0) throw Errors.BadRequest("Token de restablecimiento inválido");
+  await endAllRefreshSessions(user.id);
   invalidateAccountState(user.id);
   disconnectUserSockets(user.id, "Tu contraseña cambió. Inicia sesión de nuevo.");
 }

@@ -127,7 +127,7 @@ router.post(
   requireAuth,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      await authService.logoutUser(req.user!.userId);
+      await authService.logoutUser(req.cookies?.refreshToken);
       clearRefreshCookie(res);
       res.json({ message: "Sesión cerrada correctamente" });
     } catch (err) {

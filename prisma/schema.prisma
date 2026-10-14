@@ -38,9 +38,8 @@ model User {
   provider   AuthProvider @default(local)
   providerId String?
 
-  // Session management
-  refreshToken String? @db.Text
-  tokenVersion Int     @default(0)
+  // Session management (refresh tokens live in refresh_sessions, one row per logged-in device)
+  tokenVersion Int @default(0)
 
   // Password reset
   resetToken       String?   @unique
@@ -136,9 +135,26 @@ model User {
   packs            UserPack[]
   missions         UserMission[]
   newsPosts        NewsPost[]        @relation("NewsAuthor")
+  refreshSessions  RefreshSession[]
 
   @@index([providerId, provider])
   @@map("users")
+}
+
+// One row per logged-in device: the SHA-256 of its refresh token. Logging in elsewhere adds a
+// row (it doesn't end other sessions); logout deletes its own row; a tokenVersion bump (ban,
+// suspension, password change/reset) deletes them all.
+model RefreshSession {
+  id         String   @id @default(uuid())
+  userId     String
+  tokenHash  String   @unique
+  createdAt  DateTime @default(now())
+  lastUsedAt DateTime @default(now())
+  expiresAt  DateTime
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_sessions")
 }
 
 // =============================================================================

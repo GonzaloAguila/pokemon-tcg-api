@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import jwt, { type SignOptions } from "jsonwebtoken";
 import type { UserRole } from "@prisma/client";
 
@@ -25,8 +26,10 @@ export function generateAccessToken(payload: TokenPayload): string {
 }
 
 export function generateRefreshToken(payload: TokenPayload): string {
+  // jwtid: two logins of the same account in the same second still get distinct tokens
   return jwt.sign(payload, JWT_SECRET + "_refresh", {
     expiresIn: REFRESH_TOKEN_EXPIRES_IN,
+    jwtid: randomUUID(),
   } as SignOptions);
 }
 
