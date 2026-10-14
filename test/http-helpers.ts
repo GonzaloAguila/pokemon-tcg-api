@@ -16,19 +16,22 @@ export async function startHttpApp(mount: (app: express.Express) => void) {
   const base = `http://127.0.0.1:${port}`;
 
   return {
-    async request(method: string, path: string, opts: { token?: string; body?: unknown } = {}) {
+    async request(method: string, path: string, opts: { token?: string; body?: unknown; cookie?: string } = {}) {
       const res = await fetch(base + path, {
         method,
         headers: {
           ...(opts.token ? { authorization: `Bearer ${opts.token}` } : {}),
           ...(opts.body !== undefined ? { "content-type": "application/json" } : {}),
+          ...(opts.cookie ? { cookie: opts.cookie } : {}),
         },
         body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
       });
       const text = await res.text();
       let json: any = null;
       try { json = text ? JSON.parse(text) : null; } catch { json = text; }
-      return { status: res.status, body: json };
+      // "name=value" of the first Set-Cookie (the refresh token on auth routes)
+      const cookie = res.headers.get("set-cookie")?.split(";")[0] ?? null;
+      return { status: res.status, body: json, cookie };
     },
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
   };

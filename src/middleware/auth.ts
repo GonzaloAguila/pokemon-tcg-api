@@ -60,6 +60,23 @@ export function requireAuth(
 }
 
 /**
+ * Require a verified email for economy actions (purchases, claims, rewards, spins, market,
+ * battle pass, achievement claims). Must be used after requireAuth. OAuth accounts count as
+ * verified (the provider verified the email). Login, profile reads, deck building and playing
+ * don't use it. Rejects with 403 { code: "EMAIL_NOT_VERIFIED" }.
+ */
+export function requireVerifiedEmail(req: Request, _res: Response, next: NextFunction): void {
+  if (!req.user) return next(Errors.Unauthorized("Token de acceso requerido"));
+  prisma.user
+    .findUnique({ where: { id: req.user.userId }, select: { emailVerified: true, provider: true } })
+    .then((user) => {
+      if (!user) return next(Errors.Unauthorized("Usuario no encontrado"));
+      if (user.provider === "local" && !user.emailVerified) return next(Errors.EmailNotVerified());
+      next();
+    }, next);
+}
+
+/**
  * Require one of the specified roles. Must be used after requireAuth.
  */
 export function requireRole(...roles: UserRole[]): RequestHandler {

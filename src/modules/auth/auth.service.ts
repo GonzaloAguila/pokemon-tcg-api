@@ -12,6 +12,8 @@ import {
   type TokenPayload,
 } from "../../lib/jwt.js";
 import { sendPasswordResetEmail, sendVerificationEmail } from "../../lib/email.js";
+import { invalidateAccountState } from "../../lib/account-state.js";
+import { disconnectUserSockets } from "../../socket/io-registry.js";
 import { Errors } from "../../middleware/error-handler.js";
 import type { RegisterRequest } from "./auth.types.js";
 
@@ -131,8 +133,10 @@ export async function registerUser(data: RegisterRequest) {
     },
   });
 
-  // Send verification email
-  await generateVerificationToken(created.id);
+  // Send verification email (a delivery failure is logged; the user can ask for it again)
+  await generateVerificationToken(created.id).catch((err) =>
+    console.error(`[auth] verification email for ${created.id} not sent:`, err),
+  );
 
   // Send welcome system message (non-blocking)
   try {
@@ -327,11 +331,19 @@ export async function changePassword(
     throw Errors.ValidationError(strength.errors.join(". "));
   }
 
+  // A new password revokes every session (tokenVersion + stored refresh token); the session
+  // that changed it gets fresh tokens so it stays logged in
   const passwordHash = await hashPassword(newPassword);
-  await prisma.user.update({
+  const updated = await prisma.user.update({
     where: { id: userId },
-    data: { passwordHash },
+    data: { passwordHash, tokenVersion: { increment: 1 } },
   });
+  const payload = toTokenPayload(updated);
+  const accessToken = generateAccessToken(payload);
+  const refreshToken = generateRefreshToken(payload);
+  await prisma.user.update({ where: { id: userId }, data: { refreshToken } });
+  invalidateAccountState(userId);
+  return { accessToken, refreshToken };
 }
 
 export async function requestPasswordReset(email: string) {
@@ -353,7 +365,9 @@ export async function requestPasswordReset(email: string) {
     data: { resetToken, resetTokenExpiry },
   });
 
-  await sendPasswordResetEmail(user.email, user.username, resetToken);
+  await sendPasswordResetEmail(user.email, user.username, resetToken).catch((err) =>
+    console.error(`[auth] password reset email for ${user.id} not sent:`, err),
+  );
 }
 
 export async function resetPassword(token: string, newPassword: string) {
@@ -375,16 +389,23 @@ export async function resetPassword(token: string, newPassword: string) {
   }
 
   const passwordHash = await hashPassword(newPassword);
-  await prisma.user.update({
-    where: { id: user.id },
+  // One-time token (conditional on it still being there) and every session revoked: a stolen
+  // refresh cookie or access token stops working once the password is reset
+  const { count } = await prisma.user.updateMany({
+    where: { id: user.id, resetToken: token },
     data: {
       passwordHash,
       resetToken: null,
       resetTokenExpiry: null,
       failedLoginAttempts: 0,
       lockedUntil: null,
+      refreshToken: null,
+      tokenVersion: { increment: 1 },
     },
   });
+  if (count === 0) throw Errors.BadRequest("Token de restablecimiento invalido");
+  invalidateAccountState(user.id);
+  disconnectUserSockets(user.id, "Tu contraseña cambió. Inicia sesión de nuevo.");
 }
 
 // ---------------------------------------------------------------------------
@@ -409,7 +430,15 @@ export async function generateVerificationToken(userId: string) {
   await sendVerificationEmail(user.email, user.username, verificationToken);
 }
 
-export async function verifyEmail(token: string) {
+/** How long a used verification link still answers "already verified". */
+const VERIFIED_TOKEN_GRACE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Verify the email of the token's account. Idempotent: the used token is kept (with a new
+ * expiry of VERIFIED_TOKEN_GRACE_MS) so opening the link again (mail scanners, a second click)
+ * answers { alreadyVerified: true } instead of "invalid token".
+ */
+export async function verifyEmail(token: string): Promise<{ alreadyVerified: boolean }> {
   const user = await prisma.user.findUnique({
     where: { verificationToken: token },
   });
@@ -418,10 +447,13 @@ export async function verifyEmail(token: string) {
     throw Errors.BadRequest("Token de verificacion invalido");
   }
 
-  if (
-    !user.verificationTokenExpiry ||
-    user.verificationTokenExpiry < new Date()
-  ) {
+  const now = new Date();
+  if (user.emailVerified) {
+    if (user.verificationTokenExpiry && user.verificationTokenExpiry >= now) return { alreadyVerified: true };
+    throw Errors.BadRequest("Token de verificacion invalido");
+  }
+
+  if (!user.verificationTokenExpiry || user.verificationTokenExpiry < now) {
     throw Errors.BadRequest("Token de verificacion expirado");
   }
 
@@ -429,10 +461,10 @@ export async function verifyEmail(token: string) {
     where: { id: user.id },
     data: {
       emailVerified: true,
-      verificationToken: null,
-      verificationTokenExpiry: null,
+      verificationTokenExpiry: new Date(now.getTime() + VERIFIED_TOKEN_GRACE_MS),
     },
   });
+  return { alreadyVerified: false };
 }
 
 export async function resendVerificationEmail(email: string) {
@@ -449,5 +481,7 @@ export async function resendVerificationEmail(email: string) {
   // OAuth users don't need verification
   if (user.provider !== "local") return;
 
-  await generateVerificationToken(user.id);
+  await generateVerificationToken(user.id).catch((err) =>
+    console.error(`[auth] verification email for ${user.id} not sent:`, err),
+  );
 }

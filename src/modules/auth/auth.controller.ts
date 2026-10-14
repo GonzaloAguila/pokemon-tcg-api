@@ -197,12 +197,14 @@ router.post(
         );
       }
 
-      await authService.changePassword(
+      // Every other session is revoked; this one continues with the new tokens
+      const tokens = await authService.changePassword(
         req.user!.userId,
         parsed.data.currentPassword,
         parsed.data.newPassword,
       );
-      res.json({ message: "Contrasena cambiada correctamente" });
+      setRefreshCookie(res, tokens.refreshToken);
+      res.json({ message: "Contrasena cambiada correctamente", accessToken: tokens.accessToken });
     } catch (err) {
       next(err);
     }
@@ -219,8 +221,13 @@ router.get(
         throw Errors.ValidationError("Token de verificacion requerido");
       }
 
-      await authService.verifyEmail(token);
-      res.json({ message: "Correo electronico verificado correctamente" });
+      const { alreadyVerified } = await authService.verifyEmail(token);
+      res.json({
+        message: alreadyVerified
+          ? "Tu correo electronico ya estaba verificado"
+          : "Correo electronico verificado correctamente",
+        alreadyVerified,
+      });
     } catch (err) {
       next(err);
     }

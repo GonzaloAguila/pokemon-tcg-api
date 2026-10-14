@@ -29,6 +29,7 @@ import {
   endTurn,
   executeRetreat,
   doMulligan,
+  hasBasicPokemon,
   setPlayerReady,
   startPlayingPhase,
   promoteActivePokemon,
@@ -86,9 +87,13 @@ interface CreatorInfo {
   titleId: string | null;
 }
 
-interface GameRoom {
+export interface GameRoom {
   id: string;
   status: "waiting" | "ready" | "playing" | "finished";
+
+  // The game's result was recorded (stats, achievements, draft standings): once per room,
+  // whatever the end path (game over, surrender, kick, disconnect, setup timeout, draft forfeit)
+  resultSettled?: boolean;
 
   // Players
   player1Id: string | null;
@@ -129,8 +134,46 @@ interface GameRoom {
   pendingTrainer?: PendingTrainerRecord;
 }
 
-type PlayerKey = "player1" | "player2";
+export type PlayerKey = "player1" | "player2";
 type Coin = "heads" | "tails";
+
+/** joinRoom on a room that doesn't exist (finished, deleted, or lost in an API restart). */
+export class RoomNotFoundError extends Error {
+  readonly code = "ROOM_NOT_FOUND";
+  constructor() {
+    super("La partida ya no existe");
+    this.name = "RoomNotFoundError";
+  }
+}
+
+/**
+ * The player the game is waiting on (the one a turn-timer kick targets), from the stored
+ * state (player 1's perspective), or null when nobody / both:
+ * - MULLIGAN/SETUP: the only player not ready yet (both or neither ready: null);
+ * - whoever owes a pending answer: a Trainer step or an attack choice asked to the other
+ *   player (Challenge!, Terror Strike), a promotion (also off-turn, after a Knock Out) or a
+ *   Prize. If both players owe something (each could promote first), null: nobody may be
+ *   kicked while they themselves keep the game waiting;
+ * - otherwise the side whose turn it is (its own pending choices included).
+ */
+export function awaitedSide(state: GameState | null | undefined): PlayerKey | null {
+  if (!state || state.gamePhase === "GAME_OVER") return null;
+  if (state.gamePhase === "MULLIGAN" || state.gamePhase === "SETUP") {
+    if (state.playerReady === state.opponentReady) return null;
+    return state.playerReady ? "player2" : "player1";
+  }
+  const turnSide: PlayerKey = state.isPlayerTurn ? "player1" : "player2";
+  const otherSide: PlayerKey = turnSide === "player1" ? "player2" : "player1";
+  const trainerChoice = pendingTrainerChoiceOf(state);
+  if (trainerChoice) return trainerChoice.chooser === "opponent" ? otherSide : turnSide;
+  if (state.pendingAttackChoice) return state.pendingAttackChoice.step.chooser === "opponent" ? otherSide : turnSide;
+  const player1Owes = state.playerNeedsToPromote || state.playerCanTakePrize;
+  const player2Owes = state.opponentNeedsToPromote || state.opponentCanTakePrize;
+  if (player1Owes && player2Owes) return null;
+  if (player1Owes) return "player1";
+  if (player2Owes) return "player2";
+  return turnSide;
+}
 /** Who flipped a coin: "attacker" = the player acting (attack, Trainer, retreat), "defender" = the other one. */
 type Flipper = "attacker" | "defender";
 interface CoinFlipInfo {
@@ -418,6 +461,8 @@ function neutralizeEvents(
 
 const FORFEIT_TIMEOUT_MS = 120_000; // 2 minutes
 const SETUP_TIMEOUT_MS = 90_000; // 90 seconds for opponent to finish setup
+/** A waiting room whose creator disconnected (closed / reloaded the lobby) is deleted after this. */
+const WAITING_ROOM_GRACE_MS = 15_000;
 
 type ForfeitCallback = (
   roomId: string,
@@ -426,23 +471,56 @@ type ForfeitCallback = (
   reason?: string,
 ) => void;
 
+/** A room removed by the manager itself (e.g. its creator left the lobby): refresh the room list. */
+type RoomClosedCallback = (roomId: string) => void;
+
+export interface GameRoomManagerOptions {
+  /** How long a waiting room survives its creator's disconnect (default WAITING_ROOM_GRACE_MS). */
+  waitingRoomGraceMs?: number;
+}
+
 export class GameRoomManager {
   private rooms: Map<string, GameRoom> = new Map();
   private socketToRoom: Map<string, string> = new Map();
   private forfeitTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private cleanupTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
+  private waitingRoomTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private setupTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private setupTimerStartTimes: Map<string, number> = new Map(); // roomId → Date.now()
   private onForfeitCallback: ForfeitCallback | null = null;
+  private onRoomClosedCallback: RoomClosedCallback | null = null;
+  private readonly waitingRoomGraceMs: number;
 
   /** @param flipCoin - where every coin of this manager's games comes from (tests pass a scripted one) */
-  constructor(private readonly flipCoin: CoinSource = serverCoin) {}
+  constructor(private readonly flipCoin: CoinSource = serverCoin, options: GameRoomManagerOptions = {}) {
+    this.waitingRoomGraceMs = options.waitingRoomGraceMs ?? WAITING_ROOM_GRACE_MS;
+  }
 
   /**
    * Set the callback for when a player forfeits due to disconnect timeout.
    */
   setOnForfeit(callback: ForfeitCallback): void {
     this.onForfeitCallback = callback;
+  }
+
+  /** Set the callback for rooms the manager removes on its own (waiting room of a creator who left). */
+  setOnRoomClosed(callback: RoomClosedCallback): void {
+    this.onRoomClosedCallback = callback;
+  }
+
+  /** Whose seat in `room` belongs to `userId`, or null. */
+  seatOf(room: GameRoom, userId: string): PlayerKey | null {
+    if (room.player1Id === userId) return "player1";
+    if (room.player2Id === userId) return "player2";
+    return null;
+  }
+
+  /** userId of the player the game is waiting on (see awaitedSide), or null. */
+  getAwaitingUserId(room: GameRoom): string | null {
+    const side = room.status === "playing" ? awaitedSide(room.gameState) : null;
+    if (side === "player1") return room.player1Id;
+    if (side === "player2") return room.player2Id;
+    return null;
   }
 
   /**
@@ -491,14 +569,13 @@ export class GameRoomManager {
   }
 
   /**
-   * Join an existing room or create if doesn't exist
+   * Join an existing room: reconnect to your seat, or take the free one. A room that doesn't
+   * exist is never created here (RoomNotFoundError): the client asking for it is rejoining a
+   * game that is gone (e.g. after an API restart), and rooms only come from createRoom.
    */
   async joinRoom(roomId: string, userId: string, socketId: string, displayInfo?: Partial<CreatorInfo>): Promise<GameRoom> {
-    let room = this.rooms.get(roomId);
-
-    if (!room) {
-      room = this.createRoom(roomId);
-    }
+    const room = this.rooms.get(roomId);
+    if (!room) throw new RoomNotFoundError();
 
     // Check reservation (only for new player2 joins, not reconnects)
     if (room.config.reservedUserId && room.player1Id && !room.player2Id && room.config.reservedUserId !== userId && room.player1Id !== userId) {
@@ -511,6 +588,7 @@ export class GameRoomManager {
       this.socketToRoom.set(socketId, roomId);
       this.cancelForfeitTimer(roomId, "player1");
       this.cancelCleanupTimer(roomId);
+      this.cancelWaitingRoomTimer(roomId);
       return room;
     }
     if (room.player2Id === userId) {
@@ -524,6 +602,14 @@ export class GameRoomManager {
     // Check if room is full
     if (room.player1Id && room.player2Id) {
       throw new Error("Room is full");
+    }
+
+    // A waiting room whose creator left the lobby is about to be deleted: nobody would play you
+    if (this.waitingRoomTimers.has(roomId)) {
+      throw new Error("El creador de la mesa no está conectado");
+    }
+    if (room.status !== "waiting") {
+      throw new Error("La partida ya comenzó");
     }
 
     // Add player to room
@@ -570,6 +656,7 @@ export class GameRoomManager {
 
     // Remove room if empty
     if (!room.player1Id && !room.player2Id) {
+      this.cancelWaitingRoomTimer(roomId);
       this.rooms.delete(roomId);
     }
 
@@ -771,6 +858,9 @@ export class GameRoomManager {
   ): { success: true; results: Coin[]; result: Coin; flippedBy?: Flipper[] } | { success: false; error: string } {
     const room = this.rooms.get(roomId);
     if (!room?.gameState) return { success: false, error: "Game not started" };
+    if (room.status === "finished" || room.gameState.gamePhase === "GAME_OVER") {
+      return { success: false, error: "La partida ya terminó" };
+    }
     const key = room.player1SocketId === socketId ? "player1" : room.player2SocketId === socketId ? "player2" : null;
     if (!key) return { success: false, error: "Not a player in this room" };
     const isMyTurn = key === "player1" ? room.gameState.isPlayerTurn : !room.gameState.isPlayerTurn;
@@ -840,6 +930,11 @@ export class GameRoomManager {
     const room = this.rooms.get(roomId);
     if (!room) return { success: false, error: "Room not found" };
     if (!room.gameState) return { success: false, error: "Game not started" };
+    // A finished game takes no more actions: no surrender after the end (a second gameOver
+    // with the other winner), no promotion of the loser, no farming wins on a dead room
+    if (room.status === "finished" || room.gameState.gamePhase === "GAME_OVER") {
+      return { success: false, error: "La partida ya terminó" };
+    }
 
     // Determine which player is acting
     const isPlayer1 = room.player1SocketId === socketId;
@@ -894,6 +989,24 @@ export class GameRoomManager {
       // Allow setup actions during MULLIGAN/SETUP phase regardless of turn
       if (!isSetupPhase || !setupActions.includes(action.type)) {
         return { success: false, error: "Not your turn" };
+      }
+    }
+
+    // Mulligan and "ready" only belong to the opening (before PLAYING). A mulligan needs a hand
+    // without Basic Pokémon (game-core hasBasicPokemon: anything playable as a Basic) and
+    // nothing placed yet; ready needs an Active.
+    if (action.type === "mulligan" || action.type === "playerReady") {
+      if (room.gameState.gamePhase !== "MULLIGAN" && (action.type === "mulligan" || room.gameState.gamePhase !== "SETUP")) {
+        return { success: false, error: "La preparación de la partida ya terminó" };
+      }
+      const alreadyReady = isPlayer1 ? room.gameState.playerReady : room.gameState.opponentReady;
+      if (alreadyReady) return { success: false, error: "Ya estás listo" };
+      const view = isPlayer1 ? room.gameState : swapSides(room.gameState);
+      if (action.type === "mulligan") {
+        if (view.playerActivePokemon) return { success: false, error: "Ya colocaste tu Pokémon activo" };
+        if (hasBasicPokemon(view.playerHand)) return { success: false, error: "Tienes un Pokémon básico en la mano: no puedes hacer mulligan" };
+      } else if (!view.playerActivePokemon) {
+        return { success: false, error: "Primero coloca tu Pokémon activo" };
       }
     }
 
@@ -1441,6 +1554,12 @@ export class GameRoomManager {
 
     this.socketToRoom.delete(socketId);
 
+    // The creator left the lobby (closed or reloaded the tab) while waiting for an opponent:
+    // the room is hidden at once and deleted unless they come back within the grace period
+    if (disconnectedSide === "player1" && room.status === "waiting") {
+      this.startWaitingRoomTimer(roomId);
+    }
+
     // Start forfeit timer if game is in progress
     if (disconnectedSide && room.status === "playing" && room.gameState) {
       this.startForfeitTimer(roomId, disconnectedSide);
@@ -1452,6 +1571,24 @@ export class GameRoomManager {
     }
 
     return roomId;
+  }
+
+  /**
+   * A game started for players who may not be connected (draft rounds are created server-side):
+   * whoever has no socket gets the usual forfeit timer, so an absent player can't block the
+   * game (and the draft round) forever.
+   */
+  ensureForfeitTimers(roomId: string): void {
+    const room = this.rooms.get(roomId);
+    if (!room || room.status !== "playing") return;
+    if (!room.player1SocketId) {
+      room.player1SocketId = null;
+      this.startForfeitTimer(roomId, "player1");
+    }
+    if (!room.player2SocketId) {
+      room.player2SocketId = null;
+      this.startForfeitTimer(roomId, "player2");
+    }
   }
 
   /**
@@ -1620,6 +1757,30 @@ export class GameRoomManager {
     this.cleanupTimers.set(roomId, timer);
   }
 
+  /** Delete a waiting room if its creator is still disconnected after the grace period. */
+  private startWaitingRoomTimer(roomId: string): void {
+    this.cancelWaitingRoomTimer(roomId);
+    const timer = setTimeout(() => {
+      this.waitingRoomTimers.delete(roomId);
+      const room = this.rooms.get(roomId);
+      if (!room || room.status !== "waiting" || room.player1SocketId) return;
+      console.log(`🗑️ Waiting room ${roomId} deleted (creator left the lobby)`);
+      this.rooms.delete(roomId);
+      if (room.player2SocketId) this.socketToRoom.delete(room.player2SocketId);
+      this.onRoomClosedCallback?.(roomId);
+    }, this.waitingRoomGraceMs);
+    timer.unref?.();
+    this.waitingRoomTimers.set(roomId, timer);
+  }
+
+  private cancelWaitingRoomTimer(roomId: string): void {
+    const timer = this.waitingRoomTimers.get(roomId);
+    if (timer) {
+      clearTimeout(timer);
+      this.waitingRoomTimers.delete(roomId);
+    }
+  }
+
   /**
    * Cancel cleanup timer (a player reconnected).
    */
@@ -1672,7 +1833,7 @@ export class GameRoomManager {
   getAvailableRooms(): GameRoom[] {
     const rooms: GameRoom[] = [];
     for (const room of this.rooms.values()) {
-      if (room.status === "waiting" && !room.player2Id) {
+      if (room.status === "waiting" && !room.player2Id && !this.waitingRoomTimers.has(room.id)) {
         rooms.push(room);
       }
     }
@@ -1680,12 +1841,13 @@ export class GameRoomManager {
   }
 
   /**
-   * Get all active rooms (waiting or playing)
+   * Get all active rooms (waiting or playing). Waiting rooms whose creator left the lobby
+   * (about to be deleted) are not listed.
    */
   getActiveRooms(): GameRoom[] {
     const rooms: GameRoom[] = [];
     for (const room of this.rooms.values()) {
-      if (room.status === "waiting" || room.status === "playing") {
+      if ((room.status === "waiting" && !this.waitingRoomTimers.has(room.id)) || room.status === "playing") {
         rooms.push(room);
       }
     }
@@ -1693,24 +1855,27 @@ export class GameRoomManager {
   }
 
   /**
-   * Delete a room (only creator can delete)
+   * Delete a room before its game starts. Only its creator (player 1, by user id: they may
+   * come back from another socket / a reloaded lobby) can.
    */
-  deleteRoom(roomId: string, socketId: string): boolean {
+  deleteRoom(roomId: string, userId: string): boolean {
     const room = this.rooms.get(roomId);
     if (!room) return false;
 
     // Only player 1 (creator) can delete the room
-    if (room.player1SocketId !== socketId) {
+    if (!room.player1Id || room.player1Id !== userId) {
       return false;
     }
 
     // Can only delete if game hasn't started
-    if (room.status === "playing") {
+    if (room.status !== "waiting") {
       return false;
     }
 
+    this.cancelWaitingRoomTimer(roomId);
     this.rooms.delete(roomId);
-    this.socketToRoom.delete(socketId);
+    if (room.player1SocketId) this.socketToRoom.delete(room.player1SocketId);
+    if (room.player2SocketId) this.socketToRoom.delete(room.player2SocketId);
     return true;
   }
 
@@ -1722,6 +1887,7 @@ export class GameRoomManager {
     if (!room) return false;
     // Clean up timers and socket mappings
     this.cancelSetupTimer(roomId);
+    this.cancelWaitingRoomTimer(roomId);
     if (room.player1SocketId) this.socketToRoom.delete(room.player1SocketId);
     if (room.player2SocketId) this.socketToRoom.delete(room.player2SocketId);
     this.rooms.delete(roomId);
@@ -1746,16 +1912,12 @@ export class GameRoomManager {
       return { success: false, error: "Not a player in this room" };
     }
 
-    // Only the player the game is waiting for can be kicked: the side whose turn it is, unless
-    // a pending step asks the other player (Challenge!, Terror Strike) — then the turn's player
-    // is the one waiting and may kick
-    const turnIsPlayer1 = room.gameState.isPlayerTurn;
-    const otherPlayerAnswers =
-      pendingTrainerChoiceOf(room.gameState)?.chooser === "opponent" ||
-      room.gameState.pendingAttackChoice?.step.chooser === "opponent";
-    const waitingOnPlayer1 = otherPlayerAnswers ? !turnIsPlayer1 : turnIsPlayer1;
-    if (waitingOnPlayer1 === isPlayer1) {
-      return { success: false, error: "Solo puedes expulsar cuando es el turno del rival" };
+    // Only the player the game is waiting on can be kicked (awaitedSide): the side whose turn
+    // it is, or whoever owes a pending promotion / Prize / off-turn answer (Challenge!, Terror
+    // Strike, promoting after a Knock Out). Never the player who is waiting.
+    const awaited = awaitedSide(room.gameState);
+    if (!awaited || awaited === (isPlayer1 ? "player1" : "player2")) {
+      return { success: false, error: "Solo puedes expulsar al rival cuando la partida lo está esperando" };
     }
 
     // Check if turn timer has expired

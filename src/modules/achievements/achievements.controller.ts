@@ -1,5 +1,5 @@
 import { Router, type Request, type Response, type NextFunction } from "express";
-import { requireAuth } from "../../middleware/auth.js";
+import { requireAuth, requireVerifiedEmail } from "../../middleware/auth.js";
 import * as achievementsService from "./achievements.service.js";
 
 const router = Router();
@@ -28,6 +28,7 @@ router.post(
 router.post(
   "/achievements/claim/:achievementId",
   requireAuth,
+  requireVerifiedEmail,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const result = await achievementsService.claimAchievement(

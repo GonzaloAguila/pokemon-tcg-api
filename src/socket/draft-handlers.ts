@@ -7,9 +7,10 @@
 
 import type { Server, Socket } from "socket.io";
 import type { z } from "zod";
-import { DraftRoomManager } from "./draft-rooms.js";
+import { DraftRoomManager, catalogIdOf, type DraftClosedInfo, type DraftRoom } from "./draft-rooms.js";
 import { GameRoomManager } from "./rooms.js";
-import { maskGameStateForPlayer } from "./state-masking.js";
+import { maskRoomState } from "./room-state.js";
+import { settleRoomResult } from "./match-settlement.js";
 import { prisma } from "../lib/prisma.js";
 import * as usersService from "../modules/users/users.service.js";
 import { draftSchemas, parsePayload } from "./schemas.js";
@@ -99,6 +100,8 @@ export async function createMatchGames(
     console.log(
       `🎮 Draft match R${roundNumber}-M${pairing.matchNumber}: ${p1.name} vs ${p2.name} → room ${gameRoomId}`,
     );
+    // A player who isn't connected right now has the usual time to come back
+    gameRoomManager.ensureForfeitTimers(gameRoomId);
 
     // Store pending match info for reconnection
     draftRoomManager.setPendingMatchInfo(draftRoomId, p1.id, {
@@ -126,7 +129,7 @@ export async function createMatchGames(
         userId: p1.id,
         isPlayer1: true,
         opponentName: p2.name,
-        gameState: maskGameStateForPlayer(gameState, "player1"),
+        gameState: maskRoomState(gameRoomManager, gameRoom, gameState, "player1"),
       });
     }
 
@@ -139,7 +142,7 @@ export async function createMatchGames(
         userId: p2.id,
         isPlayer1: false,
         opponentName: p1.name,
-        gameState: maskGameStateForPlayer(gameState, "player2"),
+        gameState: maskRoomState(gameRoomManager, gameRoom, gameState, "player2"),
       });
     }
   }
@@ -154,6 +157,76 @@ async function refundDraftEntry(playerIds: string[], entryFee: number) {
     await usersService.addCoins(playerIds[0], entryFee, "draft_refund", "Reintegro de inscripcion a draft");
     playerIds.shift();
   }
+}
+
+/**
+ * keepInCollection: every player still in the draft gets their drafted cards (packs + bonus
+ * picks; not the basic Energy added while building) in ONE transaction, once per room.
+ */
+export async function creditDraftedCards(room: DraftRoom): Promise<void> {
+  if (!room.config.keepInCollection || room.cardsCredited) return;
+  room.cardsCredited = true;
+
+  const grants: { userId: string; cardDefId: string; quantity: number }[] = [];
+  for (const player of room.players) {
+    const counts = new Map<string, number>();
+    for (const card of player.draftedCards) {
+      const cardDefId = catalogIdOf(card);
+      if (cardDefId) counts.set(cardDefId, (counts.get(cardDefId) ?? 0) + 1);
+    }
+    for (const [cardDefId, quantity] of counts) grants.push({ userId: player.id, cardDefId, quantity });
+  }
+  if (grants.length === 0) return;
+
+  try {
+    // Accounts deleted meanwhile are skipped (their rows would fail the whole transaction)
+    const existing = await prisma.user.findMany({
+      where: { id: { in: [...new Set(grants.map((g) => g.userId))] } },
+      select: { id: true },
+    });
+    const alive = new Set(existing.map((u) => u.id));
+    await prisma.$transaction(
+      grants
+        .filter((g) => alive.has(g.userId))
+        .map((g) =>
+          prisma.userCard.upsert({
+            where: { userId_cardDefId: { userId: g.userId, cardDefId: g.cardDefId } },
+            create: { userId: g.userId, cardDefId: g.cardDefId, quantity: g.quantity },
+            update: { quantity: { increment: g.quantity } },
+          }),
+        ),
+    );
+    console.log(`🎴 Draft ${room.id}: drafted cards credited to ${alive.size} players`);
+  } catch (err) {
+    console.error(`[draft] Could not credit the drafted cards of room ${room.id}:`, err);
+  }
+}
+
+/**
+ * A draft room closed: tell its clients, refund the entry fees when no tournament was played
+ * (unplayed), or credit the drafted cards when the draft itself was completed.
+ */
+async function onDraftRoomClosed(io: Server, room: DraftRoom, info: DraftClosedInfo): Promise<void> {
+  io.to(room.id).emit("draft:roomClosed", { roomId: room.id, reason: info.reason });
+  for (const p of room.players) {
+    if (p.socketId) io.to(p.socketId).emit("draft:roomClosed", { roomId: room.id, reason: info.reason });
+  }
+  io.in(room.id).socketsLeave(room.id);
+  broadcastRoomList(io);
+  if (info.unplayed) {
+    if (room.entryPaidIds.length > 0) {
+      await refundDraftEntry(room.entryPaidIds, room.config.entryFee).catch((err) =>
+        console.error(`[draft] Refund of room ${room.id} failed:`, err),
+      );
+    }
+  } else {
+    await creditDraftedCards(room);
+  }
+}
+
+/** The user id of the verified handshake token, or null. */
+function getSocketUserId(socket: Socket): string | null {
+  return socket.data.user?.userId ?? null;
 }
 
 /**
@@ -182,8 +255,22 @@ export function registerDraftEvents(
   socket: Socket,
   gameRoomManager: GameRoomManager,
 ): void {
-  // Set up the broadcast callback (idempotent)
+  // Set up the broadcast callback and the hooks for steps the draft takes by itself
+  // (timers, grace periods) — idempotent
   draftRoomManager.setBroadcast((roomId) => broadcastDraftState(io, roomId));
+  draftRoomManager.setHooks({
+    onTournamentStart: (room) => {
+      createMatchGames(io, room.id, room.tournament?.currentRoundNumber ?? 1, gameRoomManager).catch((err) => {
+        console.error("Error creating draft match games:", err);
+      });
+    },
+    onRoomClosed: (room, info) => {
+      onDraftRoomClosed(io, room, info).catch((err) => console.error("[draft] close failed:", err));
+    },
+    onFinished: (room) => {
+      creditDraftedCards(room).catch((err) => console.error("[draft] credit failed:", err));
+    },
+  });
 
   // --------------------------------------------------------------------------
   // Lobby
@@ -293,7 +380,9 @@ export function registerDraftEvents(
               userId,
               isPlayer1: pendingMatch.isPlayer1,
               opponentName: pendingMatch.opponentName,
-              gameState: maskGameStateForPlayer(
+              gameState: maskRoomState(
+                gameRoomManager,
+                gameRoom,
                 gameRoom.gameState,
                 pendingMatch.isPlayer1 ? "player1" : "player2",
               ),
@@ -324,21 +413,33 @@ export function registerDraftEvents(
     }
   });
 
-  socket.on("draft:delete", async (payload: unknown) => {
+  // draft:delete { roomId } (ack optional): the draft's admin from any socket, or a site
+  // admin from the backoffice. Success: draft:roomDeleted { roomId } to the requester (+ ack
+  // { success: true }); failure: draft:error { message } (+ ack { success: false, error }).
+  socket.on("draft:delete", async (payload: unknown, ack?: (res: unknown) => void) => {
+    const reply = typeof ack === "function" ? ack : () => {};
     try {
-      if (!(await requireDraftUser(socket))) return;
-      const data = parseDraft(socket, draftSchemas.roomRef, payload);
-      if (!data) return;
-      const { roomId } = data;
-      const deleted = draftRoomManager.deleteRoom(roomId, socket.id);
-
-      if (deleted) {
-        io.to(roomId).emit("draft:roomClosed");
-        broadcastRoomList(io);
-        console.log(`🗑️ Draft room ${roomId} deleted`);
+      const userId = await requireDraftUser(socket);
+      if (!userId) {
+        reply({ success: false, error: "Autenticación requerida" });
+        return;
       }
+      const data = parseDraft(socket, draftSchemas.roomRef, payload);
+      if (!data) {
+        reply({ success: false, error: "Datos invalidos" });
+        return;
+      }
+      const { roomId } = data;
+      const account = await prisma.user.findUnique({ where: { id: userId }, select: { role: true } });
+      const isSiteAdmin = account?.role === "admin" || account?.role === "superadmin";
+      draftRoomManager.deleteRoom(roomId, userId, isSiteAdmin);
+      socket.emit("draft:roomDeleted", { roomId });
+      reply({ success: true });
+      console.log(`🗑️ Draft room ${roomId} deleted by ${userId}`);
     } catch (error) {
-      socket.emit("draft:error", { message: (error as Error).message });
+      const message = (error as Error).message;
+      socket.emit("draft:error", { message });
+      reply({ success: false, error: message });
     }
   });
 
@@ -356,7 +457,8 @@ export function registerDraftEvents(
     let entryFee = 0;
     try {
       // Authorize and validate BEFORE charging anyone (throws -> draft:error)
-      const room = draftRoomManager.assertCanStart(roomId, socket.id);
+      const userId = getSocketUserId(socket);
+      const room = draftRoomManager.assertCanStart(roomId, userId ?? "");
       startingRooms.add(roomId);
       entryFee = room.config.entryFee;
 
@@ -393,7 +495,7 @@ export function registerDraftEvents(
         }
       }
 
-      draftRoomManager.startDraft(roomId, socket.id);
+      draftRoomManager.startDraft(roomId, userId ?? "", charged);
       broadcastDraftState(io, roomId);
       broadcastRoomList(io); // room no longer visible in lobby
 
@@ -444,20 +546,9 @@ export function registerDraftEvents(
         const data = parseDraft(socket, draftSchemas.submitDeck, payload);
         if (!data) return;
         const { roomId, deckCardIds, energyCards } = data;
-        const room = draftRoomManager.submitDeck(roomId, socket.id, deckCardIds, energyCards);
+        // When this was the last deck, the tournament starts (onTournamentStart creates the games)
+        draftRoomManager.submitDeck(roomId, socket.id, deckCardIds, energyCards);
         broadcastDraftState(io, roomId);
-
-        // If phase just changed to matching, create game rooms for round 1
-        if (room.phase === "matching" && room.tournament) {
-          createMatchGames(
-            io,
-            roomId,
-            room.tournament.currentRoundNumber,
-            gameRoomManager,
-          ).catch((err) => {
-            console.error("Error creating draft match games:", err);
-          });
-        }
       } catch (error) {
         socket.emit("draft:error", { message: (error as Error).message });
       }
@@ -472,20 +563,34 @@ export function registerDraftEvents(
     "draft:forfeit",
     async (payload: unknown) => {
       try {
-        if (!(await requireDraftUser(socket))) return;
+        const userId = await requireDraftUser(socket);
+        if (!userId) return;
         const data = parseDraft(socket, draftSchemas.forfeit, payload);
         if (!data) return;
         const { draftRoomId, gameRoomId } = data;
         const draftInfo = draftRoomManager.getDraftInfoForGameRoom(gameRoomId);
-        if (!draftInfo) return;
+        if (!draftInfo || draftInfo.draftRoomId !== draftRoomId) {
+          socket.emit("draft:error", { message: "Partida de draft no encontrada" });
+          return;
+        }
 
-        // Determine who is forfeiting (the socket caller) and who wins
+        // Only one of that game's two players can forfeit it (by user id, never the socket's
+        // seat in the draft: anyone in the draft could otherwise end someone else's game)
+        if (userId !== draftInfo.player1Id && userId !== draftInfo.player2Id) {
+          socket.emit("draft:error", { message: "No juegas esta partida" });
+          return;
+        }
+
         const draftRoom = draftRoomManager.getRoom(draftRoomId);
         if (!draftRoom) return;
 
-        const forfeitingPlayer = draftRoom.players.find(
-          (p) => p.socketId === socket.id,
-        );
+        const gameRoomBefore = gameRoomManager.getRoom(gameRoomId);
+        if (gameRoomBefore && (gameRoomBefore.status !== "playing" || gameRoomBefore.resultSettled)) {
+          socket.emit("draft:error", { message: "La partida ya terminó" });
+          return;
+        }
+
+        const forfeitingPlayer = draftRoom.players.find((p) => p.id === userId);
         if (!forfeitingPlayer) return;
 
         const winnerId =
@@ -509,9 +614,12 @@ export function registerDraftEvents(
           (p) => p.id === winnerId,
         );
 
-        // End the game room
+        // End the game room; the forfeiter loses (stats recorded once)
         const gameRoom = gameRoomManager.getRoom(gameRoomId);
         if (gameRoom) {
+          gameRoom.status = "finished";
+          const winnerSide = winnerId === gameRoom.player1Id ? "player1" : "player2";
+          settleRoomResult(io, gameRoom, winnerSide, `${forfeitingPlayer.name} abandonó la partida`, { isDraft: true });
           io.to(gameRoomId).emit("gameOver", {
             winner: winnerId === draftInfo.player1Id ? "player1" : "player2",
             reason: `${forfeitingPlayer.name} abandonó la partida`,

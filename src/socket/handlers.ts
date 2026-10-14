@@ -7,8 +7,10 @@ import {
   getDeckById as getThemeDeckById,
   decks as themeDeckList,
 } from "@gonzaloaguila/game-core";
-import { GameRoomManager } from "./rooms.js";
-import { maskGameStateForPlayer } from "./state-masking.js";
+import type { GameState } from "@gonzaloaguila/game-core";
+import { GameRoomManager, RoomNotFoundError, type GameRoom, type PlayerKey } from "./rooms.js";
+import { maskRoomState } from "./room-state.js";
+import type { Viewer } from "./state-masking.js";
 import { titleIdFromStats } from "../modules/users/titles.js";
 import { checkDeckPlayable } from "../modules/decks/decks.service.js";
 import {
@@ -16,8 +18,7 @@ import {
   draftRoomManager,
   createMatchGames,
 } from "./draft-handlers.js";
-import { recordMatchResult } from "../modules/users/users.service.js";
-import { checkAndUpdateProgress } from "../modules/achievements/achievements.service.js";
+import { settleRoomResult } from "./match-settlement.js";
 import { socketSchemas, parsePayload } from "./schemas.js";
 import { setIo, userRoom } from "./io-registry.js";
 import { authenticateHandshake, checkSocketSession, kickBlockedUser, requireSocketUser } from "./session-guard.js";
@@ -176,6 +177,61 @@ async function resolveAndStartGame(roomManager: GameRoomManager, roomId: string)
 export const roomManager = new GameRoomManager();
 roomManager.startPeriodicCleanup();
 
+/** The state `viewer` receives for this room: masked, plus `awaitingUserId` (room-state.ts). */
+function stateFor(room: GameRoom, state: GameState, viewer: Viewer) {
+  return maskRoomState(roomManager, room, state, viewer);
+}
+
+/**
+ * A game ended (game over, kick, disconnect forfeit, setup timeout): tell the room, record the
+ * result once (match-settlement.ts) and, for a draft match, report it to the draft (once: the
+ * draft forgets the game room when its result is reported) and start the next round.
+ */
+function finishRoomGame(io: Server, roomId: string, winner: PlayerKey, reason: string, forfeit: boolean): void {
+  const room = roomManager.getRoom(roomId);
+  if (!room || room.resultSettled) return;
+
+  io.to(roomId).emit("gameOver", { winner, reason });
+
+  const draftInfo = draftRoomManager.getDraftInfoForGameRoom(roomId);
+  settleRoomResult(io, room, winner, reason, { isDraft: !!draftInfo });
+  if (!draftInfo) return;
+
+  const winnerId = winner === "player1" ? draftInfo.player1Id : draftInfo.player2Id;
+  const loserId = winner === "player1" ? draftInfo.player2Id : draftInfo.player1Id;
+  const { newRoundStarted } = draftRoomManager.reportMatchResult(
+    draftInfo.draftRoomId,
+    draftInfo.roundNumber,
+    draftInfo.matchNumber,
+    winnerId,
+    loserId,
+    roomId,
+  );
+  draftRoomManager.clearPendingMatchInfo(draftInfo.draftRoomId, winnerId);
+  draftRoomManager.clearPendingMatchInfo(draftInfo.draftRoomId, loserId);
+
+  const draftRoom = draftRoomManager.getRoom(draftInfo.draftRoomId);
+  if (draftRoom) {
+    for (const p of draftRoom.players) {
+      if (p.socketId) {
+        io.to(p.socketId).emit("draft:matchEnded", {
+          draftRoomId: draftInfo.draftRoomId,
+          winnerId,
+          loserId,
+          forfeit,
+          tournamentFinished: draftRoom.phase === "finished",
+        });
+      }
+    }
+  }
+
+  if (newRoundStarted && draftRoom?.tournament) {
+    createMatchGames(io, draftInfo.draftRoomId, draftRoom.tournament.currentRoundNumber, roomManager).catch((err) => {
+      console.error("Error creating next round games:", err);
+    });
+  }
+}
+
 /** Serialize a room for the lobby room list */
 function serializeRoom(r: ReturnType<typeof roomManager.getRoom>) {
   if (!r) return null;
@@ -320,6 +376,7 @@ export function setupSocketHandlers(io: Server): void {
         const { deckId, prizeCount, betAmount, reservedUserId, friendly } = parsed.data;
         const identity = await getPlayableIdentity(userId);
         if ("error" in identity) { socket.emit("error", { message: identity.error }); return; }
+        // A seat requires a deck (checkDeckPlayable rejects a missing one)
         const deckError = await checkDeckPlayable(userId, deckId);
         if (deckError) { socket.emit("error", { message: deckError }); return; }
         const room = roomManager.createRoom(
@@ -352,18 +409,24 @@ export function setupSocketHandlers(io: Server): void {
 
     socket.on("deleteRoom", async (payload: unknown) => {
       try {
-        if (!getAuthUserId(socket)) { socket.emit("error", { message: "Autenticacion requerida" }); return; }
+        const userId = getAuthUserId(socket);
+        if (!userId) { socket.emit("error", { message: "Autenticacion requerida" }); return; }
         const parsed = parsePayload(socketSchemas.roomRef, payload);
         if (!parsed.ok) { socket.emit("error", { message: parsed.error }); return; }
         const { roomId } = parsed.data;
         const room = roomManager.getRoom(roomId);
-        console.log(`[deleteRoom] Room state:`, room ? { player1SocketId: room.player1SocketId, status: room.status } : 'not found');
-        const deleted = roomManager.deleteRoom(roomId, socket.id);
+        console.log(`[deleteRoom] Room state:`, room ? { player1Id: room.player1Id, status: room.status } : 'not found');
+        // By user id: the creator may come back from another socket (a reloaded lobby)
+        const deleted = roomManager.deleteRoom(roomId, userId);
         console.log(`[deleteRoom] Delete result: ${deleted}`);
 
         if (deleted) {
           socket.leave(roomId);
           socket.emit("roomDeleted", { roomId });
+          if (room?.player1SocketId && room.player1SocketId !== socket.id) {
+            io.in(room.player1SocketId).socketsLeave(roomId);
+            io.to(room.player1SocketId).emit("roomDeleted", { roomId });
+          }
 
           broadcastRoomList(io);
 
@@ -387,10 +450,21 @@ export function setupSocketHandlers(io: Server): void {
         const parsed = parsePayload(socketSchemas.joinRoom, payload);
         if (!parsed.ok) { socket.emit("error", { message: parsed.error }); return; }
         const { roomId, deckId } = parsed.data;
+        // Never create a room here: the client is rejoining a game that is gone (finished,
+        // deleted, or lost in an API restart). The frontend goes back to the lobby.
+        const target = roomManager.getRoom(roomId);
+        if (!target) {
+          socket.emit("error", { code: "ROOM_NOT_FOUND", message: new RoomNotFoundError().message });
+          return;
+        }
         const identity = await getPlayableIdentity(userId);
         if ("error" in identity) { socket.emit("error", { message: identity.error }); return; }
-        const deckError = await checkDeckPlayable(userId, deckId);
-        if (deckError) { socket.emit("error", { message: deckError }); return; }
+        // Taking a seat requires a playable deck; reconnecting to your own seat doesn't
+        const seated = roomManager.seatOf(target, userId) !== null;
+        if (!seated || deckId) {
+          const deckError = await checkDeckPlayable(userId, deckId);
+          if (deckError) { socket.emit("error", { message: deckError }); return; }
+        }
 
         // Auto-close any waiting room the user owns before joining another
         const existingWaitingRoom = roomManager.findWaitingRoomByUser(userId);
@@ -409,8 +483,8 @@ export function setupSocketHandlers(io: Server): void {
           status: room.status,
         });
 
-        // Set deck if provided
-        if (deckId) {
+        // Set deck if provided (only before the game starts)
+        if (deckId && room.status === "waiting") {
           roomManager.setPlayerDeck(roomId, socket.id, deckId);
         }
 
@@ -446,7 +520,7 @@ export function setupSocketHandlers(io: Server): void {
           // Send current game state to the reconnecting player
           socket.emit("gameStart", {
             roomId,
-            gameState: maskGameStateForPlayer(room.gameState, isPlayer1 ? "player1" : "player2"),
+            gameState: stateFor(room, room.gameState, isPlayer1 ? "player1" : "player2"),
             isPlayer1,
             opponentInfo: isPlayer1 ? room.joiner : room.creator,
             playerVariantMap: isPlayer1 ? p1Variants : p2Variants,
@@ -476,7 +550,7 @@ export function setupSocketHandlers(io: Server): void {
           // Send masked state to each player
           io.to(room.player1SocketId!).emit("gameStart", {
             roomId,
-            gameState: maskGameStateForPlayer(gameState, "player1"),
+            gameState: stateFor(room, gameState, "player1"),
             isPlayer1: true,
             opponentInfo: room.joiner,
             playerVariantMap: p1Variants,
@@ -486,7 +560,7 @@ export function setupSocketHandlers(io: Server): void {
           });
           io.to(room.player2SocketId!).emit("gameStart", {
             roomId,
-            gameState: maskGameStateForPlayer(gameState, "player2"),
+            gameState: stateFor(room, gameState, "player2"),
             isPlayer1: false,
             opponentInfo: room.creator,
             playerVariantMap: p2Variants,
@@ -498,6 +572,10 @@ export function setupSocketHandlers(io: Server): void {
           console.log(`🎮 Game auto-started in room ${roomId}`);
         }
       } catch (error) {
+        if (error instanceof RoomNotFoundError) {
+          socket.emit("error", { code: error.code, message: error.message });
+          return;
+        }
         socket.emit("error", { message: (error as Error).message });
       }
     });
@@ -529,12 +607,18 @@ export function setupSocketHandlers(io: Server): void {
         const parsed = parsePayload(socketSchemas.roomRef, payload);
         if (!parsed.ok) { socket.emit("error", { message: parsed.error }); return; }
         const { roomId } = parsed.data;
+        // Legacy lobby "ready": only before the game starts (it would restart a running or
+        // finished game otherwise)
+        if (roomManager.getRoom(roomId)?.status !== "waiting") {
+          socket.emit("error", { message: "La partida ya comenzó" });
+          return;
+        }
         const room = await roomManager.setPlayerReady(roomId, socket.id);
 
         socket.to(roomId).emit("playerReady", { socketId: socket.id });
 
         // Check if both players ready
-        if (room.player1Ready && room.player2Ready) {
+        if (room.player1Ready && room.player2Ready && room.status === "waiting") {
           const gameState = await resolveAndStartGame(roomManager, roomId);
 
           // Build variant maps from deck entries
@@ -545,7 +629,7 @@ export function setupSocketHandlers(io: Server): void {
 
           // Send masked state to each player
           io.to(room.player1SocketId!).emit("gameStart", {
-            gameState: maskGameStateForPlayer(gameState, "player1"),
+            gameState: stateFor(room, gameState, "player1"),
             opponentInfo: room.joiner,
             playerVariantMap: p1Variants,
             opponentVariantMap: p2Variants,
@@ -553,7 +637,7 @@ export function setupSocketHandlers(io: Server): void {
             turnTimerDuration: room.turnTimerDuration,
           });
           io.to(room.player2SocketId!).emit("gameStart", {
-            gameState: maskGameStateForPlayer(gameState, "player2"),
+            gameState: stateFor(room, gameState, "player2"),
             opponentInfo: room.creator,
             playerVariantMap: p2Variants,
             opponentVariantMap: p1Variants,
@@ -661,14 +745,14 @@ export function setupSocketHandlers(io: Server): void {
 
           if (room.player1SocketId) {
             io.to(room.player1SocketId).emit("gameState", {
-              gameState: maskGameStateForPlayer(result.gameState, "player1"),
+              gameState: stateFor(room, result.gameState, "player1"),
               turnStartedAt: room.turnStartedAt,
               turnTimerDuration: room.turnTimerDuration,
             });
           }
           if (room.player2SocketId) {
             io.to(room.player2SocketId).emit("gameState", {
-              gameState: maskGameStateForPlayer(result.gameState, "player2"),
+              gameState: stateFor(room, result.gameState, "player2"),
               turnStartedAt: room.turnStartedAt,
               turnTimerDuration: room.turnTimerDuration,
             });
@@ -676,7 +760,7 @@ export function setupSocketHandlers(io: Server): void {
 
           // Send state to spectators (player1 perspective)
           if (room.spectators && room.spectators.size > 0) {
-            const spectatorState = maskGameStateForPlayer(result.gameState, "spectator");
+            const spectatorState = stateFor(room, result.gameState, "spectator");
             for (const specSocketId of room.spectators) {
               io.to(specSocketId).emit("gameState", {
                 gameState: spectatorState,
@@ -687,87 +771,10 @@ export function setupSocketHandlers(io: Server): void {
           }
         }
 
-        // Check for game over
-        if (result.gameOver) {
-          io.to(roomId).emit("gameOver", {
-            winner: result.winner,
-            reason: result.winReason,
-          });
-
-          // Persist win/loss stats to database (skip for friendly matches)
-          const draftInfo =
-            draftRoomManager.getDraftInfoForGameRoom(roomId);
-          const room = roomManager.getRoom(roomId);
-          if (room?.player1Id && room?.player2Id && result.winner && !room.config.friendly) {
-            const mode = draftInfo ? "draft" as const : "normal" as const;
-            const winnerId = result.winner === "player1" ? room.player1Id : room.player2Id;
-            const loserId = result.winner === "player1" ? room.player2Id : room.player1Id;
-            recordMatchResult(winnerId, mode, true).then(() => checkAndUpdateProgress(winnerId)).catch(console.error);
-            recordMatchResult(loserId, mode, false).then(() => checkAndUpdateProgress(loserId)).catch(console.error);
-          }
-
-          // Report result to draft system if this was a draft match
-          if (draftInfo && result.winner) {
-            const winnerId =
-              result.winner === "player1"
-                ? draftInfo.player1Id
-                : draftInfo.player2Id;
-            const loserId =
-              result.winner === "player1"
-                ? draftInfo.player2Id
-                : draftInfo.player1Id;
-
-            const { newRoundStarted } =
-              draftRoomManager.reportMatchResult(
-                draftInfo.draftRoomId,
-                draftInfo.roundNumber,
-                draftInfo.matchNumber,
-                winnerId,
-                loserId,
-                roomId,
-              );
-
-            const draftRoom = draftRoomManager.getRoom(
-              draftInfo.draftRoomId,
-            );
-
-            // Clear pending match info
-            draftRoomManager.clearPendingMatchInfo(
-              draftInfo.draftRoomId,
-              winnerId,
-            );
-            draftRoomManager.clearPendingMatchInfo(
-              draftInfo.draftRoomId,
-              loserId,
-            );
-
-            // Notify players about the draft match ending
-            if (draftRoom) {
-              for (const p of draftRoom.players) {
-                if (p.socketId) {
-                  io.to(p.socketId).emit("draft:matchEnded", {
-                    draftRoomId: draftInfo.draftRoomId,
-                    winnerId,
-                    loserId,
-                    forfeit: false,
-                    tournamentFinished: draftRoom.phase === "finished",
-                  });
-                }
-              }
-            }
-
-            // Create games for next round if needed
-            if (newRoundStarted && draftRoom?.tournament) {
-              createMatchGames(
-                io,
-                draftInfo.draftRoomId,
-                draftRoom.tournament.currentRoundNumber,
-                roomManager,
-              ).catch((err) => {
-                console.error("Error creating next round games:", err);
-              });
-            }
-          }
+        // Game over: executeAction reports it once (a finished room takes no more actions);
+        // finishRoomGame records the result and the draft standing once
+        if (result.gameOver && result.winner) {
+          finishRoomGame(io, roomId, result.winner, result.winReason ?? "Fin de la partida", false);
         }
 
         socket.emit("actionResult", { success: true });
@@ -854,65 +861,13 @@ export function setupSocketHandlers(io: Server): void {
         const { roomId } = parsed.data;
         const result = roomManager.requestKick(roomId, socket.id);
 
-        if (!result.success) {
+        if (!result.success || !result.winner) {
           socket.emit("error", { message: result.error || "Cannot kick" });
           return;
         }
 
-        // Emit game over to room
-        io.to(roomId).emit("gameOver", {
-          winner: result.winner,
-          reason: "Tiempo agotado",
-        });
-
-        // Persist win/loss stats to database (skip for friendly matches)
-        const room = roomManager.getRoom(roomId);
-        const draftInfo = draftRoomManager.getDraftInfoForGameRoom(roomId);
-        if (room?.player1Id && room?.player2Id && result.winner && !room.config.friendly) {
-          const mode = draftInfo ? "draft" as const : "normal" as const;
-          const winnerId = result.winner === "player1" ? room.player1Id : room.player2Id;
-          const loserId = result.winner === "player1" ? room.player2Id : room.player1Id;
-          recordMatchResult(winnerId, mode, true).then(() => checkAndUpdateProgress(winnerId)).catch(console.error);
-          recordMatchResult(loserId, mode, false).then(() => checkAndUpdateProgress(loserId)).catch(console.error);
-        }
-
-        // Report to draft system if applicable
-        if (draftInfo && result.winner) {
-          const winnerId = result.winner === "player1" ? draftInfo.player1Id : draftInfo.player2Id;
-          const loserId = result.winner === "player1" ? draftInfo.player2Id : draftInfo.player1Id;
-
-          const { newRoundStarted } = draftRoomManager.reportMatchResult(
-            draftInfo.draftRoomId,
-            draftInfo.roundNumber,
-            draftInfo.matchNumber,
-            winnerId,
-            loserId,
-            roomId,
-          );
-
-          draftRoomManager.clearPendingMatchInfo(draftInfo.draftRoomId, winnerId);
-          draftRoomManager.clearPendingMatchInfo(draftInfo.draftRoomId, loserId);
-
-          const draftRoom = draftRoomManager.getRoom(draftInfo.draftRoomId);
-
-          if (draftRoom) {
-            for (const p of draftRoom.players) {
-              if (p.socketId) {
-                io.to(p.socketId).emit("draft:matchEnded", {
-                  draftRoomId: draftInfo.draftRoomId,
-                  winnerId,
-                  loserId,
-                  forfeit: true,
-                  tournamentFinished: draftRoom.phase === "finished",
-                });
-              }
-            }
-          }
-
-          if (newRoundStarted && draftRoom?.tournament) {
-            createMatchGames(io, draftInfo.draftRoomId, draftRoom.tournament.currentRoundNumber, roomManager).catch(console.error);
-          }
-        }
+        // gameOver to the room, result and draft standing recorded once
+        finishRoomGame(io, roomId, result.winner, "Tiempo agotado", true);
 
         broadcastRoomList(io);
         console.log(`⏱️ Player kicked from room ${roomId} — winner: ${result.winner}`);
@@ -943,7 +898,7 @@ export function setupSocketHandlers(io: Server): void {
         if (room.gameState) {
           socket.emit("gameStart", {
             roomId,
-            gameState: maskGameStateForPlayer(room.gameState, "spectator"),
+            gameState: stateFor(room, room.gameState, "spectator"),
             isPlayer1: true, // spectator sees from P1 perspective
             isSpectator: true,
             opponentInfo: room.joiner,
@@ -997,72 +952,16 @@ export function setupSocketHandlers(io: Server): void {
     registerDraftEvents(io, socket, roomManager);
   });
 
-  // Set up forfeit callback for disconnect timeout
-  roomManager.setOnForfeit((roomId, winner, gameState, reason) => {
-    io.to(roomId).emit("gameOver", {
-      winner,
-      reason: reason || "Oponente desconectado (tiempo de espera agotado)",
-    });
+  // Set up forfeit callback for disconnect timeout (and the setup timeout): gameOver to the
+  // room, result and draft standing recorded once
+  roomManager.setOnForfeit((roomId, winner, _gameState, reason) => {
+    finishRoomGame(io, roomId, winner, reason || "Oponente desconectado (tiempo de espera agotado)", true);
+  });
 
-    // Persist win/loss stats to database (skip for friendly matches)
-    const room = roomManager.getRoom(roomId);
-    const draftInfo = draftRoomManager.getDraftInfoForGameRoom(roomId);
-    if (room?.player1Id && room?.player2Id && !room.config.friendly) {
-      const mode = draftInfo ? "draft" as const : "normal" as const;
-      const winnerId = winner === "player1" ? room.player1Id : room.player2Id;
-      const loserId = winner === "player1" ? room.player2Id : room.player1Id;
-      recordMatchResult(winnerId, mode, true).then(() => checkAndUpdateProgress(winnerId)).catch(console.error);
-      recordMatchResult(loserId, mode, false).then(() => checkAndUpdateProgress(loserId)).catch(console.error);
-    }
-
-    // Report to draft system if this was a draft match
-    if (draftInfo) {
-      const winnerId =
-        winner === "player1" ? draftInfo.player1Id : draftInfo.player2Id;
-      const loserId =
-        winner === "player1" ? draftInfo.player2Id : draftInfo.player1Id;
-
-      const { newRoundStarted } = draftRoomManager.reportMatchResult(
-        draftInfo.draftRoomId,
-        draftInfo.roundNumber,
-        draftInfo.matchNumber,
-        winnerId,
-        loserId,
-        roomId,
-      );
-
-      // Clear pending match info
-      draftRoomManager.clearPendingMatchInfo(draftInfo.draftRoomId, winnerId);
-      draftRoomManager.clearPendingMatchInfo(draftInfo.draftRoomId, loserId);
-
-      const draftRoom = draftRoomManager.getRoom(draftInfo.draftRoomId);
-
-      // Notify draft players about the match ending
-      if (draftRoom) {
-        for (const p of draftRoom.players) {
-          if (p.socketId) {
-            io.to(p.socketId).emit("draft:matchEnded", {
-              draftRoomId: draftInfo.draftRoomId,
-              winnerId,
-              loserId,
-              forfeit: true,
-              tournamentFinished: draftRoom.phase === "finished",
-            });
-          }
-        }
-      }
-
-      // Create games for next round if needed
-      if (newRoundStarted && draftRoom?.tournament) {
-        createMatchGames(
-          io,
-          draftInfo.draftRoomId,
-          draftRoom.tournament.currentRoundNumber,
-          roomManager,
-        ).catch((err) => {
-          console.error("Error creating next round games:", err);
-        });
-      }
-    }
+  // A waiting room deleted by the manager (its creator left the lobby): refresh the lobbies
+  roomManager.setOnRoomClosed((roomId) => {
+    io.to(roomId).emit("roomDeleted", { roomId });
+    io.in(roomId).socketsLeave(roomId);
+    broadcastRoomList(io);
   });
 }

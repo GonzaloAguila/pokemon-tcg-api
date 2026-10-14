@@ -1,3 +1,4 @@
+import { getSetById } from "@gonzaloaguila/game-core";
 import { prisma } from "../../lib/prisma.js";
 import * as usersService from "../users/users.service.js";
 import { Errors } from "../../middleware/error-handler.js";
@@ -90,6 +91,12 @@ const ACHIEVEMENT_DEFS: AchievementDef[] = [
   { id: "legend-50", name: "Leyenda Viviente",     tier: "legend", progressTarget: 49,   checker: "meta" },
 ];
 
+/**
+ * The "collection" achievements (Coleccionista Novato, Coleccionista, Colección 75%, Colección
+ * Completa: 102 cards) are about the Base Set: only its cards count, whatever else is owned.
+ */
+const COLLECTION_SET_CARD_IDS: string[] = (getSetById("base-set")?.cards ?? []).map((card) => card.id);
+
 // ---------------------------------------------------------------------------
 // Public interfaces
 // ---------------------------------------------------------------------------
@@ -131,7 +138,7 @@ export async function checkAndUpdateProgress(userId: string): Promise<ClaimableA
         bestStreak: true,
       },
     }),
-    prisma.userCard.count({ where: { userId } }),
+    prisma.userCard.count({ where: { userId, cardDefId: { in: COLLECTION_SET_CARD_IDS }, quantity: { gt: 0 } } }),
     prisma.userAchievement.findMany({
       where: { userId },
       select: { achievementId: true, progress: true, unlockedAt: true },

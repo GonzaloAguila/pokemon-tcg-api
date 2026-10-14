@@ -1,6 +1,6 @@
 import { Router, type Request, type Response, type NextFunction } from "express";
 import { z } from "zod";
-import { requireAuth } from "../../middleware/auth.js";
+import { requireAuth, requireVerifiedEmail } from "../../middleware/auth.js";
 import { Errors } from "../../middleware/error-handler.js";
 import * as marketService from "./market.service.js";
 
@@ -43,6 +43,7 @@ router.get(
 router.post(
   "/market/buy-card",
   requireAuth,
+  requireVerifiedEmail,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { cardDefId } = parseBody(buyCardSchema, req.body);
@@ -58,6 +59,7 @@ router.post(
 router.post(
   "/market/buy-cosmetic",
   requireAuth,
+  requireVerifiedEmail,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { type, itemId } = parseBody(buyCosmeticSchema, req.body);
@@ -73,6 +75,7 @@ router.post(
 router.post(
   "/market/buy-energy",
   requireAuth,
+  requireVerifiedEmail,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { energyType, quantity } = parseBody(buyEnergySchema, req.body);
@@ -88,6 +91,7 @@ router.post(
 router.post(
   "/market/convert-candy",
   requireAuth,
+  requireVerifiedEmail,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { target } = parseBody(convertCandySchema, req.body);

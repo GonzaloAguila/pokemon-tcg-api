@@ -6,7 +6,7 @@
 
 import { Router, type Request, type Response, type NextFunction } from "express";
 import { AppError } from "../../middleware/error-handler.js";
-import { requireAuth, requireRole } from "../../middleware/auth.js";
+import { requireAuth, requireVerifiedEmail, requireRole } from "../../middleware/auth.js";
 import { prisma } from "../../lib/prisma.js";
 import * as boosterService from "./boosters.service.js";
 import * as usersService from "../users/users.service.js";
@@ -107,6 +107,7 @@ router.delete("/packs/:packId", requireAuth, requireRole("admin", "superadmin"),
 router.post(
   "/packs/:packId/open",
   requireAuth,
+  requireVerifiedEmail,
   async (req: Request, res: Response, next: NextFunction) => {
     const { packId } = req.params;
     const userId = req.user!.userId;

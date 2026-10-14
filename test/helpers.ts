@@ -1,7 +1,19 @@
 import { randomUUID } from "node:crypto";
 import { prisma } from "../src/lib/prisma.js";
 
-export async function createUser(balances: { coins?: number; coupons?: number; rareCandy?: number } = {}) {
+/**
+ * A test account. Verified email by default (economy routes require it); `stats` creates the
+ * UserStats row that match results update.
+ */
+export async function createUser(
+  balances: { coins?: number; coupons?: number; rareCandy?: number } = {},
+  options: {
+    emailVerified?: boolean;
+    stats?: boolean;
+    role?: "user" | "admin" | "superadmin";
+    provider?: "local" | "google" | "discord";
+  } = {},
+) {
   const tag = randomUUID().slice(0, 8);
   return prisma.user.create({
     data: {
@@ -10,6 +22,10 @@ export async function createUser(balances: { coins?: number; coupons?: number; r
       coins: balances.coins ?? 0,
       coupons: balances.coupons ?? 0,
       rareCandy: balances.rareCandy ?? 0,
+      emailVerified: options.emailVerified ?? true,
+      role: options.role ?? "user",
+      provider: options.provider ?? "local",
+      ...(options.stats ? { stats: { create: {} } } : {}),
     },
   });
 }
