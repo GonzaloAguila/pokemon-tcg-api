@@ -522,6 +522,10 @@ Already live in production; what it means on this branch:
   penalties) is split by `ECONOMY.draft.prizeSplit` and paid once at the end (`draft_prize`);
   `draft:state` carries `prizePool` and `prizes` (position, coins, withdrawn). Players have 5
   minutes to show up in a draft game; `draft:matchEnded` carries `gameRoomId`.
+  Also: `draft:adminRooms` (ack, rooms:close) lists every phase and closing a room mid-tournament
+  cancels it (entry fees back, its games end with `gameOver { winner: null }`);
+  `draft:getMyRoom` → `draft:myRoom { roomId, phase } | null`; `draft:replaced` goes to the
+  older tab; `DraftRoomInfo.adminId` (the creator never pays); decks have at most 60 cards.
 
 ---
 
