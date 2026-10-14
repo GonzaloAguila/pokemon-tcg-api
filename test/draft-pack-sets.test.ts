@@ -65,6 +65,27 @@ describe("draft pack sets", () => {
     }
   });
 
+  it("a Trainers pack holds only Trainers, from every set, with no repeats", () => {
+    const sets = new Set<string>();
+    for (const size of [5, 11, 15]) {
+      for (let i = 0; i < 30; i++) {
+        const pack = generatePack(size, "trainers");
+        expect(pack).toHaveLength(size);
+        expect(pack.every((c) => c.kind === "trainer")).toBe(true);
+        expect(new Set(pack.map((c) => c.name)).size).toBe(size);
+        for (const c of pack) sets.add(c.set);
+      }
+    }
+    expect(sets.size).toBe(CARD_SETS.length);
+    expect(parsePayload(draftSchemas.create, { config: { packSets: ["trainers", "jungle"] } }).ok).toBe(true);
+  });
+
+  it("with a Trainers pack the bonus picks add every Trainer to the chosen sets", () => {
+    const pool = bonusPoolFor(["jungle", "trainers"]);
+    expect(pool.every((c) => c.set === "Jungle" || c.kind === "trainer")).toBe(true);
+    expect(pool.filter((c) => c.kind === "trainer")).toHaveLength(draftPool.filter((c) => c.kind === "trainer").length);
+  });
+
   it("bonus picks come from the sets the draft used (all of them when a pack was mixed)", () => {
     expect(new Set(bonusPoolFor(["fossil", "jungle", "fossil"]).map((c) => c.set))).toEqual(new Set(["Fossil", "Jungle"]));
     expect(bonusPoolFor(["fossil", "mixed"])).toBe(draftPool);

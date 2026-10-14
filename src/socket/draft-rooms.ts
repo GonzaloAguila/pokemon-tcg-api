@@ -23,10 +23,15 @@ import type { Card, CardSetId, GameCard } from "@gonzaloaguila/game-core";
 // Types
 // ============================================================================
 
-/** What a draft pack is opened from: one set, or every set mixed together. */
+/** What a draft pack is opened from: one set, every set mixed together, or only Trainers (every set). */
 export const MIXED_PACK = "mixed";
-export type DraftPackSet = CardSetId | typeof MIXED_PACK;
-export const DRAFT_PACK_SETS: readonly [DraftPackSet, ...DraftPackSet[]] = [MIXED_PACK, ...CARD_SETS.map((set) => set.id)];
+export const TRAINERS_PACK = "trainers";
+export type DraftPackSet = CardSetId | typeof MIXED_PACK | typeof TRAINERS_PACK;
+export const DRAFT_PACK_SETS: readonly [DraftPackSet, ...DraftPackSet[]] = [
+  MIXED_PACK,
+  TRAINERS_PACK,
+  ...CARD_SETS.map((set) => set.id),
+];
 
 export type DraftConfig = {
   maxPlayers: number; // 2-8
@@ -263,6 +268,7 @@ function rarityPools(cards: readonly Card[]) {
 
 const poolsByPackSet = new Map<DraftPackSet, ReturnType<typeof rarityPools>>([
   [MIXED_PACK, rarityPools(draftPool)],
+  [TRAINERS_PACK, rarityPools(draftPool.filter((c) => c.kind === "trainer"))],
   ...CARD_SETS.map((set) => [set.id, rarityPools(draftPool.filter((c) => c.set === set.name))] as const),
 ]);
 
@@ -271,16 +277,21 @@ export function normalizePackSets(packSets: readonly DraftPackSet[] | undefined,
   return Array.from({ length: packsPerPlayer }, (_, i) => packSets?.[i] ?? MIXED_PACK);
 }
 
-/** Bonus picks come from the sets the draft was played with (every set if any pack was mixed). */
+/**
+ * Bonus picks come from what the draft was played with: every card if any pack was mixed,
+ * else the cards of the chosen sets plus every Trainer if a Trainers pack was opened.
+ */
 export function bonusPoolFor(packSets: readonly DraftPackSet[]): readonly Card[] {
   if (packSets.length === 0 || packSets.includes(MIXED_PACK)) return draftPool;
   const names = new Set(CARD_SETS.filter((set) => packSets.includes(set.id)).map((set) => set.name));
-  return draftPool.filter((card) => names.has(card.set));
+  const withTrainers = packSets.includes(TRAINERS_PACK);
+  return draftPool.filter((card) => names.has(card.set) || (withTrainers && card.kind === "trainer"));
 }
 
-/** "Jungle", or "todas las expansiones" for a mixed pack (round announcements). */
+/** "Jungle", "todas las expansiones" or "Entrenadores" (round announcements). */
 export function packSetLabel(packSet: DraftPackSet): string {
   if (packSet === MIXED_PACK) return "todas las expansiones";
+  if (packSet === TRAINERS_PACK) return "Entrenadores";
   return CARD_SETS.find((set) => set.id === packSet)?.name ?? packSet;
 }
 
