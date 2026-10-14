@@ -7,6 +7,7 @@
  * Identity never comes from a payload; see getAuthUserId() in handlers.ts.
  */
 import { z } from "zod";
+import { DRAFT_PACK_SETS } from "./draft-rooms.js";
 
 // ---------------------------------------------------------------------------
 // Primitives
@@ -128,6 +129,8 @@ export const socketSchemas = {
 const draftConfig = z.object({
   maxPlayers: z.number().int().min(2).max(8).optional(),
   packsPerPlayer: z.number().int().min(1).max(6).optional(),
+  /** Set of each pack in round order ("mixed" = every set); missing rounds are mixed */
+  packSets: z.array(z.enum(DRAFT_PACK_SETS)).max(6).optional(),
   cardsPerPack: z.number().int().min(5).max(15).optional(),
   pickTimeSeconds: z.number().int().min(15).max(90).optional(),
   keepInCollection: z.boolean().optional(),

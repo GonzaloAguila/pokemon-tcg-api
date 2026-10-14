@@ -10,21 +10,29 @@
 
 import {
   ALL_CARDS,
+  CARD_SETS,
   findCardDefinition,
   isBasicEnergy,
   isEnergyCard,
   isPlayableAsBasic,
   isPokemonCard,
 } from "@gonzaloaguila/game-core";
-import type { Card, GameCard } from "@gonzaloaguila/game-core";
+import type { Card, CardSetId, GameCard } from "@gonzaloaguila/game-core";
 
 // ============================================================================
 // Types
 // ============================================================================
 
+/** What a draft pack is opened from: one set, or every set mixed together. */
+export const MIXED_PACK = "mixed";
+export type DraftPackSet = CardSetId | typeof MIXED_PACK;
+export const DRAFT_PACK_SETS: readonly [DraftPackSet, ...DraftPackSet[]] = [MIXED_PACK, ...CARD_SETS.map((set) => set.id)];
+
 export type DraftConfig = {
   maxPlayers: number; // 2-8
   packsPerPlayer: number; // default 3
+  /** One entry per pack (round), always packsPerPlayer long; default all mixed */
+  packSets: DraftPackSet[];
   cardsPerPack: number; // default 11
   pickTimeSeconds: number; // default 45
   keepInCollection: boolean;
@@ -244,12 +252,37 @@ export function catalogIdOf(card: GameCard): string | null {
 // Every set in game-core's registry
 export const draftPool: readonly Card[] = ALL_CARDS.filter((card) => !isBasicEnergy(card));
 
-const poolByRarity = {
-  common: draftPool.filter((c) => c.rarity === "common"),
-  uncommon: draftPool.filter((c) => c.rarity === "uncommon"),
-  rare: draftPool.filter((c) => c.rarity === "rare"),
-  rareHolo: draftPool.filter((c) => c.rarity === "rare-holo"),
-};
+function rarityPools(cards: readonly Card[]) {
+  return {
+    common: cards.filter((c) => c.rarity === "common"),
+    uncommon: cards.filter((c) => c.rarity === "uncommon"),
+    rare: cards.filter((c) => c.rarity === "rare"),
+    rareHolo: cards.filter((c) => c.rarity === "rare-holo"),
+  };
+}
+
+const poolsByPackSet = new Map<DraftPackSet, ReturnType<typeof rarityPools>>([
+  [MIXED_PACK, rarityPools(draftPool)],
+  ...CARD_SETS.map((set) => [set.id, rarityPools(draftPool.filter((c) => c.set === set.name))] as const),
+]);
+
+/** Pack sets for every round: the admin's choice per pack, mixed where none was given. */
+export function normalizePackSets(packSets: readonly DraftPackSet[] | undefined, packsPerPlayer: number): DraftPackSet[] {
+  return Array.from({ length: packsPerPlayer }, (_, i) => packSets?.[i] ?? MIXED_PACK);
+}
+
+/** Bonus picks come from the sets the draft was played with (every set if any pack was mixed). */
+export function bonusPoolFor(packSets: readonly DraftPackSet[]): readonly Card[] {
+  if (packSets.length === 0 || packSets.includes(MIXED_PACK)) return draftPool;
+  const names = new Set(CARD_SETS.filter((set) => packSets.includes(set.id)).map((set) => set.name));
+  return draftPool.filter((card) => names.has(card.set));
+}
+
+/** "Jungle", or "todas las expansiones" for a mixed pack (round announcements). */
+export function packSetLabel(packSet: DraftPackSet): string {
+  if (packSet === MIXED_PACK) return "todas las expansiones";
+  return CARD_SETS.find((set) => set.id === packSet)?.name ?? packSet;
+}
 
 let cardIdCounter = 0;
 
@@ -281,26 +314,30 @@ function pickUnique(
   return picked;
 }
 
-function generatePack(cardsPerPack: number): GameCard[] {
+export function generatePack(cardsPerPack: number, packSet: DraftPackSet = MIXED_PACK): GameCard[] {
   const usedIds = new Set<string>();
+  const pools = poolsByPackSet.get(packSet) ?? poolsByPackSet.get(MIXED_PACK)!;
 
-  const rareSlotCount = cardsPerPack >= 10 ? 2 : 1;
+  // Jungle, Fossil and Team Rocket only list holo rares: their one rare slot is a holo and
+  // the second rare slot becomes an uncommon.
+  const hasPlainRares = pools.rare.length > 0;
+  const rareSlotCount = cardsPerPack >= 10 && hasPlainRares ? 2 : 1;
   const remaining = cardsPerPack - rareSlotCount;
   const uncommonCount = Math.max(1, Math.round(remaining * 0.3));
   const commonCount = remaining - uncommonCount;
 
-  // Guaranteed non-holo rare
-  const rares = pickUnique(poolByRarity.rare, 1, usedIds);
+  // Guaranteed non-holo rare (a holo in sets without them)
+  const rares = pickUnique(hasPlainRares ? pools.rare : pools.rareHolo, 1, usedIds);
 
   // Second rare slot: 33% chance holo
   if (rareSlotCount >= 2) {
     const isHolo = Math.random() < 0.33;
-    const pool = isHolo ? poolByRarity.rareHolo : poolByRarity.rare;
+    const pool = isHolo ? pools.rareHolo : pools.rare;
     rares.push(...pickUnique(pool, 1, usedIds));
   }
 
-  const uncommons = pickUnique(poolByRarity.uncommon, uncommonCount, usedIds);
-  const commons = pickUnique(poolByRarity.common, commonCount, usedIds);
+  const uncommons = pickUnique(pools.uncommon, uncommonCount, usedIds);
+  const commons = pickUnique(pools.common, commonCount, usedIds);
 
   return shuffle([...commons, ...uncommons, ...rares]).map(toGameCard);
 }
@@ -396,9 +433,11 @@ export class DraftRoomManager {
     adminName: string,
   ): DraftRoom {
     const roomId = this.generateRoomId();
+    const packsPerPlayer = config.packsPerPlayer ?? 3;
     const fullConfig: DraftConfig = {
       maxPlayers: config.maxPlayers ?? 8,
-      packsPerPlayer: config.packsPerPlayer ?? 3,
+      packsPerPlayer,
+      packSets: normalizePackSets(config.packSets, packsPerPlayer),
       cardsPerPack: config.cardsPerPack ?? 11,
       pickTimeSeconds: config.pickTimeSeconds ?? 45,
       keepInCollection: config.keepInCollection ?? false,
@@ -656,7 +695,7 @@ export class DraftRoomManager {
 
     this.generatePacksForRound(room);
     room.events.push(
-      this.createEvent("system", "¡Comienza la Ronda 1! Dirección: →"),
+      this.createEvent("system", `¡Comienza la Ronda 1! Dirección: → · Sobres de ${packSetLabel(room.config.packSets[0])}`),
     );
     this.startPickTimer(room);
     return room;
@@ -998,7 +1037,7 @@ export class DraftRoomManager {
       if (room.currentRound > room.config.packsPerPlayer) {
         // All rounds done → bonus-pick phase (with its own deadline)
         room.phase = "bonus-pick";
-        room.bonusPickPool = draftPool.map(toGameCard);
+        room.bonusPickPool = bonusPoolFor(room.config.packSets).map(toGameCard);
         for (const p of room.players) p.isReady = false;
         room.events.push(
           this.createEvent(
@@ -1021,7 +1060,7 @@ export class DraftRoomManager {
       room.events.push(
         this.createEvent(
           "system",
-          `¡Ronda ${room.currentRound}! Dirección: ${arrow}`,
+          `¡Ronda ${room.currentRound}! Dirección: ${arrow} · Sobres de ${packSetLabel(room.config.packSets[room.currentRound - 1] ?? MIXED_PACK)}`,
         ),
       );
     }
@@ -1106,8 +1145,9 @@ export class DraftRoomManager {
   }
 
   private generatePacksForRound(room: DraftRoom): void {
+    const packSet = room.config.packSets[room.currentRound - 1] ?? MIXED_PACK;
     for (const player of room.players) {
-      player.currentPack = generatePack(room.config.cardsPerPack);
+      player.currentPack = generatePack(room.config.cardsPerPack, packSet);
     }
   }
 
