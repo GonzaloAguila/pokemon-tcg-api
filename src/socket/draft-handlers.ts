@@ -18,6 +18,7 @@ import { requireSocketUser } from "./session-guard.js";
 import { openRoomMatch, settleRoomResult } from "./match-settlement.js";
 import { canManageDraftRooms } from "../modules/admin/permissions.js";
 import { ECONOMY } from "../modules/economy/config.js";
+import { titleIdFromStats } from "../modules/users/titles.js";
 import type { TournamentProgress } from "./draft-rooms.js";
 
 /**
@@ -103,13 +104,19 @@ async function createMatchGame(
   gameRoomManager: GameRoomManager,
 ): Promise<void> {
   if (!p1.deck || !p2.deck) return;
+  const [p1Identity, p2Identity] = await Promise.all([draftGameIdentity(p1), draftGameIdentity(p2)]);
+  // The draft may have been closed while this round's games were being created
+  if (!draftRoomManager.getRoom(draftRoomId)) return;
 
-  // Create a game room and add both players
-  const gameRoom = gameRoomManager.createRoom();
+  // Create a game room (names and avatars for the game screen; not listed in the lobby) and add
+  // both players. Their seats wait for them (no socket): each one's check-in clock runs until
+  // they open the game, so a player who never shows up can't hold the round forever.
+  const gameRoom = gameRoomManager.createRoom(undefined, undefined, p1Identity);
+  gameRoom.isDraft = true;
   const gameRoomId = gameRoom.id;
 
-  await gameRoomManager.joinRoom(gameRoomId, p1.id, p1.socketId || "");
-  await gameRoomManager.joinRoom(gameRoomId, p2.id, p2.socketId || "");
+  await gameRoomManager.joinRoom(gameRoomId, p1.id, "");
+  await gameRoomManager.joinRoom(gameRoomId, p2.id, "", p2Identity);
 
   // Register mapping so game-over can report back to draft
   draftRoomManager.registerGameRoom(gameRoomId, draftRoomId, roundNumber, matchNumber, p1.id, p2.id);
@@ -152,6 +159,28 @@ async function createMatchGame(
       });
     }
   }
+}
+
+/** Name, avatar and title shown to the rival in a draft game (from the DB). */
+async function draftGameIdentity(player: DraftPlayer): Promise<{ username: string; avatarId: string | null; titleId: string }> {
+  const user = await prisma.user.findUnique({
+    where: { id: player.id },
+    select: {
+      activeAvatarId: true,
+      role: true,
+      stats: {
+        select: {
+          normalWins: true, normalLosses: true, rankedWins: true, rankedLosses: true,
+          draftWins: true, draftLosses: true, bestStreak: true,
+        },
+      },
+    },
+  });
+  return {
+    username: player.name,
+    avatarId: user?.activeAvatarId ?? null,
+    titleId: titleIdFromStats(user?.stats, user?.role),
+  };
 }
 
 /**
@@ -286,22 +315,32 @@ export async function creditDraftedCards(room: DraftRoom): Promise<void> {
  * A draft room closed: tell its clients, refund the entry fees when no tournament was played
  * (unplayed), or credit the drafted cards when the draft itself was completed.
  */
-async function onDraftRoomClosed(io: Server, room: DraftRoom, info: DraftClosedInfo): Promise<void> {
+async function onDraftRoomClosed(
+  io: Server,
+  room: DraftRoom,
+  info: DraftClosedInfo,
+  gameRoomManager: GameRoomManager,
+): Promise<void> {
   io.to(room.id).emit("draft:roomClosed", { roomId: room.id, reason: info.reason });
   for (const p of room.players) {
     if (p.socketId) io.to(p.socketId).emit("draft:roomClosed", { roomId: room.id, reason: info.reason });
   }
   io.in(room.id).socketsLeave(room.id);
   broadcastRoomList(io);
-  if (info.unplayed) {
-    if (room.entryPaidIds.length > 0) {
-      await refundDraftEntry(room.entryPaidIds, room.config.entryFee).catch((err) =>
-        console.error(`[draft] Refund of room ${room.id} failed:`, err),
-      );
-    }
-  } else {
-    await creditDraftedCards(room);
+
+  // Games of a cancelled tournament end without a result
+  for (const gameRoomId of info.gameRoomIds) {
+    io.to(gameRoomId).emit("gameOver", { winner: null, reason: info.reason });
+    gameRoomManager.forceDeleteRoom(gameRoomId);
   }
+
+  // No tournament played to the end: the entry fees come back
+  if ((info.unplayed || info.cancelled) && room.entryPaidIds.length > 0) {
+    await refundDraftEntry(room.entryPaidIds, room.config.entryFee).catch((err) =>
+      console.error(`[draft] Refund of room ${room.id} failed:`, err),
+    );
+  }
+  if (!info.unplayed) await creditDraftedCards(room);
 }
 
 /** The user id of the verified handshake token, or null. */
@@ -345,7 +384,17 @@ export function registerDraftEvents(
       });
     },
     onRoomClosed: (room, info) => {
-      onDraftRoomClosed(io, room, info).catch((err) => console.error("[draft] close failed:", err));
+      onDraftRoomClosed(io, room, info, gameRoomManager).catch((err) => console.error("[draft] close failed:", err));
+    },
+    onPlayerRemoved: (room, player, { reason, refund }) => {
+      if (player.socketId) {
+        io.to(player.socketId).emit("draft:error", { message: reason });
+        io.to(player.socketId).emit("draft:roomClosed", { roomId: room.id, reason });
+        io.in(player.socketId).socketsLeave(room.id);
+      }
+      if (refund > 0) {
+        refundDraftEntry([player.id], refund).catch((err) => console.error(`[draft] Refund of ${player.id} failed:`, err));
+      }
     },
     onFinished: (room) => {
       creditDraftedCards(room).catch((err) => console.error("[draft] credit failed:", err));
@@ -359,6 +408,23 @@ export function registerDraftEvents(
 
   socket.on("draft:getRooms", () => {
     socket.emit("draft:roomList", draftRoomManager.getAvailableRooms());
+  });
+
+  // draft:getMyRoom: the draft this player is in the middle of → draft:myRoom { roomId, phase } | null
+  socket.on("draft:getMyRoom", async () => {
+    const userId = await requireDraftUser(socket);
+    if (!userId) return;
+    socket.emit("draft:myRoom", draftRoomManager.getActiveRoomOf(userId));
+  });
+
+  // draft:adminRooms (ack): every room in any phase, for admins who manage draft rooms
+  socket.on("draft:adminRooms", async (_payload: unknown, ack?: (res: unknown) => void) => {
+    if (typeof ack !== "function") return;
+    const userId = await requireDraftUser(socket);
+    if (!userId) return ack({ success: false, error: "Autenticación requerida" });
+    const account = await prisma.user.findUnique({ where: { id: userId }, select: { role: true, permissions: true } });
+    if (!canManageDraftRooms(account)) return ack({ success: false, error: "No autorizado" });
+    ack({ success: true, rooms: draftRoomManager.getAllRooms() });
   });
 
   socket.on(
@@ -442,7 +508,12 @@ export function registerDraftEvents(
           }
         }
 
+        const previousSocketId = existingRoom?.players.find((p) => p.id === userId)?.socketId ?? null;
         const room = draftRoomManager.joinRoom(roomId, userId, socket.id, name);
+        // The draft was open in another tab / device: that one stops receiving it, say so
+        if (previousSocketId && previousSocketId !== socket.id) {
+          io.to(previousSocketId).emit("draft:replaced", { roomId });
+        }
 
         socket.join(room.id);
         broadcastDraftState(io, roomId);
@@ -541,6 +612,7 @@ export function registerDraftEvents(
       const userId = getSocketUserId(socket);
       const room = draftRoomManager.assertCanStart(roomId, userId ?? "");
       startingRooms.add(roomId);
+      draftRoomManager.setStarting(roomId, true);
       entryFee = room.config.entryFee;
 
       if (entryFee > 0) {
@@ -565,7 +637,13 @@ export function registerDraftEvents(
           }
         }
 
+        // Whoever was charged and left the lobby meanwhile gets the fee back
         const remainingRoom = draftRoomManager.getRoom(roomId);
+        const leftAfterPaying = charged.filter((id) => !remainingRoom?.players.some((p) => p.id === id));
+        if (leftAfterPaying.length > 0) {
+          await refundDraftEntry(leftAfterPaying, entryFee);
+          charged.splice(0, charged.length, ...charged.filter((id) => !leftAfterPaying.includes(id)));
+        }
         if (!remainingRoom || remainingRoom.players.length < 2) {
           await refundDraftEntry(charged, entryFee);
           socket.emit("draft:error", {
@@ -588,6 +666,7 @@ export function registerDraftEvents(
       socket.emit("draft:error", { message: (error as Error).message });
     } finally {
       startingRooms.delete(roomId);
+      draftRoomManager.setStarting(roomId, false);
     }
   });
 

@@ -121,8 +121,10 @@ export type DraftRoom = {
   /** Set when the tournament ends: each final position and its coins (paid once: prizesPaid). */
   prizes: DraftPrize[] | null;
   prizesPaid: boolean;
-  /** Removes a finished room after FINISHED_ROOM_TTL_MS. */
+  /** Removes a finished room after FINISHED_ROOM_TTL_MS, or a lobby nobody is in after EMPTY_LOBBY_TTL_MS. */
   expiryTimer: ReturnType<typeof setTimeout> | null;
+  /** draft:start is charging the entry fees: nobody new may sit down meanwhile. */
+  starting: boolean;
 };
 
 /** A player's final position and the coins it won. */
@@ -232,14 +234,20 @@ export type DraftRoomInfo = {
   playerCount: number;
   maxPlayers: number;
   adminName: string;
+  /** The creator: they rejoin their own room without paying */
+  adminId: string;
   entryFee: number;
   adminPlays: boolean;
 };
 
 export type BroadcastFn = (roomId: string) => void;
 
-/** Why a room closed: unplayed = before the tournament started (entry fees are refunded). */
-export type DraftClosedInfo = { unplayed: boolean; reason: string };
+/**
+ * Why a room closed. unplayed: before the tournament started; cancelled: during it (an admin
+ * closed it). Both refund the entry fees; a played or cancelled tournament keeps the drafted
+ * cards (keepInCollection). `gameRoomIds`: draft games still being played, to be closed.
+ */
+export type DraftClosedInfo = { unplayed: boolean; cancelled: boolean; reason: string; gameRoomIds: string[] };
 
 /** What the socket layer does when the draft moves on by itself (timers, grace periods). */
 export type DraftHooks = {
@@ -249,6 +257,11 @@ export type DraftHooks = {
   onRoomClosed?: (room: DraftRoom, info: DraftClosedInfo) => void;
   /** The tournament ended. */
   onFinished?: (room: DraftRoom) => void;
+  /**
+   * A player left the draft without a playable deck (deck-building deadline): tell them and
+   * give back `refund` coins (their entry fee, already taken out of the prize pool).
+   */
+  onPlayerRemoved?: (room: DraftRoom, player: DraftPlayer, info: { reason: string; refund: number }) => void;
 };
 
 export type DraftTimings = {
@@ -528,6 +541,7 @@ export class DraftRoomManager {
       prizes: null,
       prizesPaid: false,
       expiryTimer: null,
+      starting: false,
     };
 
     this.rooms.set(roomId, room);
@@ -543,6 +557,41 @@ export class DraftRoomManager {
   ): DraftRoom {
     const room = this.rooms.get(roomId);
     if (!room) throw new Error("Sala no encontrada");
+    // Somebody is back in an empty lobby: it stays
+    if (room.phase === "lobby") this.cancelExpiry(room);
+
+    // The creator of a room they play in (adminPlays) left the lobby: they take a seat again
+    // (the seat, admin included, may have been passed on meanwhile)
+    if (
+      room.adminId === userId &&
+      room.config.adminPlays &&
+      room.phase === "lobby" &&
+      !room.starting &&
+      !room.players.some((p) => p.id === userId) &&
+      room.players.length < room.config.maxPlayers
+    ) {
+      for (const p of room.players) p.isAdmin = false;
+      room.players.unshift({
+        id: userId,
+        socketId,
+        name,
+        seatIndex: 0,
+        currentPack: [],
+        draftedCards: [],
+        deck: null,
+        isReady: false,
+        isAdmin: true,
+        pendingMatchInfo: null,
+        withdrawn: false,
+      });
+      room.players.forEach((p, i) => {
+        p.seatIndex = i;
+      });
+      room.adminSocketId = socketId;
+      room.events.push(this.createEvent("info", `${name} volvió al draft`));
+      this.socketToRoom.set(socketId, roomId);
+      return room;
+    }
 
     // Reconnection: spectating admin reconnects (not in players array)
     if (room.adminId === userId && !room.players.find((p) => p.id === userId)) {
@@ -563,6 +612,7 @@ export class DraftRoomManager {
 
     // New players can only join during lobby phase
     if (room.phase !== "lobby") throw new Error("El draft ya comenzó");
+    if (room.starting) throw new Error("El draft está comenzando");
     if (room.players.length >= room.config.maxPlayers)
       throw new Error("Sala llena");
 
@@ -613,6 +663,8 @@ export class DraftRoomManager {
       this.createEvent("info", `${player.name} salió del draft`),
     );
     this.socketToRoom.delete(socketId);
+    // The playing admin left their seat: nobody watches as admin from that socket anymore
+    if (room.adminSocketId === socketId) room.adminSocketId = null;
 
     // Promote new admin or close empty room
     if (player.isAdmin && room.players.length > 0) {
@@ -623,12 +675,29 @@ export class DraftRoomManager {
           `${room.players[0].name} es el nuevo admin`,
         ),
       );
-    } else if (room.players.length === 0) {
-      this.rooms.delete(roomId);
-      return null;
+    } else if (room.players.length === 0 && !room.adminSocketId) {
+      // Nobody left, not even the admin watching: removed unless someone comes back
+      this.scheduleEmptyLobbyExpiry(room);
     }
 
     return room;
+  }
+
+  /** An empty lobby waits EMPTY_LOBBY_TTL_MS for its admin or a player, then it is closed. */
+  private scheduleEmptyLobbyExpiry(room: DraftRoom): void {
+    this.cancelExpiry(room);
+    room.expiryTimer = setTimeout(() => {
+      room.expiryTimer = null;
+      if (room.phase === "lobby" && room.players.length === 0 && !room.adminSocketId) {
+        this.closeRoom(room, "La mesa se cerró: no quedó nadie");
+      }
+    }, EMPTY_LOBBY_TTL_MS);
+    room.expiryTimer.unref?.();
+  }
+
+  private cancelExpiry(room: DraftRoom): void {
+    if (room.expiryTimer) clearTimeout(room.expiryTimer);
+    room.expiryTimer = null;
   }
 
   /**
@@ -689,12 +758,23 @@ export class DraftRoomManager {
       if (p.socketId) this.socketToRoom.delete(p.socketId);
     }
     if (room.adminSocketId) this.socketToRoom.delete(room.adminSocketId);
+    const gameRoomIds: string[] = [];
     for (const [gameRoomId, info] of this.gameRoomToDraft) {
-      if (info.draftRoomId === room.id) this.gameRoomToDraft.delete(gameRoomId);
+      if (info.draftRoomId === room.id) {
+        gameRoomIds.push(gameRoomId);
+        this.gameRoomToDraft.delete(gameRoomId);
+      }
     }
     this.rooms.delete(room.id);
     const unplayed = room.phase !== "matching" && room.phase !== "finished";
-    this.hooks.onRoomClosed?.(room, { unplayed, reason });
+    const cancelled = room.phase === "matching";
+    this.hooks.onRoomClosed?.(room, { unplayed, cancelled, reason, gameRoomIds });
+  }
+
+  /** Mark the room as charging its entry fees (draft:start): no new player sits down meanwhile. */
+  setStarting(roomId: string, starting: boolean): void {
+    const room = this.rooms.get(roomId);
+    if (room) room.starting = starting;
   }
 
   private clearTimers(room: DraftRoom): void {
@@ -840,6 +920,9 @@ export class DraftRoomManager {
         `El mazo necesita al menos ${room.config.minDeckSize} cartas (tiene ${deckCards.length})`,
       );
     }
+    if (deckCards.length > MAX_DRAFT_DECK_SIZE) {
+      throw new Error(`El mazo puede tener hasta ${MAX_DRAFT_DECK_SIZE} cartas (tiene ${deckCards.length})`);
+    }
     // Without a card playable as a Basic Pokémon the game's opening mulligans forever
     if (!deckCards.some((card) => isPlayableAsBasic(card))) {
       throw new Error("El mazo necesita al menos un Pokémon básico");
@@ -947,23 +1030,33 @@ export class DraftRoomManager {
     };
   }
 
+  /** Rooms players can join (lobby phase). */
   getAvailableRooms(): DraftRoomInfo[] {
-    const list: DraftRoomInfo[] = [];
+    return this.getAllRooms().filter((room) => room.phase === "lobby");
+  }
+
+  /** Every room, in any phase (backoffice). */
+  getAllRooms(): DraftRoomInfo[] {
+    return [...this.rooms.values()].map((room) => ({
+      id: room.id,
+      config: room.config,
+      phase: room.phase,
+      playerCount: room.players.length,
+      maxPlayers: room.config.maxPlayers,
+      adminName: room.adminName,
+      adminId: room.adminId,
+      entryFee: room.config.entryFee,
+      adminPlays: room.config.adminPlays,
+    }));
+  }
+
+  /** The draft `userId` is playing (started, not over, not left), to find the way back to it. */
+  getActiveRoomOf(userId: string): { roomId: string; phase: DraftPhase } | null {
     for (const room of this.rooms.values()) {
-      if (room.phase === "lobby") {
-        list.push({
-          id: room.id,
-          config: room.config,
-          phase: room.phase,
-          playerCount: room.players.length,
-          maxPlayers: room.config.maxPlayers,
-          adminName: room.adminName,
-          entryFee: room.config.entryFee,
-          adminPlays: room.config.adminPlays,
-        });
-      }
+      if (room.phase === "lobby" || room.phase === "finished") continue;
+      if (room.players.some((p) => p.id === userId && !p.withdrawn)) return { roomId: room.id, phase: room.phase };
     }
-    return list;
+    return null;
   }
 
   getRoom(roomId: string): DraftRoom | undefined {
@@ -1017,11 +1110,8 @@ export class DraftRoomManager {
       room.events.push(
         this.createEvent("system", `${room.adminName} (admin) se desconectó`),
       );
-      // If lobby is empty and admin disconnected, clean up
-      if (room.phase === "lobby" && room.players.length === 0) {
-        this.rooms.delete(roomId);
-        return null;
-      }
+      // An empty lobby whose admin left (e.g. the backoffice tab that created it) waits for them
+      if (room.phase === "lobby" && room.players.length === 0) this.scheduleEmptyLobbyExpiry(room);
       return room;
     }
 
@@ -1030,7 +1120,7 @@ export class DraftRoomManager {
 
     if (room.phase === "lobby") {
       this.leaveRoom(roomId, socketId);
-      return room.players.length > 0 ? room : null;
+      return this.rooms.has(roomId) ? room : null;
     }
 
     // During active draft: mark disconnected. They don't block the room: once only
@@ -1160,6 +1250,18 @@ export class DraftRoomManager {
       } else {
         this.removePlayer(room.id, player.id);
         room.events.push(this.createEvent("system", `${player.name} no tiene un mazo jugable y queda fuera del torneo`));
+        // Their entry fee comes back (out of the prize pool)
+        const paid = room.entryPaidIds.indexOf(player.id);
+        let refund = 0;
+        if (paid !== -1) {
+          room.entryPaidIds.splice(paid, 1);
+          refund = room.config.entryFee;
+          room.prizePool = Math.max(0, room.prizePool - refund);
+        }
+        this.hooks.onPlayerRemoved?.(room, player, {
+          reason: "Quedaste fuera del draft: tus cartas no permiten armar un mazo con un Pokémon básico",
+          refund,
+        });
       }
     }
     if (room.players.length < 2) {
@@ -1677,6 +1779,10 @@ export type TournamentProgress = { newRoundStarted: boolean; tournamentFinished:
 
 /** A finished draft room stays this long (final standings and prizes), then it is removed. */
 const FINISHED_ROOM_TTL_MS = 30 * 60_000;
+/** A lobby with nobody in it (no player, no admin connected) is closed after this long. */
+const EMPTY_LOBBY_TTL_MS = 10 * 60_000;
+/** Most cards a draft deck can have (a deck that can't run out of cards would never lose). */
+export const MAX_DRAFT_DECK_SIZE = 60;
 
 /**
  * Coins for each final position (standings already sorted): the prize pool split by

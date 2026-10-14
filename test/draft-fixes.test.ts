@@ -32,11 +32,17 @@ function setup(opts: { grace?: number; bonus?: number; building?: number; config
     buildingSeconds: opts.building ?? 60,
   });
   managers.push(manager);
-  const events = { started: [] as DraftRoom[], closed: [] as [DraftRoom, DraftClosedInfo][], finished: [] as DraftRoom[] };
+  const events = {
+    started: [] as DraftRoom[],
+    closed: [] as [DraftRoom, DraftClosedInfo][],
+    finished: [] as DraftRoom[],
+    removed: [] as [string, number][],
+  };
   manager.setHooks({
     onTournamentStart: (r) => events.started.push(r),
     onRoomClosed: (r, info) => events.closed.push([r, info]),
     onFinished: (r) => events.finished.push(r),
+    onPlayerRemoved: (_r, player, info) => events.removed.push([player.id, info.refund]),
   });
   const room = manager.createRoom(
     { adminPlays: false, entryFee: 0, packsPerPlayer: 1, cardsPerPack: 5, pickTimeSeconds: 45, minDeckSize: 20, ...opts.config },
@@ -80,7 +86,7 @@ describe("bug 12: the admin is told and acts by user id", () => {
     expect(manager.getRoom(room.id)).toBe(room);
     manager.deleteRoom(room.id, "some-site-admin", true);
     expect(manager.getRoom(room.id)).toBeUndefined();
-    expect(events.closed[0][1]).toEqual({ unplayed: true, reason: "La sala fue cerrada por el admin" });
+    expect(events.closed[0][1]).toEqual({ unplayed: true, cancelled: false, reason: "La sala fue cerrada por el admin", gameRoomIds: [] });
     expect(() => manager.deleteRoom(room.id, ADMIN)).toThrow("Sala no encontrada");
   });
 });
@@ -164,8 +170,10 @@ describe("bug 5: bonus-pick and building always end", () => {
     expect(manager.getRoom(room.id)).toBeUndefined();
     expect(events.started).toHaveLength(0);
     const [closedRoom, info] = events.closed[0];
-    expect(info).toEqual({ unplayed: true, reason: "No quedan jugadores suficientes para el torneo" });
-    expect(closedRoom.entryPaidIds).toEqual(["pa", "pb"]); // refunded by the socket layer
+    expect(info).toEqual({ unplayed: true, cancelled: false, reason: "No quedan jugadores suficientes para el torneo", gameRoomIds: [] });
+    // Beto (no Basic) was told and refunded on his own; the room closing refunds the rest
+    expect(events.removed).toEqual([["pb", 0]]);
+    expect(closedRoom.entryPaidIds).toEqual(["pa"]); // refunded by the socket layer
   });
 
   it("a player rejoins by room id (new socket) and gets their drafted cards back", () => {
@@ -214,5 +222,73 @@ describe("hooks", () => {
     manager.reportMatchResult(room.id, 1, 1, "pa", "pb", "GAME01");
     expect(room.phase).toBe("finished");
     expect(events.finished).toEqual([room]);
+  });
+});
+
+describe("lobby lifetime, start lock, admin seat", () => {
+  it("an empty lobby whose admin left waits (it isn't deleted at once)", () => {
+    const { manager, room } = setup();
+    manager.leaveRoom(room.id, "sa");
+    manager.leaveRoom(room.id, "sb");
+    expect(manager.getRoom(room.id)).toBeDefined(); // the admin is still watching
+    manager.handleDisconnect("admin-sock");
+    expect(manager.getRoom(room.id)).toBeDefined();
+    expect(room.expiryTimer).not.toBeNull(); // closed later unless someone comes back
+    manager.joinRoom(room.id, "pc", "sc", "Caro");
+    expect(room.expiryTimer).toBeNull();
+  });
+
+  it("nobody new sits down while the entry fees are being charged", () => {
+    const { manager, room } = setup();
+    manager.setStarting(room.id, true);
+    expect(() => manager.joinRoom(room.id, "pc", "sc", "Caro")).toThrow("El draft está comenzando");
+    manager.joinRoom(room.id, "pa", "sa2", "Ana"); // reconnecting is fine
+    manager.setStarting(room.id, false);
+    manager.joinRoom(room.id, "pc", "sc", "Caro");
+    expect(room.players.map((p) => p.id)).toEqual(["pa", "pb", "pc"]);
+  });
+
+  it("the creator of a room they play in gets their seat (and the admin) back", () => {
+    const { manager, room } = setup({ config: { adminPlays: true } });
+    expect(room.players[0]).toMatchObject({ id: ADMIN, isAdmin: true });
+    manager.leaveRoom(room.id, "admin-sock");
+    expect(room.players[0]).toMatchObject({ id: "pa", isAdmin: true }); // passed on
+    manager.joinRoom(room.id, ADMIN, "admin-sock-2", "Admin");
+    expect(room.players.map((p) => [p.id, p.isAdmin, p.seatIndex])).toEqual([
+      [ADMIN, true, 0],
+      ["pa", false, 1],
+      ["pb", false, 2],
+    ]);
+  });
+
+  it("closing a tournament being played cancels it (entry fees back) and lists its games", () => {
+    const { manager, room, events } = setup();
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    room.phase = "matching";
+    manager.registerGameRoom("GAME01", room.id, 1, 1, "pa", "pb");
+    manager.deleteRoom(room.id, ADMIN);
+    expect(events.closed[0][1]).toEqual({ unplayed: false, cancelled: true, reason: "La sala fue cerrada por el admin", gameRoomIds: ["GAME01"] });
+  });
+
+  it("the way back to a draft in progress; the backoffice sees every phase", () => {
+    const { manager, room } = setup();
+    expect(manager.getActiveRoomOf("pa")).toBeNull(); // still in the lobby
+    manager.startDraft(room.id, ADMIN);
+    expect(manager.getActiveRoomOf("pa")).toEqual({ roomId: room.id, phase: "drafting" });
+    expect(manager.getAvailableRooms()).toEqual([]);
+    expect(manager.getAllRooms()).toMatchObject([{ id: room.id, phase: "drafting", adminId: ADMIN, playerCount: 2 }]);
+  });
+
+  it("a deck has at most 60 cards", () => {
+    const { manager, room } = setup();
+    manager.startDraft(room.id, ADMIN);
+    draftAllPicks(manager, room);
+    for (const s of ["sa", "sb"]) manager.bonusPick(room.id, s, room.bonusPickPool.slice(0, 3).map((c) => c.id));
+    const ana = room.players[0];
+    ana.draftedCards.push(basicCard("ana-basic"));
+    const ids = ana.draftedCards.map((c) => c.id);
+    expect(() => manager.submitDeck(room.id, "sa", ids, [{ type: "fire", count: 61 - ids.length }])).toThrow("hasta 60 cartas");
+    manager.submitDeck(room.id, "sa", ids, [{ type: "fire", count: 60 - ids.length }]);
+    expect(ana.deck).toHaveLength(60);
   });
 });

@@ -100,6 +100,8 @@ export interface GameRoom {
   resultSettled?: boolean;
   /** Started for players who may be absent (draft round): if neither shows up, nobody wins. */
   checkIn?: boolean;
+  /** A draft tournament game: not listed in the lobby. */
+  isDraft?: boolean;
 
   // Players
   player1Id: string | null;
@@ -1885,6 +1887,7 @@ export class GameRoomManager {
   getActiveRooms(): GameRoom[] {
     const rooms: GameRoom[] = [];
     for (const room of this.rooms.values()) {
+      if (room.isDraft) continue;
       if ((room.status === "waiting" && !this.waitingRoomTimers.has(room.id)) || room.status === "playing") {
         rooms.push(room);
       }

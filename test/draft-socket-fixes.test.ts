@@ -12,7 +12,7 @@ import { prisma } from "../src/lib/prisma.js";
 import { openRoomMatch } from "../src/socket/match-settlement.js";
 import { clearAccountStateCache } from "../src/lib/account-state.js";
 import { roomManager } from "../src/socket/handlers.js";
-import { creditDraftedCards, draftRoomManager } from "../src/socket/draft-handlers.js";
+import { createMatchGames, creditDraftedCards, draftRoomManager } from "../src/socket/draft-handlers.js";
 import type { DraftRoom } from "../src/socket/draft-rooms.js";
 import { createUser, getBalances } from "./helpers.js";
 import { nextEvent, startSocketServer, tokenFor } from "./socket-helpers.js";
@@ -246,5 +246,54 @@ describe("draft:withdraw", () => {
     // Once only, and only during the tournament
     sa.emit("draft:withdraw", { roomId: m.room.id });
     expect((await nextEvent<{ message: string }>(sa, "draft:error")).message).toBe("Solo puedes abandonar el draft durante el torneo");
+  });
+});
+
+describe("backoffice list, the other tab, draft games", () => {
+  it("draft:adminRooms lists every phase for a rooms:close admin only", async () => {
+    const m = await draftMatch(false);
+    const player = await server.connect(tokenFor(m.a));
+    expect(await player.timeout(2000).emitWithAck("draft:adminRooms", {})).toEqual({ success: false, error: "No autorizado" });
+    const admin = await createUser({}, { role: "admin", permissions: ["rooms:close"] });
+    const backoffice = await server.connect(tokenFor(admin));
+    const res = await backoffice.timeout(2000).emitWithAck("draft:adminRooms", {});
+    expect(res.success).toBe(true);
+    expect(res.rooms.find((r: { id: string }) => r.id === m.room.id)).toMatchObject({ phase: "matching", playerCount: 3 });
+
+    // draft:getMyRoom: the way back to it
+    const mine = nextEvent<any>(player, "draft:myRoom");
+    player.emit("draft:getMyRoom");
+    expect(await mine).toEqual({ roomId: m.room.id, phase: "matching" });
+  });
+
+  it("opening the draft in another tab tells the first one", async () => {
+    const { roomId } = await createDraft({ entryFee: 0 });
+    const user = await createUser();
+    const tab1 = await server.connect(tokenFor(user));
+    const joined = nextEvent<any>(tab1, "draft:state");
+    tab1.emit("draft:join", { roomId });
+    await joined;
+    const tab2 = await server.connect(tokenFor(user));
+    const replaced = nextEvent<any>(tab1, "draft:replaced");
+    tab2.emit("draft:join", { roomId });
+    expect(await replaced).toEqual({ roomId });
+  });
+
+  it("a draft game carries both players' names, isn't listed in the lobby and waits for both to show up", async () => {
+    const m = await draftMatch(false);
+    const deck = Array.from({ length: 40 }, (_, i) => card(i % 3 === 0 ? "Pikachu" : "Lightning Energy", `c${i}`));
+    for (const p of m.room.players) p.deck = deck.map((c) => ({ ...c, id: `${c.id}-${p.id}` }));
+    // A fresh round 1 between A and B, no game yet
+    m.room.tournament!.rounds[0].results = [];
+    (draftRoomManager as unknown as { gameRoomToDraft: Map<string, unknown> }).gameRoomToDraft.delete(m.game.id);
+    await createMatchGames(server.io, m.room.id, 1, roomManager);
+    const info = draftRoomManager.getPendingMatchInfo(m.room.id, m.a.id)!;
+    const game = roomManager.getRoom(info.gameRoomId)!;
+    expect(game.isDraft).toBe(true);
+    expect(game.creator.username).toBe("A");
+    expect(game.joiner.username).toBe("B");
+    expect([game.player1SocketId, game.player2SocketId]).toEqual([null, null]); // both check-in clocks run
+    expect(roomManager.getActiveRooms().some((r) => r.id === game.id)).toBe(false);
+    roomManager.forceDeleteRoom(game.id);
   });
 });
