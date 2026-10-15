@@ -21,6 +21,7 @@ import { ECONOMY } from "../economy/config.js";
 import { startOfEconomyDay } from "../economy/economy-time.js";
 import { countedOnlineGames } from "../matches/matches.service.js";
 import { spendCoins, type Db } from "../users/users.service.js";
+import { recordCardChange, type CardChangeReason } from "../users/card-ledger.js";
 import { lockUsers } from "../users/xp.service.js";
 import { validateDeckForUser, type DeckCardEntry } from "../decks/decks.service.js";
 import { cardTradeValue } from "./card-values.js";
@@ -245,6 +246,22 @@ async function moveCards(tx: Db, giverId: string, receiverId: string, side: read
   }
 }
 
+/** Card history of a trade (or its revert) for both players: what each gave (−) and received (+). */
+async function recordTradeCards(
+  tx: Db,
+  reason: CardChangeReason,
+  tradeId: string,
+  [aId, aGives]: readonly [string, readonly TradeCard[]],
+  [bId, bGives]: readonly [string, readonly TradeCard[]],
+) {
+  const users = await tx.user.findMany({ where: { id: { in: [aId, bId] } }, select: { id: true, username: true } });
+  const name = (id: string) => users.find((u) => u.id === id)?.username ?? "otro jugador";
+  const label = reason === "trade_revert" ? "Intercambio revertido con" : "Intercambio con";
+  const minus = (cards: readonly TradeCard[]) => cards.map((c) => ({ cardDefId: c.cardDefId, quantity: -c.quantity }));
+  await recordCardChange(tx, aId, reason, `${label} ${name(bId)}`, [...minus(aGives), ...bGives], tradeId);
+  await recordCardChange(tx, bId, reason, `${label} ${name(aId)}`, [...minus(bGives), ...aGives], tradeId);
+}
+
 export type TradeParty = { userId: string; cards: readonly TradeCard[]; ip: string | null };
 
 /**
@@ -303,6 +320,7 @@ export async function executeTrade(a: TradeParty, b: TradeParty, now = new Date(
       const lockUntil = cfg.lockDays > 0 ? new Date(now.getTime() + cfg.lockDays * DAY_MS) : null;
       await moveCards(tx, a.userId, b.userId, aCards, lockUntil, trade.id);
       await moveCards(tx, b.userId, a.userId, bCards, lockUntil, trade.id);
+      await recordTradeCards(tx, "trade", trade.id, [a.userId, aCards], [b.userId, bCards]);
 
       if (cfg.feeCoins > 0) {
         for (const party of [a, b]) {
@@ -396,6 +414,8 @@ export async function revertTrade(adminId: string, tradeId: string, now = new Da
           });
         }
       }
+      // Each player gives back what they received
+      await recordTradeCards(tx, "trade_revert", tradeId, [row.toUserId, row.offered as TradeCard[]], [row.fromUserId, row.requested as TradeCard[]]);
       await tx.cardLock.deleteMany({ where: { tradeId } });
       await tx.trade.update({ where: { id: tradeId }, data: { status: "reverted", revertedAt: now, revertedBy: adminId } });
     },

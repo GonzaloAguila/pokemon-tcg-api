@@ -3,6 +3,7 @@ import { prisma } from "../../lib/prisma.js";
 import { Errors } from "../../middleware/error-handler.js";
 import { getStarterDeck } from "../decks/starter-decks.js";
 import { createDeck, setActiveDeck } from "../decks/decks.service.js";
+import { recordCardChange } from "./card-ledger.js";
 
 // ---------------------------------------------------------------------------
 // Full profile select (reused across queries)
@@ -500,6 +501,7 @@ export async function setStarterDeck(userId: string, starterColor: StarterColor)
         create: { userId, cardDefId: entry.cardDefId, quantity: entry.quantity },
       });
     }
+    await recordCardChange(tx, userId, "starter_deck", `Mazo inicial: ${starter.name}`, starter.cards);
   });
 
   // Create the deck after the cards are in the collection, so it validates

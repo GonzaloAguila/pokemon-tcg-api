@@ -4,6 +4,7 @@ import { endAllRefreshSessions } from "../auth/refresh-sessions.js";
 import { Errors } from "../../middleware/error-handler.js";
 import { ALL_PERMISSIONS } from "./permissions.js";
 import * as usersService from "../users/users.service.js";
+import { recordCardChange, type CardChange } from "../users/card-ledger.js";
 import { invalidateAccountState } from "../../lib/account-state.js";
 import { disconnectUserSockets } from "../../socket/io-registry.js";
 
@@ -558,6 +559,8 @@ export async function adjustCards(
     if (!user) throw Errors.NotFound("Usuario");
 
     const results: { cardDefId: string; newQuantity: number }[] = [];
+    // What really changed (a removal stops at the copies the player has)
+    const applied: CardChange[] = [];
 
     for (const card of cards) {
       if (!card.cardDefId || !Number.isInteger(card.quantity) || card.quantity === 0) {
@@ -578,6 +581,7 @@ export async function adjustCards(
             data: { quantity: { increment: card.quantity } },
           });
           results.push({ cardDefId: card.cardDefId, newQuantity: updated.quantity });
+          applied.push({ cardDefId: card.cardDefId, quantity: card.quantity });
         } else {
           await tx.userCard.create({
             data: {
@@ -587,6 +591,7 @@ export async function adjustCards(
             },
           });
           results.push({ cardDefId: card.cardDefId, newQuantity: card.quantity });
+          applied.push({ cardDefId: card.cardDefId, quantity: card.quantity });
         }
       } else {
         // Remove cards: decrement and delete if reaches 0
@@ -599,6 +604,7 @@ export async function adjustCards(
         if (!existing) continue;
 
         const newQuantity = existing.quantity + card.quantity; // quantity is negative
+        applied.push({ cardDefId: card.cardDefId, quantity: -Math.min(existing.quantity, -card.quantity) });
         if (newQuantity <= 0) {
           await tx.userCard.delete({ where: { id: existing.id } });
           results.push({ cardDefId: card.cardDefId, newQuantity: 0 });
@@ -611,6 +617,8 @@ export async function adjustCards(
         }
       }
     }
+
+    await recordCardChange(tx, userId, "admin_adjustment", "Ajuste de un administrador", applied, adminId);
 
     // Log transaction
     const summary = cards.map((c) => `${c.cardDefId}:${c.quantity > 0 ? "+" : ""}${c.quantity}`).join(", ");
@@ -726,6 +734,24 @@ export async function getUserTransactions(
   ]);
 
   return { data: transactions, total, page, limit };
+}
+
+// ---------------------------------------------------------------------------
+// Get the paginated card history of a user (card_transactions)
+// ---------------------------------------------------------------------------
+
+export async function getUserCardHistory(userId: string, page: number, limit: number) {
+  const [data, total] = await Promise.all([
+    prisma.cardTransaction.findMany({
+      where: { userId },
+      orderBy: { createdAt: "desc" },
+      skip: (page - 1) * limit,
+      take: limit,
+      select: { id: true, reason: true, description: true, cards: true, refId: true, createdAt: true },
+    }),
+    prisma.cardTransaction.count({ where: { userId } }),
+  ]);
+  return { data, total, page, limit };
 }
 
 // =============================================================================

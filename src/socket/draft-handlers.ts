@@ -12,6 +12,7 @@ import { GameRoomManager } from "./rooms.js";
 import { maskRoomState } from "./room-state.js";
 import { prisma } from "../lib/prisma.js";
 import * as usersService from "../modules/users/users.service.js";
+import { recordCardChange } from "../modules/users/card-ledger.js";
 import { lockUsers } from "../modules/users/xp.service.js";
 import { draftSchemas, parsePayload } from "./schemas.js";
 import { requireSocketUser } from "./session-guard.js";
@@ -303,6 +304,10 @@ export async function creditDraftedCards(room: DraftRoom): Promise<void> {
           create: { userId: g.userId, cardDefId: g.cardDefId, quantity: g.quantity },
           update: { quantity: { increment: g.quantity } },
         });
+      }
+      for (const userId of alive) {
+        const cards = grants.filter((g) => g.userId === userId);
+        await recordCardChange(tx, userId, "draft", "Draft: cartas elegidas", cards, room.id);
       }
     }, { timeout: 15_000, maxWait: 10_000 });
     console.log(`🎴 Draft ${room.id}: drafted cards credited to ${alive.size} players`);

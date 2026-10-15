@@ -71,6 +71,15 @@ export async function listUnopenedPacks(userId: string) {
   }));
 }
 
+/** Where a stored pack came from (user_packs.source), as the card history shows it. */
+const STORED_PACK_SOURCE_LABEL: Record<string, string> = {
+  welcome: "bienvenida",
+  first_steps: "primeros pasos",
+  login_calendar: "calendario",
+  weekly_mission: "misión semanal",
+  battle_pass: "pase de batalla",
+};
+
 /**
  * Open one owned pack. `chosenPackId` is required for a "choose your set" pack and ignored
  * (must match if sent) for a fixed one. The pack is consumed with a conditional update, so two
@@ -84,7 +93,7 @@ export async function openOwnedPack(
   return prisma.$transaction(async (tx) => {
     const row = await tx.userPack.findFirst({
       where: { id: userPackId, userId },
-      select: { packId: true, openedAt: true },
+      select: { packId: true, openedAt: true, source: true },
     });
     if (!row) throw Errors.NotFound("Sobre");
     if (row.openedAt) throw Errors.Conflict("Este sobre ya fue abierto");
@@ -105,7 +114,8 @@ export async function openOwnedPack(
     });
     if (count === 0) throw Errors.Conflict("Este sobre ya fue abierto");
 
-    const pack = await openPackForUser(tx, userId, packId);
+    const label = `Sobre guardado (${STORED_PACK_SOURCE_LABEL[row.source] ?? row.source})`;
+    const pack = await openPackForUser(tx, userId, packId, { reason: "stored_pack", label });
     return { pack, unopenedPacks: await countUnopenedPacks(userId, tx) };
   });
 }

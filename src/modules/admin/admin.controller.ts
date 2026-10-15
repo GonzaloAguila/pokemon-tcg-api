@@ -183,6 +183,25 @@ router.get(
 );
 
 // ---------------------------------------------------------------------------
+// GET /admin/users/:userId/card-history — Paginated card history
+// ---------------------------------------------------------------------------
+
+router.get(
+  "/admin/users/:userId/card-history",
+  requireAuth,
+  requirePermission("users:view"),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const page = Math.max(Number(req.query.page) || 1, 1);
+      const limit = Math.min(Math.max(Number(req.query.limit) || 10, 1), 50);
+      res.json(await adminService.getUserCardHistory(req.params.userId, page, limit));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
 // DELETE /admin/users/:userId — Delete user
 // ---------------------------------------------------------------------------
 

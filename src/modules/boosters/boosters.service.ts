@@ -17,6 +17,7 @@ import {
 } from "@gonzaloaguila/game-core";
 
 import type { Db } from "../users/users.service.js";
+import { recordCardChange, type CardChangeReason } from "../users/card-ledger.js";
 import { ECONOMY } from "../economy/config.js";
 import type {
   BoosterPackType,
@@ -90,6 +91,9 @@ const SET_BOOSTERS: Record<string, SetBoosterDef> = {
     image: "/packs/team-rocket/booster.png",
   },
 };
+
+/** Set name of each standard booster ("Base Set"), for the card history. */
+const BOOSTER_SET_NAME = new Map(CARD_SETS.flatMap((set) => (SET_BOOSTERS[set.id] ? [[SET_BOOSTERS[set.id].id, set.name] as const] : [])));
 
 /** Ids of the standard boosters, in set-registry order (one per set). */
 export const STANDARD_BOOSTER_IDS: string[] = CARD_SETS.flatMap((set) => {
@@ -372,8 +376,14 @@ export function openPack(packId: string): PackOpeningResult {
   };
 }
 
-/** Add the pulled cards to the user's collection (inside the caller's transaction). */
-export async function addPulledCards(tx: Db, userId: string, result: PackOpeningResult): Promise<void> {
+/** How a pack reached the player, for the card history ("Sobre diario" → "Sobre diario: Base Set"). */
+export interface PackSource {
+  reason: CardChangeReason;
+  label: string;
+}
+
+/** Add the pulled cards to the user's collection and card history (inside the caller's transaction). */
+export async function addPulledCards(tx: Db, userId: string, result: PackOpeningResult, source: PackSource): Promise<void> {
   for (const pulled of result.cards) {
     await tx.userCard.upsert({
       where: { userId_cardDefId: { userId, cardDefId: pulled.card.id } },
@@ -381,12 +391,15 @@ export async function addPulledCards(tx: Db, userId: string, result: PackOpening
       create: { userId, cardDefId: pulled.card.id, quantity: 1 },
     });
   }
+  const changes = result.cards.map((pulled) => ({ cardDefId: pulled.card.id, quantity: 1 }));
+  const packName = BOOSTER_SET_NAME.get(result.packId) ?? result.packName;
+  await recordCardChange(tx, userId, source.reason, `${source.label}: ${packName}`, changes, result.packId);
 }
 
 /** Open `packId` and add its cards to the user's collection, inside the caller's transaction. */
-export async function openPackForUser(tx: Db, userId: string, packId: string): Promise<PackOpeningResult> {
+export async function openPackForUser(tx: Db, userId: string, packId: string, source: PackSource): Promise<PackOpeningResult> {
   const result = openPack(packId);
-  await addPulledCards(tx, userId, result);
+  await addPulledCards(tx, userId, result, source);
   return result;
 }
 

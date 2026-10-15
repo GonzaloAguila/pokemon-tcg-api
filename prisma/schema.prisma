@@ -120,6 +120,7 @@ model User {
   roomsAsPlayer2   GameRoom[]        @relation("RoomPlayer2")
   cards            UserCard[]
   transactions     Transaction[]
+  cardTransactions CardTransaction[]
   ownedCoins       UserCoin[]
   ownedCardBacks   UserCardBack[]
   ownedAvatars     UserAvatar[]
@@ -356,6 +357,26 @@ model Transaction {
 
   @@index([userId, createdAt])
   @@map("transactions")
+}
+
+// =============================================================================
+// Collection — Card history
+// =============================================================================
+
+/// Every change to a player's cards, one row per event (a pack, a trade, a draft…), written in
+/// the same transaction as the change (src/modules/users/card-ledger.ts).
+model CardTransaction {
+  id          String   @id @default(uuid())
+  userId      String
+  reason      String // CardChangeReason: "pack_purchase", "daily_pack", "trade", "draft", "admin_adjustment"…
+  description String
+  cards       Json // [{ cardDefId, quantity }]: quantity > 0 received, < 0 given away
+  refId       String? // pack id, trade id, draft room id, admin id…
+  createdAt   DateTime @default(now())
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("card_transactions")
 }
 
 // =============================================================================

@@ -131,7 +131,7 @@ router.post(
             tx,
           );
         }
-        return boosterService.openPackForUser(tx, userId, packId);
+        return boosterService.openPackForUser(tx, userId, packId, { reason: "pack_purchase", label: "Sobre comprado" });
       });
 
       res.json(result);

@@ -10,6 +10,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "../../lib/prisma.js";
 import { Errors } from "../../middleware/error-handler.js";
 import * as usersService from "../users/users.service.js";
+import { recordCardChange } from "../users/card-ledger.js";
 import { ECONOMY } from "../economy/config.js";
 import { economyDay, economyWeek } from "../economy/economy-time.js";
 import { claimOnce } from "../economy/claims.js";
@@ -253,18 +254,14 @@ export async function buyDailyCard(userId: string, cardDefId: string) {
   const itemKey = `card:${offer.cardDefId}`;
   await prisma.$transaction(async (tx) => {
     await recordDailyPurchase(tx, userId, itemKey, "Ya compraste esta carta hoy");
-    await usersService.spendCoins(
-      userId,
-      offer.price,
-      "card_purchase",
-      `Compra de carta: ${offer.isMystery ? `Carta misteriosa (${card.name})` : offer.name}`,
-      tx,
-    );
+    const description = `Compra de carta: ${offer.isMystery ? `Carta misteriosa (${card.name})` : offer.name}`;
+    await usersService.spendCoins(userId, offer.price, "card_purchase", description, tx);
     await tx.userCard.upsert({
       where: { userId_cardDefId: { userId, cardDefId: card.id } },
       update: { quantity: { increment: 1 } },
       create: { userId, cardDefId: card.id, quantity: 1 },
     });
+    await recordCardChange(tx, userId, "card_purchase", description, [{ cardDefId: card.id, quantity: 1 }]);
   });
 
   return {
@@ -361,6 +358,7 @@ export async function buyEnergy(
       update: { quantity: { increment: quantity } },
       create: { userId, cardDefId: offer.cardDefId, quantity },
     });
+    await recordCardChange(tx, userId, "energy_purchase", `Compra de ${quantity}x ${offer.name}`, [{ cardDefId: offer.cardDefId, quantity }]);
   });
 
   return { cardDefId: offer.cardDefId, energyType, quantity };

@@ -10,6 +10,7 @@ import { prisma } from "../../lib/prisma.js";
 import { isEconomyVerified } from "../../lib/email-verification.js";
 import { Errors } from "../../middleware/error-handler.js";
 import { creditBalance, debitBalance, type Db } from "../users/users.service.js";
+import { recordCardChange } from "../users/card-ledger.js";
 import { lockUsers } from "../users/xp.service.js";
 import { isStandardBoosterId, openPackForUser } from "../boosters/boosters.service.js";
 import type { PackOpeningResult } from "../boosters/boosters.types.js";
@@ -152,7 +153,7 @@ export async function claimDailyPack(userId: string, packId: string, now = new D
     if (!(await claimOnce(tx, userId, "daily_pack", economyDay(now)))) {
       throw Errors.Conflict("Ya abriste tu sobre diario de hoy");
     }
-    const pack = await openPackForUser(tx, userId, packId);
+    const pack = await openPackForUser(tx, userId, packId, { reason: "daily_pack", label: "Sobre diario" });
     const missionsCompleted = await recordMissionEvent(tx, userId, "daily_pack_opened", now);
     return { pack, missionsCompleted, checkIn: checkInResult };
   }, TX_OPTIONS);
@@ -245,6 +246,7 @@ export async function redeemExchangeToken(userId: string, cardDefId: string) {
       create: { userId, cardDefId, quantity: 1 },
       select: { quantity: true },
     });
+    await recordCardChange(tx, userId, "exchange_redeem", `Ficha de canje: ${card.name}`, [{ cardDefId, quantity: 1 }]);
     return { cardDefId, cardName: card.name, cost, exchangeTokens, quantity: owned.quantity };
   });
 }

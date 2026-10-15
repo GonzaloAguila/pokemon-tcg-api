@@ -9,6 +9,7 @@
 import { randomInt } from "crypto";
 import { CardRarity, getCardImageUrl } from "@gonzaloaguila/game-core";
 import * as usersService from "../users/users.service.js";
+import { recordCardChange } from "../users/card-ledger.js";
 import * as boosterService from "../boosters/boosters.service.js";
 import type { PackOpeningResult } from "../boosters/boosters.types.js";
 import {
@@ -168,6 +169,7 @@ export async function grantPrize(
         update: { quantity: { increment: 1 } },
         create: { userId, cardDefId: prize.cardDefId, quantity: 1 },
       });
+      await recordCardChange(tx, userId, "prize_card", `${source.label}: carta`, [{ cardDefId: prize.cardDefId, quantity: 1 }], source.type);
       return {};
 
     case "overlay":
@@ -213,7 +215,7 @@ export async function grantPrize(
     case "free_pack": {
       const ids = boosterService.STANDARD_BOOSTER_IDS;
       const packId = ids[Math.min(ids.length - 1, Math.floor(random() * ids.length))];
-      const packResult = await boosterService.openPackForUser(tx, userId, packId);
+      const packResult = await boosterService.openPackForUser(tx, userId, packId, { reason: "prize_pack", label: `${source.label}: sobre gratis` });
       return { packResult };
     }
 

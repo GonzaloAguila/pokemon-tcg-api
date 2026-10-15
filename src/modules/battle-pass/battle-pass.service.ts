@@ -16,6 +16,7 @@ import { ALL_CARDS, CardRarity, type Card } from "@gonzaloaguila/game-core";
 import { prisma } from "../../lib/prisma.js";
 import { Errors } from "../../middleware/error-handler.js";
 import * as usersService from "../users/users.service.js";
+import { recordCardChange } from "../users/card-ledger.js";
 import { ECONOMY, type BattlePassStepReward } from "../economy/config.js";
 import { economyCalendar, economyDay } from "../economy/economy-time.js";
 import { grantPacks } from "../economy/pack-inventory.js";
@@ -336,6 +337,7 @@ async function grantReward(tx: Db, userId: string, reward: BattlePassRewardDef) 
         update: { quantity: { increment: 1 } },
         create: { userId, cardDefId: card.id, quantity: 1 },
       });
+      await recordCardChange(tx, userId, "battle_pass", label, [{ cardDefId: card.id, quantity: 1 }]);
       return { type: "card", cardDefId: card.id, cardName: card.name };
     }
 
