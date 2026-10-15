@@ -197,20 +197,19 @@ export const ECONOMY = {
     /** Coins each player pays when a trade completes (a coin sink; it also discourages spam). */
     feeCoins: 50,
     /** Most copies on each side of a trade. */
-    maxCardsPerSide: 5,
-    /** Points per rarity to compare both sides (from the market prices 20 / 50 / 150). */
-    valueByRarity: { common: 1, uncommon: 3, rare: 8, "rare-holo": 20 } as Record<string, number>,
-    /** The side worth less must be worth at least this share of the other (no gifts). */
-    minValueRatio: 0.7,
+    maxCardsPerSide: 10,
+    /**
+     * Points of a card by rarity, for cards an admin hasn't given points to (backoffice "Puntos
+     * de cartas", table card_values).
+     */
+    valueByRarity: { common: 3, uncommon: 5, rare: 10, "rare-holo": 30 } as Record<string, number>,
+    /** The side worth fewer points must be worth at least this share of the other ("cuasi equilibrado"). */
+    minValueRatio: 0.8,
     /** Copies received in a trade can't be traded again for this long. */
     lockDays: 3,
-    /** A proposal not answered by then expires. */
-    offerHours: 24,
     /** Completed trades per economy day: in total, and with the same player. */
     maxTradesPerDay: 3,
     maxTradesPerDayWithSamePlayer: 1,
-    /** Proposals a player can have waiting for an answer. */
-    maxPendingSent: 5,
     /** An admin can revert a completed trade for this long. */
     revertDays: 7,
   },

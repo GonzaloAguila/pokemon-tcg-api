@@ -27,6 +27,7 @@ import { matchesRouter } from "./modules/matches/index.js";
 import { economyRouter } from "./modules/economy/index.js";
 import { newsRouter } from "./modules/news/index.js";
 import { tradesRouter } from "./modules/trades/index.js";
+import { loadCardValues } from "./modules/trades/card-values.js";
 import { refundUnsettledMatches } from "./modules/matches/matches.service.js";
 import { cleanupOldMessages } from "./modules/chat/chat.service.js";
 
@@ -121,9 +122,12 @@ const ready = refundUnsettledMatches()
   .then((n) => { if (n > 0) console.log(`💸 Refunded ${n} interrupted match(es)`); })
   .catch((err) => console.error("Could not settle interrupted matches:", err));
 
+// Card points for trades (set from the backoffice) live in memory
+const cardValuesReady = loadCardValues().catch((err) => console.error("Could not load card values:", err));
+
 // Start server
 const PORT = process.env.PORT || 3001;
-ready.finally(() => httpServer.listen(PORT, () => {
+Promise.all([ready, cardValuesReady]).finally(() => httpServer.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📡 Socket.io ready for connections`);
 }));

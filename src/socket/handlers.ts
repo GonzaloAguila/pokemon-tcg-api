@@ -18,6 +18,7 @@ import {
   draftRoomManager,
   announceDraftResult,
 } from "./draft-handlers.js";
+import { registerTradeEvents } from "./trade-handlers.js";
 import { InsufficientStakeError, betIneligibilityReason } from "../modules/matches/matches.service.js";
 import { ECONOMY } from "../modules/economy/config.js";
 import { openRoomMatch, roomMatchMode, settleRoomResult } from "./match-settlement.js";
@@ -1062,6 +1063,8 @@ export function setupSocketHandlers(io: Server): void {
 
     // Register draft events on this socket (pass roomManager for match creation)
     registerDraftEvents(io, socket, roomManager);
+    // Trade tables (card trades between players)
+    registerTradeEvents(io, socket);
   });
 
   // A game dropped without a result (admin close, both players gone): refund the table bet

@@ -175,6 +175,17 @@ model Trade {
   @@map("trades")
 }
 
+// Points of a card in trades, set by an admin (backoffice "Puntos de cartas"). Cards without a
+// row are worth ECONOMY.trades.valueByRarity.
+model CardValue {
+  cardDefId   String   @id
+  points      Int
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+
+  @@map("card_values")
+}
+
 // Copies received in a trade can't be traded again until unlockAt (no quick resale chains).
 model CardLock {
   id        String   @id @default(uuid())
