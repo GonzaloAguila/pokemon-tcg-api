@@ -2,6 +2,7 @@
  * Trade table socket events (tables: trade-tables.ts; the trade itself: trades.service.ts).
  *
  * trade:getTables                 → trade:tableList [open tables] (also broadcast on changes)
+ *                                   + trade:myTable { tableId } | null (the table you sit at)
  * trade:create                    → trade:state (eligible players, one table each)
  * trade:join { tableId }          → trade:state to both (also to come back after a reload)
  * trade:setCards { tableId, cards } your side; must be duplicates you can give
@@ -105,8 +106,12 @@ export function registerTradeEvents(io: Server, socket: Socket): void {
     });
   };
 
+  // Also tells a player sitting at a table which one (the way back from the lobby)
   socket.on("trade:getTables", () => {
     socket.emit("trade:tableList", tradeTableManager.list());
+    const userId: string | undefined = socket.data.user?.userId;
+    const mine = userId ? tradeTableManager.getTableOf(userId) : undefined;
+    socket.emit("trade:myTable", mine ? { tableId: mine.id } : null);
   });
 
   on("trade:create", async (userId) => {
