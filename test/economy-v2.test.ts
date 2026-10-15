@@ -557,15 +557,15 @@ describe("odds", () => {
   it("matches a simulation of openPack", () => {
     const n = 4000;
     let holoPacks = 0;
-    let computerSearch = 0;
+    let beedrill = 0;
     for (let i = 0; i < n; i++) {
       const cards = openPack("base-set-booster").cards;
       if (cards.some((c) => c.card.rarity === "rare-holo")) holoPacks++;
-      if (cards.some((c) => c.card.id === "base-set-071-computer-search")) computerSearch++;
+      if (cards.some((c) => c.card.id === "base-set-017-beedrill")) beedrill++;
     }
     const odds = getPackOdds("base-set-booster")!;
     expect(Math.abs(holoPacks / n - odds.holoChance)).toBeLessThan(0.035);
-    expect(Math.abs(computerSearch / n - odds.cardChances["base-set-071-computer-search"])).toBeLessThan(0.012);
+    expect(Math.abs(beedrill / n - odds.cardChances["base-set-017-beedrill"])).toBeLessThan(0.015);
   });
 
   it("every pack costs the same; wheel and slots probabilities add up to 1", () => {

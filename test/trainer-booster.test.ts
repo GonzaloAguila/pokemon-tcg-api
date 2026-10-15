@@ -67,3 +67,18 @@ describe("trainer booster", () => {
     expect(broke.status).toBeGreaterThanOrEqual(400);
   });
 });
+
+describe("set boosters", () => {
+  it("never give Trainers (they only come in the Trainer booster), in packs or in their odds", () => {
+    for (const packId of STANDARD_BOOSTER_IDS) {
+      for (let i = 0; i < 100; i++) {
+        const { cards } = openPack(packId);
+        expect(cards).toHaveLength(11);
+        expect(cards.some((p) => p.card.kind === "trainer")).toBe(false);
+      }
+      const odds = getPackOdds(packId)!;
+      const trainerIds = new Set(TRAINERS.map((c) => c.id));
+      expect(Object.keys(odds.cardChances).some((id) => trainerIds.has(id))).toBe(false);
+    }
+  });
+});

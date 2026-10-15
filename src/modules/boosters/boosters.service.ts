@@ -43,8 +43,11 @@ const packTypes: Map<string, BoosterPackType> = new Map();
  * Every set listed here gets one; adding a set's booster = one entry (the cards come from
  * game-core's set registry).
  */
+// The rare slot: holo with holoChance, otherwise a non-holo rare (sets with only holo rares —
+// Jungle, Fossil, Team Rocket — always give a holo). 0.665 keeps Base Set's holo rate from before
+// Trainers left the set boosters (0.33 holo + 0.67 × 16 holos / 32 rares including 10 Trainers).
 const STANDARD_BOOSTER_SLOTS: BoosterPackType["slots"] = [
-  { rarity: "rare", count: 1, holoChance: 0.33 },
+  { rarity: "rare", count: 1, holoChance: 0.665, nonHoloWhenNotHolo: true },
   { rarity: "uncommon", count: 3, upgradeChance: 0.01 },
   { rarity: "common", count: 5 },
 ];
@@ -207,19 +210,27 @@ export function deletePack(packId: string): boolean {
 
 const ALL_TRAINERS: Card[] = ALL_CARDS.filter((card) => card.kind === "trainer");
 
-/** Cards a pack draws from: its set in game-core's registry, or every Trainer */
+/**
+ * Cards a pack draws from: every Trainer for the Trainer booster; for a set booster its set in
+ * game-core's registry without the Trainers (they only come in the Trainer booster).
+ */
 function setCards(pack: Pick<BoosterPackType, "setId" | "trainersOnly">): Card[] {
   if (pack.trainersOnly) return ALL_TRAINERS;
-  return getSetById(pack.setId)?.cards ?? [];
+  return (getSetById(pack.setId)?.cards ?? []).filter((card) => card.kind !== "trainer");
 }
 
 /**
  * Get cards by rarity from a pack's pool. The "rare" pool is rare ∪ rare-holo (sets without
- * non-holo rares — Jungle, Fossil, Team Rocket — therefore always give a holo in the rare slot).
+ * non-holo rares — Jungle, Fossil, Team Rocket — therefore always give a holo in the rare slot);
+ * "rare-nonholo" is the non-holo rares, or that same "rare" pool when the set has none.
  */
 function getCardsByRarity(pack: Pick<BoosterPackType, "setId" | "trainersOnly">, rarity: string): Card[] {
   const cards = setCards(pack);
   if (cards.length === 0) return [];
+  if (rarity === "rare-nonholo") {
+    const nonHolo = cards.filter((card) => card.rarity === "rare");
+    return nonHolo.length > 0 ? nonHolo : getCardsByRarity(pack, "rare");
+  }
 
   return cards.filter((card) => {
     if (rarity === "rare-holo") {
@@ -259,7 +270,7 @@ function slotOutcomes(slot: BoosterPackType["slots"][number]): { probability: nu
     slot.rarity === "rare" && slot.holoChance
       ? [
           { probability: slot.holoChance, rarity: "rare-holo", isHolo: true },
-          { probability: 1 - slot.holoChance, rarity: "rare", isHolo: false },
+          { probability: 1 - slot.holoChance, rarity: slot.nonHoloWhenNotHolo ? "rare-nonholo" : "rare", isHolo: false },
         ]
       : [{ probability: 1, rarity: slot.rarity, isHolo: false }];
   if (!slot.upgradeChance) return base;
@@ -291,22 +302,27 @@ export function openPack(packId: string): PackOpeningResult {
     for (let i = 0; i < slot.count; i++) {
       let targetRarity = slot.rarity;
       let isHolo = false;
+      let pool: string = targetRarity;
 
       // Check for holo upgrade on rare slot
       if (slot.rarity === "rare" && slot.holoChance) {
         if (Math.random() < slot.holoChance) {
           targetRarity = "rare-holo";
           isHolo = true;
+        } else if (slot.nonHoloWhenNotHolo) {
+          pool = "rare-nonholo";
         }
       }
+      if (targetRarity !== slot.rarity) pool = targetRarity;
 
       // Per-card rarity upgrade (e.g. uncommon → rare)
       if (slot.upgradeChance && Math.random() < slot.upgradeChance) {
         if (slot.rarity === "uncommon") targetRarity = "rare";
         else if (slot.rarity === "common") targetRarity = "uncommon";
+        pool = targetRarity;
       }
 
-      const availableCards = getCardsByRarity(pack, targetRarity);
+      const availableCards = getCardsByRarity(pack, pool);
       if (availableCards.length === 0) continue;
 
       const [card] = pickRandom(availableCards, 1);

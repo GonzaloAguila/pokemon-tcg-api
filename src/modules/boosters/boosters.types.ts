@@ -14,6 +14,8 @@ export interface PackSlotDistribution {
   holoChance?: number;
   /** Per-card chance to upgrade rarity (e.g. uncommon → rare) */
   upgradeChance?: number;
+  /** Rare slot: when the holo roll fails, a non-holo rare (any rare if the set has none) */
+  nonHoloWhenNotHolo?: boolean;
 }
 
 /**

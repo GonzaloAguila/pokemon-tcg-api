@@ -93,6 +93,7 @@ Conventions (unchanged):
 | Match coins | online (normal/draft) win 25 / loss 10 · vs AI win 10 / loss 5 · cap 75 per economy day |
 | Counted game | turn ≥ 3 and ≥ 2 min (AI: ≥ 3 min, first 10 AI games per day); max 3 counted wins per day vs the same opponent; friendly tables never count |
 | Battle pass | 1 step per login day (max 30 / month length). Free: 50 coins per step, pack at 10 and 20, unowned holo at 30. Premium (2 Rare Candies): cosmetics + 4 packs + 1.000 coins |
+| Boosters | Set boosters (one per set, 200 coins; daily, welcome and prize packs are set boosters): 1 rare (holo 66.5%, otherwise a non-holo rare; Jungle/Fossil/Team Rocket only have holo rares) + 3 uncommons (1% upgrade to rare) + 5 commons + 2 basic Energy, **no Trainers**. Trainer booster (market only, 200): 11 Trainers of every set — the only booster that gives Trainers |
 | Set milestones | 50% → 100 coins · 75% → 250 coins + set card back · 100% → 500 coins + title + holo variant; whole catalog → title "Maestro Coleccionista" |
 | Fichas de canje | common / uncommon / rare (incl. Trainers, special Energy) = 1 · holo = 2 · basic Energy not redeemable |
 | Packs | 200 coins every booster (the 5-card Base "Theme Pack" was retired) |
