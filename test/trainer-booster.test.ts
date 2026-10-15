@@ -82,3 +82,31 @@ describe("set boosters", () => {
     }
   });
 });
+
+describe("card weights", () => {
+  it("a card with weight 0.25 comes out about a quarter as often as the others of its rarity, and the odds say so", () => {
+    const charizard = "base-set-004-charizard";
+    const blastoise = "base-set-002-blastoise";
+    ECONOMY.packs.cardWeights[charizard] = 0.25;
+    try {
+      const odds = getPackOdds("base-set-booster")!;
+      const ratio = odds.cardChances[charizard] / odds.cardChances[blastoise];
+      expect(ratio).toBeGreaterThan(0.24);
+      expect(ratio).toBeLessThan(0.27);
+      expect(odds.rarities.find((r) => r.rarity === "rare-holo")!.chancePerCard).toBe(odds.cardChances[blastoise]);
+
+      let zard = 0;
+      let blast = 0;
+      for (let i = 0; i < 6000; i++) {
+        for (const p of openPack("base-set-booster").cards) {
+          if (p.card.id === charizard) zard++;
+          if (p.card.id === blastoise) blast++;
+        }
+      }
+      expect(zard / blast).toBeGreaterThan(0.15);
+      expect(zard / blast).toBeLessThan(0.38);
+    } finally {
+      delete ECONOMY.packs.cardWeights[charizard];
+    }
+  });
+});

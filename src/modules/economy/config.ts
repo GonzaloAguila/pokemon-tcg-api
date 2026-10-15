@@ -170,6 +170,12 @@ export const ECONOMY = {
   packs: {
     /** Every standard booster costs the same. */
     price: 200,
+    /**
+     * How often a card comes out compared with the other cards it is drawn with (same pack,
+     * same rarity): 1 by default, 0.5 = half as often, 0.25 = a quarter. By card id, e.g.
+     * "base-set-004-charizard": 0.5. The odds (GET /api/economy/odds) follow.
+     */
+    cardWeights: {} as Record<string, number>,
   },
 
   rareCandy: {

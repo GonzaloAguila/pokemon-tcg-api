@@ -253,6 +253,23 @@ function getEnergyCards(pack: Pick<BoosterPackType, "setId" | "trainersOnly">): 
   return CARD_SETS.map((set) => set.cards.filter(isBasicEnergy)).find((cards) => cards.length > 0) ?? [];
 }
 
+/** A card's weight in its pool (ECONOMY.packs.cardWeights, default 1). */
+function cardWeight(card: Card): number {
+  const weight = ECONOMY.packs.cardWeights[card.id];
+  return weight !== undefined && weight > 0 ? weight : 1;
+}
+
+/** One card of the pool, each with its weight (cardWeight). */
+function pickWeighted(cards: Card[]): Card {
+  const total = cards.reduce((sum, card) => sum + cardWeight(card), 0);
+  let roll = Math.random() * total;
+  for (const card of cards) {
+    roll -= cardWeight(card);
+    if (roll < 0) return card;
+  }
+  return cards[cards.length - 1];
+}
+
 /** `count` distinct items, uniformly (partial Fisher–Yates). */
 function pickRandom<T>(array: T[], count: number): T[] {
   const items = [...array];
@@ -325,7 +342,7 @@ export function openPack(packId: string): PackOpeningResult {
       const availableCards = getCardsByRarity(pack, pool);
       if (availableCards.length === 0) continue;
 
-      const [card] = pickRandom(availableCards, 1);
+      const card = pickWeighted(availableCards);
       pulledCards.push({
         card,
         slotType: isHolo ? "rare-holo" : targetRarity,
@@ -401,7 +418,10 @@ export function getPackOdds(packId: string): PackOdds | null {
       for (const outcome of outcomes) {
         const pool = getCardsByRarity(pack, outcome.rarity);
         if (pool.length === 0) continue; // openPack skips the card
-        for (const card of pool) dist.set(card.id, (dist.get(card.id) ?? 0) + outcome.probability / pool.length);
+        const totalWeight = pool.reduce((sum, card) => sum + cardWeight(card), 0);
+        for (const card of pool) {
+          dist.set(card.id, (dist.get(card.id) ?? 0) + (outcome.probability * cardWeight(card)) / totalWeight);
+        }
       }
       draws.push(dist);
     }
@@ -450,7 +470,8 @@ export function getPackOdds(packId: string): PackOdds | null {
       return {
         rarity,
         cards: cards.length,
-        chancePerCard: cardChances[cards[0].id],
+        // A regular card of this rarity (cards with a lower weight come out less: cardChances)
+        chancePerCard: Math.max(...cards.map((c) => cardChances[c.id])),
         chanceAtLeastOne: round(1 - none),
         expectedPerPack: round(expected),
       };
