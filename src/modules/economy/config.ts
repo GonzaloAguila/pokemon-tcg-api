@@ -185,6 +185,36 @@ export const ECONOMY = {
     maxCoinConversionsPerWeek: 2,
   },
 
+  /**
+   * Card trades between players (modules/trades). Cards only: never coins, Rare Candy or
+   * cosmetics. Only duplicates (a player always keeps 1 copy), basic Energy excluded.
+   */
+  trades: {
+    /** Who can trade: verified email, account age and counted online games (like table bets). */
+    requireVerifiedEmail: true,
+    minAccountAgeDays: 7,
+    minOnlineGames: 20,
+    /** Coins each player pays when a trade completes (a coin sink; it also discourages spam). */
+    feeCoins: 50,
+    /** Most copies on each side of a trade. */
+    maxCardsPerSide: 5,
+    /** Points per rarity to compare both sides (from the market prices 20 / 50 / 150). */
+    valueByRarity: { common: 1, uncommon: 3, rare: 8, "rare-holo": 20 } as Record<string, number>,
+    /** The side worth less must be worth at least this share of the other (no gifts). */
+    minValueRatio: 0.7,
+    /** Copies received in a trade can't be traded again for this long. */
+    lockDays: 3,
+    /** A proposal not answered by then expires. */
+    offerHours: 24,
+    /** Completed trades per economy day: in total, and with the same player. */
+    maxTradesPerDay: 3,
+    maxTradesPerDayWithSamePlayer: 1,
+    /** Proposals a player can have waiting for an answer. */
+    maxPendingSent: 5,
+    /** An admin can revert a completed trade for this long. */
+    revertDays: 7,
+  },
+
   draft: {
     /** Coins charged to a player who leaves the tournament early (what they have, up to this); they go to the prize pool. */
     withdrawPenalty: 1000,

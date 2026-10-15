@@ -61,7 +61,7 @@ export function assertValidBet(betAmount: number) {
 // ---------------------------------------------------------------------------
 
 /** Online games (normal + ranked + draft) that counted for the user's stats. */
-async function countedOnlineGames(db: Db, userId: string): Promise<number> {
+export async function countedOnlineGames(db: Db, userId: string): Promise<number> {
   const s = await db.userStats.findUnique({ where: { userId } });
   if (!s) return 0;
   return s.normalWins + s.normalLosses + s.rankedWins + s.rankedLosses + s.draftWins + s.draftLosses;

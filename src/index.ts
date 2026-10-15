@@ -26,6 +26,7 @@ import { waitlistRouter } from "./modules/waitlist/index.js";
 import { matchesRouter } from "./modules/matches/index.js";
 import { economyRouter } from "./modules/economy/index.js";
 import { newsRouter } from "./modules/news/index.js";
+import { tradesRouter } from "./modules/trades/index.js";
 import { refundUnsettledMatches } from "./modules/matches/matches.service.js";
 import { cleanupOldMessages } from "./modules/chat/chat.service.js";
 
@@ -102,6 +103,7 @@ app.use("/api", waitlistRouter);
 app.use("/api", matchesRouter);
 app.use("/api", economyRouter);
 app.use("/api", newsRouter);
+app.use("/api", tradesRouter);
 // app.use("/api/matchmaking", matchmakingRouter);
 
 // Error handler

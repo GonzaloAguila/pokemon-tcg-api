@@ -136,9 +136,59 @@ model User {
   missions         UserMission[]
   newsPosts        NewsPost[]        @relation("NewsAuthor")
   refreshSessions  RefreshSession[]
+  tradesSent       Trade[]           @relation("TradeFrom")
+  tradesReceived   Trade[]           @relation("TradeTo")
+  cardLocks        CardLock[]
 
   @@index([providerId, provider])
   @@map("users")
+}
+
+// Card trades between two players (modules/trades). A proposal names the cards each side gives
+// (JSON [{ cardDefId, quantity }]); accepting runs it in one transaction that re-checks both
+// collections. status: pending | completed | rejected | cancelled | expired | reverted.
+model Trade {
+  id             String    @id @default(uuid())
+  fromUserId     String
+  from           User      @relation("TradeFrom", fields: [fromUserId], references: [id], onDelete: Cascade)
+  toUserId       String
+  to             User      @relation("TradeTo", fields: [toUserId], references: [id], onDelete: Cascade)
+  status         String    @default("pending")
+  offered        Json // what fromUser gives
+  requested      Json // what toUser gives
+  offeredValue   Int
+  requestedValue Int
+  fee            Int       @default(0) // coins each player pays when it completes
+  fromIp         String?
+  acceptIp       String?
+  flags          Json      @default("[]") // e.g. ["same_ip"], for the backoffice
+  createdAt      DateTime  @default(now())
+  expiresAt      DateTime
+  respondedAt    DateTime?
+  completedAt    DateTime?
+  revertedAt     DateTime?
+  revertedBy     String?
+
+  @@index([fromUserId, createdAt])
+  @@index([toUserId, createdAt])
+  @@index([status, createdAt])
+  @@map("trades")
+}
+
+// Copies received in a trade can't be traded again until unlockAt (no quick resale chains).
+model CardLock {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  cardDefId String
+  quantity  Int
+  tradeId   String
+  unlockAt  DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId, cardDefId, unlockAt])
+  @@index([tradeId])
+  @@map("card_locks")
 }
 
 // One row per logged-in device: the SHA-256 of its refresh token. Logging in elsewhere adds a
