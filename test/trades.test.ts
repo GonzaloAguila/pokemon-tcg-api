@@ -256,10 +256,10 @@ describe("HTTP", () => {
       const admin = await createUser({}, { role: "admin", permissions: ["users:economy"] });
       const list = await app.request("GET", "/api/admin/card-values?set=jungle", { token: tokenFor(admin) });
       expect(list.body.cards.length).toBeGreaterThan(40);
-      const put = await app.request("PUT", "/api/admin/card-values", { token: tokenFor(admin), body: { values: [{ cardDefId: COMMON, points: 7 }] } });
+      const put = await app.request("PATCH", "/api/admin/card-values", { token: tokenFor(admin), body: { values: [{ cardDefId: COMMON, points: 7 }] } });
       expect(put.status).toBe(200);
       expect(cardTradeValue(COMMON)).toBe(7);
-      expect((await app.request("PUT", "/api/admin/card-values", { token: tokenFor(admin), body: { values: [{ cardDefId: COMMON, points: 0 }] } })).status).toBe(400);
+      expect((await app.request("PATCH", "/api/admin/card-values", { token: tokenFor(admin), body: { values: [{ cardDefId: COMMON, points: 0 }] } })).status).toBe(400);
     } finally {
       await app.close();
     }

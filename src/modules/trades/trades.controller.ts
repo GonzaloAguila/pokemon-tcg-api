@@ -9,7 +9,7 @@
  * POST /api/admin/trades/:id/revert       (users:cards)
  * GET  /api/admin/card-values/sets        (users:economy) the sets
  * GET  /api/admin/card-values?set=id      (users:economy) every tradable card of a set and its points
- * PUT  /api/admin/card-values             (users:economy) { values: [{ cardDefId, points | null }] }
+ * PATCH /api/admin/card-values            (users:economy) { values: [{ cardDefId, points | null }] }
  */
 
 import { Router, type Request, type Response, type NextFunction } from "express";
@@ -140,7 +140,7 @@ router.get(
   }),
 );
 
-router.put(
+router.patch(
   "/admin/card-values",
   requireAuth,
   requirePermission(ADMIN_PERMISSIONS.USERS_EDIT_ECONOMY),
