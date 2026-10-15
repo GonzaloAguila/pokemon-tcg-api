@@ -18,6 +18,7 @@
   "dependencies": {
     "@gonzaloaguila/game-core": "0.6.3",
     "@prisma/client": "^5.22.0",
+    "@sentry/node": "11.1.0",
     "bcrypt": "^6.0.0",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",

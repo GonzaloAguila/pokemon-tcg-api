@@ -47,6 +47,12 @@ export const Errors = {
     new AppError("Verificá tu email para continuar", 403, EMAIL_NOT_VERIFIED),
 };
 
+/** An error that carries a 4xx status of its own (body-parser's, from express.json). */
+function isClientError(err: Error): err is Error & { status: number } {
+  const status = (err as { status?: unknown }).status;
+  return typeof status === "number" && status >= 400 && status < 500;
+}
+
 /**
  * Express error handler middleware
  */
@@ -56,7 +62,10 @@ export function errorHandler(
   res: Response,
   _next: NextFunction
 ): void {
-  console.error("Error:", err);
+  // Expected rejections (4xx) are warnings; console.error is what Sentry reports
+  if (err instanceof AppError && err.statusCode < 500) console.warn("Error:", err.message);
+  else if (isClientError(err)) console.warn("Error:", err.message);
+  else console.error("Error:", err);
 
   if (err instanceof AppError) {
     res.status(err.statusCode).json({
@@ -68,6 +77,12 @@ export function errorHandler(
       // that check the body directly
       ...(err.code === EMAIL_NOT_VERIFIED ? { code: err.code, message: err.message } : {}),
     });
+    return;
+  }
+
+  // Rejected by express.json (malformed JSON, body too large): the client's fault, not a 500
+  if (isClientError(err)) {
+    res.status(err.status).json({ error: { message: "Invalid request", code: "BAD_REQUEST" } });
     return;
   }
 
