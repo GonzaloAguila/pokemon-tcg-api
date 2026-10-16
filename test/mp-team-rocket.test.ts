@@ -19,7 +19,7 @@ import {
   type GameState,
   type PokemonInPlay,
 } from "@gonzaloaguila/game-core";
-import { GameRoomManager } from "../src/socket/rooms.js";
+import { GameRoomManager, defaultSelection } from "../src/socket/rooms.js";
 import { maskGameStateForPlayer } from "../src/socket/state-masking.js";
 
 type Side = "p1" | "p2";
@@ -339,12 +339,30 @@ describe.each(["p1", "p2"] as const)("Team Rocket in multiplayer as %s", (actor)
     await expectRejected(t, t.actAs(opp, "answerTrainerChoice", { selection: [] }), /No hay ninguna carta de Entrenador/);
   });
 
-  it("Challenge! unanswered: the Trainer's player can kick the opponent once the timer ran out", async () => {
+  it("Challenge! unanswered: no kick; when the opponent's answer clock runs out the server answers by default", async () => {
     const t = setupGame(actor, { myHand: [tr("Challenge!", "challenge-h")] });
     expect((await t.act("startTrainer", { cardId: "challenge-h", selections: [] })).success).toBe(true);
     t.room.turnStartedAt = Date.now() - 200_000;
     expect(t.manager.requestKick(t.room.id, SOCKET[opp])).toMatchObject({ success: false });
-    expect(t.manager.requestKick(t.room.id, SOCKET[actor])).toEqual({ success: true, winner: VIEWER[actor] });
+    // Owner rule (Gym Heroes): an off-turn answer is never a forfeit
+    expect(t.manager.requestKick(t.room.id, SOCKET[actor])).toMatchObject({ success: false, error: expect.stringMatching(/respuesta por defecto/) });
+    // Default answer: the step's first option ("accept"); the steps that follow are answered by
+    // whoever they ask (the opponent's by default again, the player's own by the player)
+    expect((await t.manager.autoAnswerTimedOut(t.room.id))?.success).toBe(true);
+    for (let i = 0; i < 6 && t.room.pendingTrainer; i++) {
+      const pending = (t.room.gameState as GameState & { pendingTrainerChoice: { chooser: string; step: Parameters<typeof defaultSelection>[0] } }).pendingTrainerChoice;
+      if (pending.chooser === "opponent") {
+        expect(t.manager.getClock(t.room).kind).toBe("answer");
+        expect((await t.manager.autoAnswerTimedOut(t.room.id))?.success).toBe(true);
+      } else {
+        expect(t.manager.getClock(t.room).kind).toBe("turn");
+        expect(await t.manager.autoAnswerTimedOut(t.room.id)).toBeNull(); // the player's own step: their turn clock
+        expect((await t.act("answerTrainerChoice", { selection: defaultSelection(pending.step) })).success).toBe(true);
+      }
+    }
+    expect(t.room.pendingTrainer).toBeUndefined();
+    expect(t.mine().isPlayerTurn).toBe(true);
+    expect(t.room.answerClock).toBeUndefined();
   });
 
   it("Challenge! declined: the player draws 2", async () => {

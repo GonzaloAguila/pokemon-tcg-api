@@ -43,7 +43,12 @@ const effectSelections = z
   .max(MAX_EFFECT_STEPS)
   .nullish()
   .transform((v) => v ?? []);
-const attackIndex = z.number().int().min(0).max(9);
+/**
+ * An index from game-core's getAvailableAttacks: the Active's own attacks first, then — after
+ * Recall — the attacks of the cards under it (indices past its own). No upper bound here: the
+ * engine rejects an index it doesn't offer (canExecuteAttack).
+ */
+const attackIndex = z.number().int().min(0);
 /** One answer to a pending step (attack / power / Trainer choice): option ids. */
 const choiceSelection = z.array(z.string().min(1).max(200)).max(MAX_ZONE_CARDS);
 
@@ -105,6 +110,8 @@ export const socketSchemas = {
   requestCoinFlip: z.discriminatedUnion("purpose", [
     z.object({ roomId, purpose: z.literal("trainer"), cardId: instanceId }),
     z.object({ roomId, purpose: z.literal("power"), pokemonId: instanceId }),
+    // The action of the Stadium in play (none of Gym Heroes' flips before its steps)
+    z.object({ roomId, purpose: z.literal("stadium") }),
   ]),
 
   /** The action itself is validated by parseGameAction() inside GameRoomManager.executeAction. */
@@ -183,6 +190,9 @@ export const gameActionSchema = z.discriminatedUnion("type", [
     // Porygon: any type other than Colorless
     conversionType: optional(z.enum(BASIC_ENERGY_TYPES)),
     conversionEffect: optional(z.enum(["changeWeakness", "changeResistance"])),
+    // Vermilion City Gym: the attacker (a Lt. Surge's Pokémon) flips the Stadium's coin too
+    // (game-core canUseVermilionCoin); the server rolls it with the attack's coins
+    vermilionCoin: optional(z.boolean()),
   })),
   action("endTurn", noPayload),
   action("retreat", z.object({ energyIdsToDiscard: idList(MAX_ZONE_CARDS), benchIndex })),
@@ -213,7 +223,13 @@ export const gameActionSchema = z.discriminatedUnion("type", [
   action("clearPeek", noPayload),
   // Answer to state.pendingAttackChoice.step (option ids; Prophecy's order "0".."n-1").
   // Only the step's chooser may send it; game-core checks it against the step's options.
-  action("resolveAttackChoice", z.object({ selection: choiceSelection })),
+  // Also the mid-attack questions (pendingAttackChoice.reaction: Flee, Bench Guard, Sabrina's
+  // ESP, Charity). Coins are never accepted from the client: Sabrina's ESP's re-flip is rolled
+  // by the server, so a payload carrying coins is rejected.
+  action("resolveAttackChoice", z.object({
+    selection: choiceSelection,
+    coinResults: z.undefined({ message: "Las monedas las lanza el servidor" }),
+  })),
   // Answer to state.pendingPowerChoice.step (Summon Minions, Sneak Attack, Reel In): only the
   // side whose turn it is; game-core checks it against the step's options.
   action("resolvePowerChoice", z.object({ selection: choiceSelection })),
@@ -236,6 +252,11 @@ export const gameActionSchema = z.discriminatedUnion("type", [
   action("startTrainer", z.object({ cardId: instanceId, selections: effectSelections })),
   // Answer to state.pendingTrainerChoice.step, from the player that step asks (either side).
   action("answerTrainerChoice", z.object({ selection: choiceSelection })),
+  // The action of the Stadium in play (Celadon City Gym): answers to getStadiumActionSteps
+  action("stadiumAction", z.object({ selections: effectSelections })),
+  // Narrow Gym: the Benched Pokémon the player at the head of state.pendingBenchTrim returns to
+  // the hand (game-core resolveBenchTrim checks the count and that they are theirs)
+  action("benchTrim", z.object({ discardIds: idList(BENCH_SIZE) })),
   action("surrender", noPayload),
 ]);
 

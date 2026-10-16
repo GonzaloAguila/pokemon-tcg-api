@@ -18,6 +18,13 @@
  * full (Prophecy's top cards included, even of the opponent's deck); everyone else gets a
  * "waiting" stub with the question but no options, cards, deck or context.
  *
+ * Gym Heroes: the Stadium (`stadium { card, playedBy }`), Narrow Gym's `pendingBenchTrim` queue,
+ * Recall's `recallActiveOnTurn`, Pokémon's `previousEvolutions` and attached Trainers (Charity,
+ * Sabrina's ESP) are public and sent as is (swapSides keeps them relative). Tickling Machine's
+ * `setAsideHands` are face down for EVERYONE, their owner included (counts only). A mid-attack
+ * question (`pendingAttackChoice.reaction`) never carries its `resume` (the paused attack's
+ * coins and options, server-side only).
+ *
  * Still visible to the owner: their own deck order and prizes (the client needs the
  * deck contents for search effects); hiding those needs search UIs to get a sorted
  * copy instead — tracked as a follow-up.
@@ -173,6 +180,23 @@ function hideZones(state: GameState, sides: HiddenZoneSide[], revealed: Set<Hidd
   return masked;
 }
 
+/**
+ * Tickling Machine (Gym Heroes): a hand set aside face down until the end of its owner's next
+ * turn — nobody may look, its owner and spectators included. Same-length placeholders; the
+ * entries' `side` stays as swapSides left it.
+ */
+function hideSetAsideHands(state: GameState): GameState {
+  const setAside = state.setAsideHands;
+  if (!Array.isArray(setAside) || setAside.length === 0) return state;
+  return {
+    ...state,
+    setAsideHands: setAside.map((entry: { side?: string; cards?: unknown[] }, n: number) => ({
+      ...entry,
+      cards: (Array.isArray(entry.cards) ? entry.cards : []).map((_, i) => ({ id: `hidden-set-aside-${n}-${i}`, hidden: true })),
+    })),
+  };
+}
+
 /** Drop pending choices the viewer doesn't own (not their turn, or a spectator). */
 function stripForeignPending(state: GameState, viewer: Viewer): GameState {
   const owns = viewer !== "spectator" && state.isPlayerTurn === true;
@@ -195,7 +219,14 @@ function maskAttackChoice(state: GameState, viewer: Viewer): GameState {
   const viewerIsAttacker = state.isPlayerTurn === true;
   const chooser = choice.step.chooser ?? "self";
   const viewerChooses = viewer !== "spectator" && (chooser === "opponent" ? !viewerIsAttacker : viewerIsAttacker);
-  if (viewerChooses) return withAnswererStep(state, "pendingAttackChoice", choice);
+  if (viewerChooses) {
+    // A mid-attack question: who / what asks, never how the paused attack resumes
+    if (choice.reaction) {
+      const { resume: _resume, ...reaction } = choice.reaction;
+      return withAnswererStep({ ...state, pendingAttackChoice: { ...choice, reaction } }, "pendingAttackChoice", { ...choice, reaction });
+    }
+    return withAnswererStep(state, "pendingAttackChoice", choice);
+  }
   const { title, description, maxSelections, minSelections } = choice.step;
   return {
     ...state,
@@ -275,7 +306,7 @@ export function maskGameStateForPlayer(
 ): GameState {
   const view = forPlayer === "spectator" ? state : getGameStateForPlayer(state, forPlayer);
   const sides: HiddenZoneSide[] = forPlayer === "spectator" ? ["player", "opponent"] : ["opponent"];
-  let masked = stripForeignPending(hideZones(view, sides, revealedZones(view, forPlayer)), forPlayer);
+  let masked = stripForeignPending(hideSetAsideHands(hideZones(view, sides, revealedZones(view, forPlayer))), forPlayer);
   masked = maskAttackChoice(masked, forPlayer);
   masked = maskPowerChoice(masked, forPlayer);
   return maskTrainerChoice(masked, forPlayer);

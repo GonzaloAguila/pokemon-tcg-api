@@ -8,7 +8,7 @@ import {
   decks as themeDeckList,
 } from "@gonzaloaguila/game-core";
 import type { GameState } from "@gonzaloaguila/game-core";
-import { GameRoomManager, RoomNotFoundError, type GameRoom, type PlayerKey } from "./rooms.js";
+import { GameRoomManager, RoomNotFoundError, type ActionResult, type GameRoom, type PlayerKey } from "./rooms.js";
 import { maskRoomState } from "./room-state.js";
 import type { Viewer } from "./state-masking.js";
 import { maxBetForTitle, titleIdFromStats } from "../modules/users/titles.js";
@@ -436,6 +436,95 @@ function allowChatMessage(userId: string): boolean {
   return true;
 }
 
+/**
+ * Tell the room what an action did: the opponent's animation hint, coins (showCoinFlip), the
+ * setup timer, every viewer's masked state and the game over. Used for players' actions and for
+ * the default answers the server gives when an answer clock runs out (no actor socket).
+ */
+function broadcastActionResult(io: Server, roomId: string, actionType: string, result: ActionResult, actorSocketId: string | null): void {
+  // Broadcast action to opponent for animation (no private data). `paused`: an attack that
+  // stopped at a mid-attack question (Flee, Sabrina's ESP...) and hasn't happened yet.
+  const opponentAction = { type: actionType, ...(result.attackPaused ? { paused: true } : {}) };
+  if (actorSocketId) io.to(roomId).except(actorSocketId).emit("opponentAction", opponentAction);
+  else io.to(roomId).emit("opponentAction", opponentAction);
+
+  // Send updated state to both players
+  const room = roomManager.getRoom(roomId);
+  if (room && result.gameState) {
+    console.log(`[action] Sending state update. P1 socket: ${room.player1SocketId}, P2 socket: ${room.player2SocketId}`);
+    console.log(`[action] State: P1 active=${!!result.gameState.playerActivePokemon}, P2 active=${!!result.gameState.opponentActivePokemon}`);
+
+    // Broadcast coin flip results to both players if present
+    if (result.coinFlipInfo) {
+      console.log(`[action] Broadcasting coin flip results: ${result.coinFlipInfo.attackName} - ${result.coinFlipInfo.results.join(", ")}`);
+      // results: the acting player's coins (flippedBy: who flipped each, when not all the
+      // acting player — Knock Down); defenderResults: Transparency / Final Beam coin
+      io.to(roomId).emit("showCoinFlip", {
+        attackName: result.coinFlipInfo.attackName,
+        results: result.coinFlipInfo.results,
+        count: result.coinFlipInfo.results.length,
+        ...(result.coinFlipInfo.flippedBy ? { flippedBy: result.coinFlipInfo.flippedBy } : {}),
+        ...(result.coinFlipInfo.defenderResults ? { defenderResults: result.coinFlipInfo.defenderResults } : {}),
+        // Who flipped the defender coin when not the defending player (Shadow Images)
+        ...(result.coinFlipInfo.defenderFlippedBy ? { defenderFlippedBy: result.coinFlipInfo.defenderFlippedBy } : {}),
+      });
+    }
+
+    // Trainer/power coins: the Trainer's / power's player already showed them (requestCoinFlip ack)
+    if (result.opponentCoinFlipInfo) {
+      const shownSocket = result.coinsShownTo === "player2" ? room.player2SocketId : room.player1SocketId;
+      const payload = {
+        attackName: result.opponentCoinFlipInfo.attackName,
+        results: result.opponentCoinFlipInfo.results,
+        count: result.opponentCoinFlipInfo.results.length,
+        ...(result.opponentCoinFlipInfo.flippedBy ? { flippedBy: result.opponentCoinFlipInfo.flippedBy } : {}),
+      };
+      if (shownSocket) io.to(roomId).except(shownSocket).emit("showCoinFlip", payload);
+      else io.to(roomId).emit("showCoinFlip", payload);
+    }
+
+    // Broadcast setup timer start to both players if present
+    if (result.setupTimerStarted) {
+      io.to(roomId).emit("setupTimer", {
+        startedAt: result.setupTimerStarted,
+        duration: 90, // seconds
+      });
+    }
+
+    if (room.player1SocketId) {
+      io.to(room.player1SocketId).emit("gameState", {
+        gameState: stateFor(room, result.gameState, "player1"),
+        turnStartedAt: room.turnStartedAt,
+        turnTimerDuration: room.turnTimerDuration,
+      });
+    }
+    if (room.player2SocketId) {
+      io.to(room.player2SocketId).emit("gameState", {
+        gameState: stateFor(room, result.gameState, "player2"),
+        turnStartedAt: room.turnStartedAt,
+        turnTimerDuration: room.turnTimerDuration,
+      });
+    }
+
+    // Send state to spectators (player1 perspective)
+    if (room.spectators && room.spectators.size > 0) {
+      const spectatorState = stateFor(room, result.gameState, "spectator");
+      for (const specSocketId of room.spectators) {
+        io.to(specSocketId).emit("gameState", {
+          gameState: spectatorState,
+          turnStartedAt: room.turnStartedAt,
+          turnTimerDuration: room.turnTimerDuration,
+        });
+      }
+    }
+  }
+
+  // Game over: executeAction reports it once (a finished room takes no more actions);
+  // finishRoomGame settles the result (stats, XP, bet) and the draft standing once
+  if (result.gameOver) {
+    finishRoomGame(io, roomId, result.winner ?? null, result.winReason ?? "Fin de la partida", false, describeGameEnd(result.gameState));
+  }
+}
 
 export function setupSocketHandlers(io: Server): void {
   setIo(io);
@@ -835,86 +924,7 @@ export function setupSocketHandlers(io: Server): void {
           return;
         }
 
-        // Broadcast action to opponent for animation
-        socket.to(roomId).emit("opponentAction", {
-          type: action.type,
-          // Include minimal info for animation (no private data)
-        });
-
-        // Send updated state to both players
-        const room = roomManager.getRoom(roomId);
-        if (room && result.gameState) {
-          console.log(`[action] Sending state update. P1 socket: ${room.player1SocketId}, P2 socket: ${room.player2SocketId}`);
-          console.log(`[action] State: P1 active=${!!result.gameState.playerActivePokemon}, P2 active=${!!result.gameState.opponentActivePokemon}`);
-
-          // Broadcast coin flip results to both players if present
-          if (result.coinFlipInfo) {
-            console.log(`[action] Broadcasting coin flip results: ${result.coinFlipInfo.attackName} - ${result.coinFlipInfo.results.join(", ")}`);
-            // results: the acting player's coins (flippedBy: who flipped each, when not all the
-            // acting player — Knock Down); defenderResults: Transparency / Final Beam coin
-            io.to(roomId).emit("showCoinFlip", {
-              attackName: result.coinFlipInfo.attackName,
-              results: result.coinFlipInfo.results,
-              count: result.coinFlipInfo.results.length,
-              ...(result.coinFlipInfo.flippedBy ? { flippedBy: result.coinFlipInfo.flippedBy } : {}),
-              ...(result.coinFlipInfo.defenderResults ? { defenderResults: result.coinFlipInfo.defenderResults } : {}),
-            });
-          }
-
-          // Trainer/power coins: the Trainer's / power's player already showed them (requestCoinFlip ack)
-          if (result.opponentCoinFlipInfo) {
-            const shownSocket = result.coinsShownTo === "player2" ? room.player2SocketId : room.player1SocketId;
-            const payload = {
-              attackName: result.opponentCoinFlipInfo.attackName,
-              results: result.opponentCoinFlipInfo.results,
-              count: result.opponentCoinFlipInfo.results.length,
-              ...(result.opponentCoinFlipInfo.flippedBy ? { flippedBy: result.opponentCoinFlipInfo.flippedBy } : {}),
-            };
-            if (shownSocket) io.to(roomId).except(shownSocket).emit("showCoinFlip", payload);
-            else io.to(roomId).emit("showCoinFlip", payload);
-          }
-
-          // Broadcast setup timer start to both players if present
-          if (result.setupTimerStarted) {
-            io.to(roomId).emit("setupTimer", {
-              startedAt: result.setupTimerStarted,
-              duration: 90, // seconds
-            });
-          }
-
-          if (room.player1SocketId) {
-            io.to(room.player1SocketId).emit("gameState", {
-              gameState: stateFor(room, result.gameState, "player1"),
-              turnStartedAt: room.turnStartedAt,
-              turnTimerDuration: room.turnTimerDuration,
-            });
-          }
-          if (room.player2SocketId) {
-            io.to(room.player2SocketId).emit("gameState", {
-              gameState: stateFor(room, result.gameState, "player2"),
-              turnStartedAt: room.turnStartedAt,
-              turnTimerDuration: room.turnTimerDuration,
-            });
-          }
-
-          // Send state to spectators (player1 perspective)
-          if (room.spectators && room.spectators.size > 0) {
-            const spectatorState = stateFor(room, result.gameState, "spectator");
-            for (const specSocketId of room.spectators) {
-              io.to(specSocketId).emit("gameState", {
-                gameState: spectatorState,
-                turnStartedAt: room.turnStartedAt,
-                turnTimerDuration: room.turnTimerDuration,
-              });
-            }
-          }
-        }
-
-        // Game over: executeAction reports it once (a finished room takes no more actions);
-        // finishRoomGame settles the result (stats, XP, bet) and the draft standing once
-        if (result.gameOver) {
-          finishRoomGame(io, roomId, result.winner ?? null, result.winReason ?? "Fin de la partida", false, describeGameEnd(result.gameState));
-        }
+        broadcastActionResult(io, roomId, action.type, result, socket.id);
 
         socket.emit("actionResult", { success: true });
       } catch (error) {
@@ -1141,6 +1151,17 @@ export function setupSocketHandlers(io: Server): void {
       true,
       reason || "Abandono por desconexión",
     );
+  });
+
+  // An off-turn answer's clock ran out (Challenge!, Erika, Flee...): the server answered for that
+  // player by default; everyone gets the result like an action, plus `answerTimedOut`
+  roomManager.setOnAutoAnswer((roomId, side, action, result) => {
+    const room = roomManager.getRoom(roomId);
+    io.to(roomId).emit("answerTimedOut", {
+      userId: (side === "player1" ? room?.player1Id : room?.player2Id) ?? null,
+      actionType: action.type,
+    });
+    broadcastActionResult(io, roomId, action.type, result, null);
   });
 
   // A waiting room deleted by the manager (its creator left the lobby): refresh the lobbies
