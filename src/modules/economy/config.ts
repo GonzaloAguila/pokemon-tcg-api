@@ -153,6 +153,7 @@ export const ECONOMY = {
       jungle: "scyther-holo-sparkle",
       fossil: "dragonite-holo-sparkle",
       "team-rocket": "dark-dragonite-holo-sparkle",
+      "gym-heroes": "blaine-s-moltres-holo-sparkle",
     } as Record<string, string>,
     /** Whole catalog completed: title only. */
     collectorMedalId: "title-maestro-coleccionista",

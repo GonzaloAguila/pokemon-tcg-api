@@ -47,6 +47,7 @@ const packTypes: Map<string, BoosterPackType> = new Map();
 // The rare slot: holo with holoChance, otherwise a non-holo rare (sets with only holo rares —
 // Jungle, Fossil, Team Rocket — always give a holo). 0.665 keeps Base Set's holo rate from before
 // Trainers left the set boosters (0.33 holo + 0.67 × 16 holos / 32 rares including 10 Trainers).
+// Gym Heroes has non-holo rares too, so it gets the same holo rate as Base Set.
 const STANDARD_BOOSTER_SLOTS: BoosterPackType["slots"] = [
   { rarity: "rare", count: 1, holoChance: 0.665, nonHoloWhenNotHolo: true },
   { rarity: "uncommon", count: 3, upgradeChance: 0.01 },
@@ -89,6 +90,12 @@ const SET_BOOSTERS: Record<string, SetBoosterDef> = {
     name: "Team Rocket Booster",
     description: "Contains 11 random cards from the Team Rocket expansion. Includes 1 guaranteed Rare!",
     image: "/packs/team-rocket/booster.png",
+  },
+  "gym-heroes": {
+    id: "gym-heroes-booster",
+    name: "Gym Heroes Booster",
+    description: "Contains 11 random cards from the Gym Heroes expansion. Includes 1 guaranteed Rare!",
+    image: "/packs/gym-heroes/booster.png",
   },
 };
 

@@ -21,12 +21,13 @@ describe("set registry consumers", () => {
   });
 
   it("every standard booster opens 9 cards of its set plus 2 basic Energy", () => {
-    expect(STANDARD_BOOSTER_IDS).toEqual(["base-set-booster", "jungle-booster", "fossil-booster", "team-rocket-booster"]);
+    expect(STANDARD_BOOSTER_IDS).toEqual(["base-set-booster", "jungle-booster", "fossil-booster", "team-rocket-booster", "gym-heroes-booster"]);
     expect(getAllPacks().map((p) => p.id)).toEqual([
       "base-set-booster",
       "jungle-booster",
       "fossil-booster",
       "team-rocket-booster",
+      "gym-heroes-booster",
       "trainer-booster", // market-only, see trainer-booster.test.ts
     ]);
     for (const packId of STANDARD_BOOSTER_IDS) {
@@ -111,6 +112,59 @@ describe("set registry consumers", () => {
 
     const trIds = new Set(CARD_SETS.find((s) => s.id === "team-rocket")!.cards.map((c) => c.id));
     expect(draftPool.filter((c) => trIds.has(c.id))).toHaveLength(66);
+  });
+
+  it("Gym Heroes: catalog set (122 cards, 132 printed), booster with Base Set's slots, rare / holo slot rarities, draft pool", () => {
+    const gh = getAllSets().find((s) => s.id === "gym-heroes");
+    expect(gh).toMatchObject({ name: "Gym Heroes", code: "G1", totalCards: 122, printedTotal: 132 });
+    expect(getCardsBySet("gym-heroes")).toHaveLength(122);
+    expect(getCardById("gym-heroes-001-blaines-moltres")?.name).toBe("Blaine's Moltres");
+    expect(getCardById("gym-heroes-124-narrow-gym")?.name).toBe("Narrow Gym");
+
+    const pack = getPackById("gym-heroes-booster")!;
+    const base = getPackById("base-set-booster")!;
+    expect(pack).toMatchObject({
+      name: "Gym Heroes Booster",
+      setId: "gym-heroes",
+      image: "/packs/gym-heroes/booster.png",
+      cardCount: 11,
+      energyCount: 2,
+      available: true,
+    });
+    expect(pack.price).toBe(base.price);
+    expect(pack.slots).toEqual(base.slots);
+
+    const set = CARD_SETS.find((s) => s.id === "gym-heroes")!;
+    const rarityOf = new Map(set.cards.map((c) => [c.id, c.rarity]));
+    let holos = 0;
+    let plainRares = 0;
+    for (let i = 0; i < 300; i++) {
+      const { cards } = openPack("gym-heroes-booster");
+      expect(cards).toHaveLength(11);
+      const bySlot = (slot: string) => cards.filter((c) => c.slotType === slot);
+      // 1 rare slot (holo or not; the uncommons' 1% upgrade may add one), 3 uncommon slots, 5 commons, 2 basic Energy
+      const rare = cards.filter((c) => c.slotType === "rare" || c.slotType === "rare-holo");
+      expect(rare.length).toBeGreaterThanOrEqual(1);
+      expect(rare.length + bySlot("uncommon").length).toBe(4);
+      expect(bySlot("common")).toHaveLength(5);
+      expect(bySlot("energy")).toHaveLength(2);
+      // The 9 set cards are Gym Heroes Pokémon of their slot's rarity (Trainers only come in the Trainer booster)
+      const setCardsPulled = cards.filter((c) => c.slotType !== "energy");
+      expect(setCardsPulled.every((c) => c.card.set === "Gym Heroes" && c.card.kind === "pokemon")).toBe(true);
+      for (const c of bySlot("common")) expect(rarityOf.get(c.card.id)).toBe("common");
+      for (const c of bySlot("uncommon")) expect(rarityOf.get(c.card.id)).toBe("uncommon");
+      for (const c of rare) expect(["rare", "rare-holo"]).toContain(rarityOf.get(c.card.id));
+      // The Energy slots are Base Set basic Energy (the set's own basic Energy aren't separate catalog cards)
+      expect(bySlot("energy").every((c) => isBasicEnergy(c.card))).toBe(true);
+      holos += rare.filter((c) => rarityOf.get(c.card.id) === "rare-holo").length;
+      plainRares += rare.filter((c) => rarityOf.get(c.card.id) === "rare").length;
+    }
+    // Unlike Jungle / Fossil / Team Rocket the set has non-holo rares: both show up
+    expect(holos).toBeGreaterThan(100);
+    expect(plainRares).toBeGreaterThan(30);
+
+    const ghIds = new Set(set.cards.map((c) => c.id));
+    expect(draftPool.filter((c) => ghIds.has(c.id))).toHaveLength(122);
   });
 
   it("every booster costs the same (the 5-card Theme Pack was retired in economy v2)", () => {
