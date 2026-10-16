@@ -151,7 +151,7 @@ initializeDefaultPacks();
 packTypes.set(TRAINER_BOOSTER.id, TRAINER_BOOSTER);
 
 // =============================================================================
-// Pack Type CRUD
+// Pack Types (read-only; there is no admin CRUD)
 // =============================================================================
 
 /**
@@ -175,37 +175,6 @@ export function getAllPacks(): BoosterPackListItem[] {
  */
 export function getPackById(packId: string): BoosterPackType | undefined {
   return packTypes.get(packId);
-}
-
-/**
- * Create a new pack type
- */
-export function createPack(pack: BoosterPackType): BoosterPackType {
-  if (packTypes.has(pack.id)) {
-    throw new Error(`Pack with ID '${pack.id}' already exists`);
-  }
-  packTypes.set(pack.id, pack);
-  return pack;
-}
-
-/**
- * Update an existing pack type
- */
-export function updatePack(packId: string, updates: Partial<BoosterPackType>): BoosterPackType {
-  const existing = packTypes.get(packId);
-  if (!existing) {
-    throw new Error(`Pack '${packId}' not found`);
-  }
-  const updated = { ...existing, ...updates, id: packId }; // Can't change ID
-  packTypes.set(packId, updated);
-  return updated;
-}
-
-/**
- * Delete a pack type
- */
-export function deletePack(packId: string): boolean {
-  return packTypes.delete(packId);
 }
 
 // =============================================================================
