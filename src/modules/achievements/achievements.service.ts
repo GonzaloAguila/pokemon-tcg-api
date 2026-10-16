@@ -164,6 +164,39 @@ export async function listAchievements(userId: string) {
   });
 }
 
+/**
+ * Points per tier, shown on profiles. Mirrors TIER_CONFIG in the frontend's
+ * src/domain/profile/types.ts — keep them in sync.
+ */
+export const ACHIEVEMENT_TIER_POINTS: Record<string, number> = {
+  bronze: 10,
+  silver: 25,
+  gold: 50,
+  platinum: 100,
+  legend: 250,
+};
+
+/** Achievements a player has earned (claimed), newest first, with their points (public profiles). */
+export async function listEarnedAchievements(userId: string) {
+  const rows = await prisma.userAchievement.findMany({
+    where: { userId, unlockedAt: { not: null } },
+    select: { achievementId: true, unlockedAt: true },
+    orderBy: { unlockedAt: "desc" },
+  });
+  const defs = new Map(ACHIEVEMENT_DEFS.map((d) => [d.id, d]));
+  return rows.flatMap((row) => {
+    const def = defs.get(row.achievementId);
+    if (!def || !row.unlockedAt) return [];
+    return [{
+      id: def.id,
+      name: def.name,
+      tier: def.tier,
+      points: ACHIEVEMENT_TIER_POINTS[def.tier] ?? 0,
+      unlockedAt: row.unlockedAt,
+    }];
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Check and update all achievement progress for a user
 // (Only updates progress — NEVER grants rewards or sets unlockedAt)

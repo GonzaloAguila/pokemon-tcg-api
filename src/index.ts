@@ -30,6 +30,7 @@ import { newsRouter } from "./modules/news/index.js";
 import { tradesRouter } from "./modules/trades/index.js";
 import { progressRouter } from "./modules/progress/index.js";
 import { presenceRouter } from "./modules/presence/index.js";
+import { playersRouter } from "./modules/players/index.js";
 import { loadCardValues } from "./modules/trades/card-values.js";
 import { refundUnsettledMatches } from "./modules/matches/matches.service.js";
 import { cleanupOldMessages } from "./modules/chat/chat.service.js";
@@ -112,6 +113,7 @@ app.use("/api", newsRouter);
 app.use("/api", tradesRouter);
 app.use("/api", progressRouter);
 app.use("/api", presenceRouter);
+app.use("/api", playersRouter);
 // app.use("/api/matchmaking", matchmakingRouter);
 
 // Error handler

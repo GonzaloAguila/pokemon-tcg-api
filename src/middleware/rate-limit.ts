@@ -86,3 +86,20 @@ export const economyRateLimiter = rateLimit({
     },
   },
 });
+
+/**
+ * Public player profiles (GET /api/players/:username[/collection]): enough to browse
+ * profiles from the chat or a lobby, too few to crawl every username.
+ */
+export const playerProfileRateLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    error: {
+      message: "Demasiadas consultas de perfiles. Espera un momento.",
+      code: "RATE_LIMITED",
+    },
+  },
+});
