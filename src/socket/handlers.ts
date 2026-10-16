@@ -26,6 +26,7 @@ import { socketSchemas, parsePayload } from "./schemas.js";
 import { setIo, userRoom } from "./io-registry.js";
 import { authenticateHandshake, checkSocketSession, kickBlockedUser, requireSocketUser } from "./session-guard.js";
 import * as chatService from "../modules/chat/chat.service.js";
+import { getChatPresence, joinChatPresence, leaveChatPresence, trackOnline, untrackOnline } from "./presence.js";
 import { prisma } from "../lib/prisma.js";
 import type { DeckCardEntry } from "../modules/decks/decks.service.js";
 
@@ -411,6 +412,13 @@ async function getPlayableIdentity(userId: string): Promise<PublicIdentity | { e
   };
 }
 
+const GLOBAL_CHAT_ROOM = "global-chat";
+
+/** Send the global chat's "Conectados" list to everyone in it. */
+function broadcastChatPresence(io: Server): void {
+  io.to(GLOBAL_CHAT_ROOM).emit("chat:presence", getChatPresence());
+}
+
 // Chat flood control: at most CHAT_MAX_PER_WINDOW messages per user per window (room + global chat)
 const CHAT_WINDOW_MS = 10_000;
 const CHAT_MAX_PER_WINDOW = 8;
@@ -445,9 +453,10 @@ export function setupSocketHandlers(io: Server): void {
   io.on("connection", (socket: Socket) => {
     console.log(`🔌 Client connected: ${socket.id}`);
 
-    // Join user-specific room for targeted notifications
+    // Join user-specific room for targeted notifications; count the user as online
     if (socket.data.user?.userId) {
       socket.join(userRoom(socket.data.user.userId));
+      trackOnline(socket.data.user.userId, socket.id);
     }
 
     // ==========================================================================
@@ -954,12 +963,35 @@ export function setupSocketHandlers(io: Server): void {
     // Global Chat
     // ==========================================================================
 
-    socket.on("globalChat:join", () => {
-      socket.join("global-chat");
+    // Anyone may read the chat; authenticated accounts that can play are listed in
+    // "Conectados" (chat:presence), with their public identity read from the DB.
+    socket.on("globalChat:join", async () => {
+      socket.join(GLOBAL_CHAT_ROOM);
+      try {
+        if (socket.data.user?.userId) {
+          const userId = await requireSocketUser(socket, "error");
+          if (!userId) return;
+          const user = await prisma.user.findUnique({
+            where: { id: userId },
+            select: { id: true, username: true, activeAvatarId: true, role: true },
+          });
+          // It may have left or disconnected during the lookups
+          if (!user || !socket.connected || !socket.rooms.has(GLOBAL_CHAT_ROOM)) return;
+          if (joinChatPresence(socket.id, user)) {
+            broadcastChatPresence(io);
+            return;
+          }
+        }
+        socket.emit("chat:presence", getChatPresence());
+      } catch (err) {
+        console.error("Error joining the global chat:", err);
+      }
     });
 
     socket.on("globalChat:leave", () => {
-      socket.leave("global-chat");
+      socket.leave(GLOBAL_CHAT_ROOM);
+      const userId = getAuthUserId(socket);
+      if (userId && leaveChatPresence(userId, socket.id)) broadcastChatPresence(io);
     });
 
     socket.on("globalChat:message", async (payload: unknown) => {
@@ -973,7 +1005,7 @@ export function setupSocketHandlers(io: Server): void {
 
       try {
         const saved = await chatService.saveMessage(user.userId, content, type);
-        io.to("global-chat").emit("globalChat:message", saved);
+        io.to(GLOBAL_CHAT_ROOM).emit("globalChat:message", saved);
       } catch (err) {
         console.error("Error saving chat message:", err);
       }
@@ -1065,6 +1097,12 @@ export function setupSocketHandlers(io: Server): void {
 
     socket.on("disconnect", async () => {
       console.log(`🔌 Client disconnected: ${socket.id}`);
+
+      const presenceUserId = getAuthUserId(socket);
+      if (presenceUserId) {
+        untrackOnline(presenceUserId, socket.id);
+        if (leaveChatPresence(presenceUserId, socket.id)) broadcastChatPresence(io);
+      }
 
       // Find and handle room disconnect
       const roomId = await roomManager.handleDisconnect(socket.id);

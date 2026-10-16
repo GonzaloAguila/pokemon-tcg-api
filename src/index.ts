@@ -29,6 +29,7 @@ import { economyRouter } from "./modules/economy/index.js";
 import { newsRouter } from "./modules/news/index.js";
 import { tradesRouter } from "./modules/trades/index.js";
 import { progressRouter } from "./modules/progress/index.js";
+import { presenceRouter } from "./modules/presence/index.js";
 import { loadCardValues } from "./modules/trades/card-values.js";
 import { refundUnsettledMatches } from "./modules/matches/matches.service.js";
 import { cleanupOldMessages } from "./modules/chat/chat.service.js";
@@ -110,6 +111,7 @@ app.use("/api", economyRouter);
 app.use("/api", newsRouter);
 app.use("/api", tradesRouter);
 app.use("/api", progressRouter);
+app.use("/api", presenceRouter);
 // app.use("/api/matchmaking", matchmakingRouter);
 
 // Error handler

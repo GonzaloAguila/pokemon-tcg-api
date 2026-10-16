@@ -31,7 +31,7 @@ export async function startHttpApp(mount: (app: express.Express) => void) {
       try { json = text ? JSON.parse(text) : null; } catch { json = text; }
       // "name=value" of the first Set-Cookie (the refresh token on auth routes)
       const cookie = res.headers.get("set-cookie")?.split(";")[0] ?? null;
-      return { status: res.status, body: json, cookie };
+      return { status: res.status, body: json, cookie, headers: res.headers };
     },
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
   };
