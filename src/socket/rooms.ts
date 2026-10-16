@@ -259,7 +259,7 @@ export function duelPickers(state: GameState | null | undefined): PlayerKey[] {
 export function defaultSelection(step: SelectionStep): string[] | null {
   // Disabled options can't be chosen: the fallbacks only take the enabled ones
   const ids = step.options.filter((option) => !option.disabled).map((option) => option.id);
-  const own = (step as SelectionStep & { defaultSelection?: string[] }).defaultSelection;
+  const own = step.defaultSelection;
   for (const candidate of [...(own ? [own] : []), ids.slice(0, minSelectionsOf(step)), ids]) {
     try {
       checkSelection(step, candidate);

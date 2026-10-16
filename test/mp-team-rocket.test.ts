@@ -19,7 +19,7 @@ import {
   type GameState,
   type PokemonInPlay,
 } from "@gonzaloaguila/game-core";
-import { GameRoomManager, defaultSelection } from "../src/socket/rooms.js";
+import { GameRoomManager } from "../src/socket/rooms.js";
 import { maskGameStateForPlayer } from "../src/socket/state-masking.js";
 
 type Side = "p1" | "p2";
@@ -346,20 +346,10 @@ describe.each(["p1", "p2"] as const)("Team Rocket in multiplayer as %s", (actor)
     expect(t.manager.requestKick(t.room.id, SOCKET[opp])).toMatchObject({ success: false });
     // Owner rule (Gym Heroes): an off-turn answer is never a forfeit
     expect(t.manager.requestKick(t.room.id, SOCKET[actor])).toMatchObject({ success: false, error: expect.stringMatching(/respuesta por defecto/) });
-    // Default answer: the step's first option ("accept"); the steps that follow are answered by
-    // whoever they ask (the opponent's by default again, the player's own by the player)
+    // Default answer: the engine's step.defaultSelection, "decline" (the player draws 2)
+    expect((t.room.gameState as GameState & { pendingTrainerChoice: { step: { defaultSelection?: string[] } } }).pendingTrainerChoice.step.defaultSelection).toEqual(["decline"]);
     expect((await t.manager.autoAnswerTimedOut(t.room.id))?.success).toBe(true);
-    for (let i = 0; i < 6 && t.room.pendingTrainer; i++) {
-      const pending = (t.room.gameState as GameState & { pendingTrainerChoice: { chooser: string; step: Parameters<typeof defaultSelection>[0] } }).pendingTrainerChoice;
-      if (pending.chooser === "opponent") {
-        expect(t.manager.getClock(t.room).kind).toBe("answer");
-        expect((await t.manager.autoAnswerTimedOut(t.room.id))?.success).toBe(true);
-      } else {
-        expect(t.manager.getClock(t.room).kind).toBe("turn");
-        expect(await t.manager.autoAnswerTimedOut(t.room.id)).toBeNull(); // the player's own step: their turn clock
-        expect((await t.act("answerTrainerChoice", { selection: defaultSelection(pending.step) })).success).toBe(true);
-      }
-    }
+    expect(t.mine().playerHand).toHaveLength(2);
     expect(t.room.pendingTrainer).toBeUndefined();
     expect(t.mine().isPlayerTurn).toBe(true);
     expect(t.room.answerClock).toBeUndefined();

@@ -553,6 +553,17 @@ describe.each(["p1", "p2"] as const)("Gym Heroes Trainers the other player answe
     expect(t.mine().isPlayerTurn).toBe(true);
   });
 
+  it("Lt. Surge's Treaty unanswered: the timeout answers the engine's default \"draw\"", async () => {
+    const t = setupGame(actor, { myHand: [gh("Lt. Surge's Treaty", "treaty-h")] });
+    expect((await t.act("startTrainer", { cardId: "treaty-h", selections: [] })).success).toBe(true);
+    expect(t.mine().pendingTrainerChoice?.step.defaultSelection).toEqual(["draw"]);
+    const handBefore = t.mine().playerHand.length;
+    expect((await t.manager.autoAnswerTimedOut(t.room.id))?.success).toBe(true);
+    expect(t.room.pendingTrainer).toBeUndefined();
+    expect(t.mine().playerHand.length).toBeGreaterThan(handBefore - 1); // drew instead of trading Prizes
+    expect(t.mine().playerPrizes).toHaveLength(6);
+  });
+
   it("Blaine's Quiz #1: the player picks the Pokémon, the opponent guesses its length off-turn", async () => {
     const t = setupGame(actor, { myHand: [gh("Blaine's Quiz #1", "quiz-h"), cardAs("Charmander", "quiz-charmander")] });
     await expectRejected(t, t.act("playTrainer", { cardId: "quiz-h", selections: [["quiz-charmander"]] }), /startTrainer/);
