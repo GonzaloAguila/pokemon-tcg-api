@@ -115,6 +115,39 @@ export async function updateUserProfile(
 // Update cosmetics
 // ---------------------------------------------------------------------------
 
+/**
+ * Avatars every player owns without a UserAvatar row: the two starters and the Pokémon from the
+ * first 151 (mirrors the isStarter avatars in the frontend's AVATAR_COLLECTION).
+ */
+export const FREE_AVATAR_IDS: ReadonlySet<string> = new Set([
+  "collector",
+  "girl",
+  "pkmn-bulbasaur",
+  "pkmn-charmander",
+  "pkmn-squirtle",
+  "pkmn-pikachu",
+  "pkmn-jigglypuff",
+  "pkmn-meowth",
+  "pkmn-psyduck",
+  "pkmn-growlithe",
+  "pkmn-abra",
+  "pkmn-machop",
+  "pkmn-geodude",
+  "pkmn-slowpoke",
+  "pkmn-gastly",
+  "pkmn-gengar",
+  "pkmn-onix",
+  "pkmn-cubone",
+  "pkmn-magikarp",
+  "pkmn-lapras",
+  "pkmn-eevee",
+  "pkmn-snorlax",
+  "pkmn-dratini",
+  "pkmn-dragonite",
+  "pkmn-mewtwo",
+  "pkmn-mew",
+]);
+
 export async function updateCosmetics(
   userId: string,
   data: { activeCoinId?: string; activeCardBackId?: string; activeAvatarId?: string; activePlaymatId?: string },
@@ -139,9 +172,7 @@ export async function updateCosmetics(
   }
 
   if (data.activeAvatarId) {
-    // "collector" and "girl" are starter avatars — always owned
-    const STARTER_AVATARS = ["collector", "girl"];
-    if (!STARTER_AVATARS.includes(data.activeAvatarId)) {
+    if (!FREE_AVATAR_IDS.has(data.activeAvatarId)) {
       const owned = await prisma.userAvatar.findUnique({
         where: { userId_avatarId: { userId, avatarId: data.activeAvatarId } },
       });
