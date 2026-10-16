@@ -2,6 +2,28 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "../../lib/prisma.js";
 import { Errors } from "../../middleware/error-handler.js";
 
+/**
+ * Messages an admin sent: everything but the automatic welcome message each account gets at
+ * signup, which the new user "sends" to themselves (sender = recipient). Broadcasts have no
+ * recipient (`=` with NULL is never true, hence the OR).
+ */
+export const SENT_MESSAGE_FILTER: Prisma.SystemMessageWhereInput = {
+  OR: [{ recipientId: null }, { NOT: { senderId: { equals: prisma.systemMessage.fields.recipientId } } }],
+};
+
+/** Automatic messages (the welcome message) can't be edited or deleted from the backoffice. */
+async function findEditableMessage(messageId: string) {
+  const message = await prisma.systemMessage.findUnique({
+    where: { id: messageId },
+    select: { id: true, type: true, senderId: true, recipientId: true },
+  });
+  if (!message) throw Errors.NotFound("Mensaje");
+  if (message.recipientId !== null && message.senderId === message.recipientId) {
+    throw Errors.Forbidden("Los mensajes automáticos no se pueden modificar");
+  }
+  return message;
+}
+
 // ---------------------------------------------------------------------------
 // Create broadcast message (visible to all users)
 // ---------------------------------------------------------------------------
@@ -11,7 +33,6 @@ export async function createBroadcast(
   title: string,
   content: string,
   category: string,
-  metadata?: Record<string, unknown>,
 ) {
   if (!title || title.trim().length === 0) throw Errors.BadRequest("El título es requerido");
   if (!content || content.trim().length === 0) throw Errors.BadRequest("El contenido es requerido");
@@ -23,7 +44,6 @@ export async function createBroadcast(
       content: content.trim(),
       category: category || "info",
       senderId,
-      metadata: metadata ? (metadata as Prisma.InputJsonValue) : undefined,
     },
   });
 }
@@ -38,7 +58,6 @@ export async function createPersonalMessage(
   title: string,
   content: string,
   category: string,
-  metadata?: Record<string, unknown>,
 ) {
   if (!title || title.trim().length === 0) throw Errors.BadRequest("El título es requerido");
   if (!content || content.trim().length === 0) throw Errors.BadRequest("El contenido es requerido");
@@ -58,7 +77,6 @@ export async function createPersonalMessage(
       category: category || "info",
       senderId,
       recipientId,
-      metadata: metadata ? (metadata as Prisma.InputJsonValue) : undefined,
     },
   });
 }
@@ -232,6 +250,7 @@ export async function getAdminMessages(
 
   const [messages, total] = await Promise.all([
     prisma.systemMessage.findMany({
+      where: SENT_MESSAGE_FILTER,
       orderBy: { [validSort]: direction },
       skip,
       take: limit,
@@ -255,7 +274,7 @@ export async function getAdminMessages(
         },
       },
     }),
-    prisma.systemMessage.count(),
+    prisma.systemMessage.count({ where: SENT_MESSAGE_FILTER }),
   ]);
 
   const data = messages.map((msg) => ({
@@ -281,11 +300,7 @@ export async function updateMessage(
   messageId: string,
   updates: { title?: string; content?: string; category?: string },
 ) {
-  const existing = await prisma.systemMessage.findUnique({
-    where: { id: messageId },
-    select: { id: true },
-  });
-  if (!existing) throw Errors.NotFound("Mensaje");
+  await findEditableMessage(messageId);
 
   if (updates.title !== undefined && updates.title.trim().length === 0) {
     throw Errors.BadRequest("El título no puede estar vacío");
@@ -340,13 +355,13 @@ export async function updateMessage(
 // ---------------------------------------------------------------------------
 
 export async function deleteMessage(messageId: string) {
-  const existing = await prisma.systemMessage.findUnique({
-    where: { id: messageId },
-    select: { id: true },
-  });
-  if (!existing) throw Errors.NotFound("Mensaje");
+  await findEditableMessage(messageId);
 
-  await prisma.systemMessage.delete({ where: { id: messageId } });
+  await prisma.$transaction([
+    // A news post's "Avisar en Mensajes" notice: the post no longer counts as notified
+    prisma.newsPost.updateMany({ where: { notificationId: messageId }, data: { notificationId: null } }),
+    prisma.systemMessage.delete({ where: { id: messageId } }),
+  ]);
 
   return { success: true };
 }

@@ -1,4 +1,5 @@
 import { Router, type Request, type Response, type NextFunction } from "express";
+import { z } from "zod";
 import { requireAuth, requirePermission } from "../../middleware/auth.js";
 import * as messagingService from "./messaging.service.js";
 import { Errors } from "../../middleware/error-handler.js";
@@ -90,6 +91,46 @@ router.post(
 // Admin endpoints
 // =============================================================================
 
+// Bodies (same shapes as the panel's src/infra/http/admin-api.ts). Lengths match the columns.
+// Unknown keys (e.g. a client-sent `metadata`) are dropped.
+const messageCategory = z.enum(["info", "reward", "penalty", "news", "maintenance"]);
+const messageTitle = z.string().trim().min(1).max(200);
+const messageContent = z.string().trim().min(1).max(2000);
+
+const messageBodies = {
+  create: z.discriminatedUnion("type", [
+    z.object({
+      type: z.literal("broadcast"),
+      title: messageTitle,
+      content: messageContent,
+      category: messageCategory.default("info"),
+    }),
+    z.object({
+      type: z.literal("personal"),
+      title: messageTitle,
+      content: messageContent,
+      category: messageCategory.default("info"),
+      recipientId: z.string().uuid("recipientId inválido"),
+    }),
+  ]),
+  update: z
+    .object({
+      title: messageTitle.optional(),
+      content: messageContent.optional(),
+      category: messageCategory.optional(),
+    })
+    .refine((u) => u.title !== undefined || u.content !== undefined || u.category !== undefined, "nada que actualizar"),
+};
+
+/** Parse a body or throw a 400 with the first issue. */
+function parseBody<S extends z.ZodTypeAny>(schema: S, body: unknown): z.output<S> {
+  const res = schema.safeParse(body);
+  if (res.success) return res.data;
+  const issue = res.error.issues[0];
+  const field = issue?.path.length ? issue.path.join(".") : "body";
+  throw Errors.BadRequest(`Datos inválidos (${field}): ${issue?.message ?? "formato incorrecto"}`);
+}
+
 // ---------------------------------------------------------------------------
 // POST /admin/messages — Create broadcast or personal message
 // ---------------------------------------------------------------------------
@@ -100,37 +141,12 @@ router.post(
   requirePermission("messages:send"),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { type, title, content, category, recipientId, metadata } = req.body;
-
-      if (!type || !title || !content) {
-        throw Errors.BadRequest("type, title y content son requeridos");
-      }
-
-      if (type === "personal") {
-        if (!recipientId) {
-          throw Errors.BadRequest("recipientId es requerido para mensajes personales");
-        }
-        const message = await messagingService.createPersonalMessage(
-          req.user!.userId,
-          recipientId,
-          title,
-          content,
-          category || "info",
-          metadata,
-        );
-        res.json(message);
-      } else if (type === "broadcast") {
-        const message = await messagingService.createBroadcast(
-          req.user!.userId,
-          title,
-          content,
-          category || "info",
-          metadata,
-        );
-        res.json(message);
-      } else {
-        throw Errors.BadRequest("type debe ser 'broadcast' o 'personal'");
-      }
+      const body = parseBody(messageBodies.create, req.body);
+      const message =
+        body.type === "personal"
+          ? await messagingService.createPersonalMessage(req.user!.userId, body.recipientId, body.title, body.content, body.category)
+          : await messagingService.createBroadcast(req.user!.userId, body.title, body.content, body.category);
+      res.json(message);
     } catch (err) {
       next(err);
     }
@@ -138,7 +154,7 @@ router.post(
 );
 
 // ---------------------------------------------------------------------------
-// GET /admin/messages — List all system messages (admin view)
+// GET /admin/messages — List the messages admins sent (no automatic welcome messages)
 // ---------------------------------------------------------------------------
 
 router.get(
@@ -161,7 +177,7 @@ router.get(
 );
 
 // ---------------------------------------------------------------------------
-// PATCH /admin/messages/:id — Update a system message
+// PATCH /admin/messages/:id — Update a system message (not an automatic one)
 // ---------------------------------------------------------------------------
 
 router.patch(
@@ -170,12 +186,8 @@ router.patch(
   requirePermission("messages:send"),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { title, content, category } = req.body;
-      const result = await messagingService.updateMessage(req.params.id, {
-        title,
-        content,
-        category,
-      });
+      const updates = parseBody(messageBodies.update, req.body);
+      const result = await messagingService.updateMessage(req.params.id, updates);
       res.json(result);
     } catch (err) {
       next(err);
@@ -184,7 +196,7 @@ router.patch(
 );
 
 // ---------------------------------------------------------------------------
-// DELETE /admin/messages/:id — Delete a system message
+// DELETE /admin/messages/:id — Delete a system message (not an automatic one)
 // ---------------------------------------------------------------------------
 
 router.delete(
