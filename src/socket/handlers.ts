@@ -336,6 +336,23 @@ function broadcastRoomList(io: Server) {
 }
 
 /**
+ * Backoffice: close a game room now (a game in progress has no result: forceDeleteRoom refunds
+ * its bet). Everyone in the socket room — both players and every spectator — gets `gameClosed`
+ * and `roomDeleted`, leaves the socket room, and the lobbies get the new room list.
+ * Returns false when the room doesn't exist.
+ */
+export function closeRoomByAdmin(io: Server | null, roomId: string, reason = "Mesa cerrada por un administrador"): boolean {
+  if (!roomManager.forceDeleteRoom(roomId)) return false;
+  if (io) {
+    io.to(roomId).emit("gameClosed", { roomId, reason });
+    io.to(roomId).emit("roomDeleted", { roomId });
+    io.in(roomId).socketsLeave(roomId);
+    broadcastRoomList(io);
+  }
+  return true;
+}
+
+/**
  * Send a broadcast system message to all connected users.
  */
 export function notifyBroadcast(io: Server, message: { id: string; title: string; content: string; category: string }) {

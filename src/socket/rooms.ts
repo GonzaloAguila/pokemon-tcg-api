@@ -2009,6 +2009,15 @@ export class GameRoomManager {
     return room?.spectators.has(socketId) ?? false;
   }
 
+  /** Whether the user holds a seat in a room that isn't over (waiting, ready or playing). */
+  isUserSeated(userId: string): boolean {
+    for (const room of this.rooms.values()) {
+      if (room.status === "finished") continue;
+      if (room.player1Id === userId || room.player2Id === userId) return true;
+    }
+    return false;
+  }
+
   /**
    * Find an active ("playing") room where the given user is a player.
    */

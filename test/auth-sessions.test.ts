@@ -75,7 +75,8 @@ describe("refresh sessions per device", () => {
   });
 
   it("ban and suspension end every device", async () => {
-    for (const revoke of [(id: string) => toggleUserBan(id, true), (id: string) => suspendUser(id, 1)]) {
+    const admin = await createUser({}, { role: "admin" });
+    for (const revoke of [(id: string) => toggleUserBan(admin.id, id, true), (id: string) => suspendUser(admin.id, id, 1)]) {
       const user = await userWithPassword();
       const a = await login(user.email);
       const b = await login(user.email);

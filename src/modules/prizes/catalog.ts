@@ -28,6 +28,21 @@ export const AVAILABLE_COINS: CosmeticItem[] = [
   { itemId: "vulpix-alola", name: "Vulpix Alola", imageUrl: "/coins/vulpix-alola-coin.png" },
 ];
 
+/**
+ * Gym-leader coins (frontend COIN_COLLECTION, source "gym-leader"): not sold nor won, only granted
+ * from the backoffice.
+ */
+export const ADMIN_ONLY_COINS: readonly string[] = [
+  "golem",
+  "starmie",
+  "raichu",
+  "vileplume",
+  "alakazam",
+  "muk",
+  "arcanine",
+  "nidoking",
+];
+
 export const AVAILABLE_CARD_BACKS: CosmeticItem[] = [
   { itemId: "haymaker", name: "Haymaker", imageUrl: "/card-backs/haymakerBKC.jpeg" },
   { itemId: "draw", name: "Draw", imageUrl: "/card-backs/card-back-draw.jpg" },

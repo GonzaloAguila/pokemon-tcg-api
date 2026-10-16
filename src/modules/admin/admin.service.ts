@@ -1,12 +1,28 @@
 import { type UserRole, Prisma } from "@prisma/client";
+import { CARD_SETS, findCardById } from "@gonzaloaguila/game-core";
 import { prisma } from "../../lib/prisma.js";
 import { endAllRefreshSessions } from "../auth/refresh-sessions.js";
 import { Errors } from "../../middleware/error-handler.js";
 import { ALL_PERMISSIONS } from "./permissions.js";
 import * as usersService from "../users/users.service.js";
+import { FREE_AVATAR_IDS, type Db } from "../users/users.service.js";
 import { recordCardChange, type CardChange } from "../users/card-ledger.js";
+import { revalidateDecks } from "../trades/trades.service.js";
+import { SENT_MESSAGE_FILTER } from "../messaging/messaging.service.js";
+import {
+  ADMIN_ONLY_COINS,
+  ALL_VARIANTS,
+  AVAILABLE_AVATARS,
+  AVAILABLE_CARD_BACKS,
+  AVAILABLE_COINS,
+  AVAILABLE_PLAYMATS,
+} from "../prizes/catalog.js";
+import { ECONOMY } from "../economy/config.js";
+import { startOfEconomyDay, startOfEconomyWeek } from "../economy/economy-time.js";
 import { invalidateAccountState } from "../../lib/account-state.js";
 import { disconnectUserSockets } from "../../socket/io-registry.js";
+import { roomManager } from "../../socket/handlers.js";
+import { draftRoomManager } from "../../socket/draft-handlers.js";
 
 /**
  * Apply a moderation change right away: drop the cached account state (HTTP tokens and
@@ -17,6 +33,29 @@ function applySessionChange(userId: string, kickMessage?: string) {
   if (kickMessage) disconnectUserSockets(userId, kickMessage);
 }
 
+/**
+ * Who an admin may moderate or adjust: never a superadmin, and another admin only when the
+ * actor is the superadmin. Both roles come from the DB (`db`: the caller's transaction, if any).
+ */
+async function assertCanActOn(db: Db, actorId: string, targetId: string): Promise<{ role: UserRole; status: string }> {
+  const rows = await db.user.findMany({
+    where: { id: { in: [actorId, targetId] } },
+    select: { id: true, role: true, status: true },
+  });
+  const target = rows.find((u) => u.id === targetId);
+  if (!target) throw Errors.NotFound("Usuario");
+  if (target.role === "superadmin") {
+    throw Errors.Forbidden("No se puede aplicar esta acción a un superadmin");
+  }
+  if (target.role === "admin" && rows.find((u) => u.id === actorId)?.role !== "superadmin") {
+    throw Errors.Forbidden("Solo el superadmin puede aplicar esta acción a un administrador");
+  }
+  return target;
+}
+
+/** "+5" / "-5" for player-visible descriptions. */
+const signed = (n: number) => `${n > 0 ? "+" : ""}${n}`;
+
 // =============================================================================
 // User Management
 // =============================================================================
@@ -25,13 +64,13 @@ function applySessionChange(userId: string, kickMessage?: string) {
 // Search users by username, email, or id
 // ---------------------------------------------------------------------------
 
-const SEARCH_USERS_SORT_ALLOWLIST = ["username", "email", "level", "coins", "createdAt"] as const;
+export const SEARCH_USERS_SORT_ALLOWLIST = ["username", "email", "level", "coins", "createdAt"] as const;
 
 export async function searchUsers(
   query: string,
   page: number,
   limit: number,
-  roleFilter?: string,
+  roleFilter?: UserRole,
   sortBy?: string,
   sortDir?: "asc" | "desc",
 ) {
@@ -212,10 +251,10 @@ export async function getUserDetail(userId: string) {
 }
 
 // ---------------------------------------------------------------------------
-// Delete user (refuse if admin or superadmin)
+// Delete user (refuse if admin or superadmin, or while they are in a game / draft)
 // ---------------------------------------------------------------------------
 
-export async function deleteUser(userId: string) {
+export async function deleteUser(actorId: string, userId: string) {
   const user = await prisma.user.findUnique({
     where: { id: userId },
     select: { role: true },
@@ -227,7 +266,20 @@ export async function deleteUser(userId: string) {
     throw Errors.Forbidden("No se puede eliminar a un administrador");
   }
 
-  await prisma.user.delete({ where: { id: userId } });
+  // Live games and drafts are in memory and reference the user (results, entry fees, drafted cards)
+  if (roomManager.isUserSeated(userId) || draftRoomManager.hasActivePlayer(userId)) {
+    throw Errors.Conflict("El usuario está en una partida o draft en curso");
+  }
+
+  await prisma.$transaction(async (tx) => {
+    // Messages addressed to the user (their welcome message, which they "sent" themselves, and
+    // admin notices) only concern them; the FK would just null the recipient and leave them orphaned
+    await tx.systemMessage.deleteMany({ where: { recipientId: userId } });
+    // system_messages.senderId is ON DELETE RESTRICT. Only admins send messages, so this is only
+    // ever an ex-admin's broadcasts: keep them, attributed to the admin deleting the account
+    await tx.systemMessage.updateMany({ where: { senderId: userId }, data: { senderId: actorId } });
+    await tx.user.delete({ where: { id: userId } });
+  });
   applySessionChange(userId, "Tu cuenta fue eliminada");
   return { success: true };
 }
@@ -236,7 +288,8 @@ export async function deleteUser(userId: string) {
 // Toggle user ban
 // ---------------------------------------------------------------------------
 
-export async function toggleUserBan(userId: string, banned: boolean, reason?: string) {
+export async function toggleUserBan(actorId: string, userId: string, banned: boolean, reason?: string) {
+  await assertCanActOn(prisma, actorId, userId);
   const user = await prisma.user.update({
     where: { id: userId },
     data: {
@@ -259,16 +312,26 @@ export async function toggleUserBan(userId: string, banned: boolean, reason?: st
 // Suspend user for a duration
 // ---------------------------------------------------------------------------
 
-export async function suspendUser(userId: string, hours: number, reason?: string) {
+export async function suspendUser(actorId: string, userId: string, hours: number, reason?: string) {
+  const target = await assertCanActOn(prisma, actorId, userId);
+  // A suspension would replace the ban with a timed one (and lift it when it runs out)
+  if (target.status === "banned") {
+    throw Errors.Conflict("El usuario está baneado: quitale el baneo antes de suspenderlo");
+  }
   const suspendedUntil = new Date(Date.now() + hours * 60 * 60 * 1000);
-  const user = await prisma.user.update({
-    where: { id: userId },
+  // Guarded so a ban landing between the check and this write isn't overwritten
+  const { count } = await prisma.user.updateMany({
+    where: { id: userId, status: { not: "banned" } },
     data: {
       status: "suspended",
       suspendedUntil,
       suspendedReason: reason || null,
       tokenVersion: { increment: 1 },
     },
+  });
+  if (count === 0) throw Errors.Conflict("El usuario está baneado: quitale el baneo antes de suspenderlo");
+  const user = await prisma.user.findUniqueOrThrow({
+    where: { id: userId },
     select: { status: true, suspendedUntil: true },
   });
   await endAllRefreshSessions(userId);
@@ -393,144 +456,77 @@ export async function getAdmins(
 // =============================================================================
 
 // ---------------------------------------------------------------------------
-// Adjust coins
+// Adjust coins / coupons / rare candy
 // ---------------------------------------------------------------------------
+
+const BALANCE_LABELS = {
+  coins: { title: "Monedas", unit: "monedas" },
+  coupons: { title: "Cupones", unit: "cupones" },
+  rareCandy: { title: "Caramelo Raro", unit: "caramelo raro" },
+} as const;
+
+/**
+ * Credit or debit one balance from the backoffice and notify the player, in one transaction.
+ * The wallet row (players see it) says "Ajuste del equipo"; the admin is the notice's senderId.
+ */
+async function adjustBalance(
+  currency: keyof typeof BALANCE_LABELS,
+  userId: string,
+  amount: number,
+  reason: string,
+  adminId: string,
+) {
+  if (!Number.isInteger(amount) || amount === 0) {
+    throw Errors.BadRequest("amount debe ser un entero diferente de cero");
+  }
+  if (!reason || reason.trim().length === 0) {
+    throw Errors.BadRequest("reason es requerido");
+  }
+  const why = reason.trim();
+  const { title, unit } = BALANCE_LABELS[currency];
+
+  return prisma.$transaction(async (tx) => {
+    await assertCanActOn(tx, adminId, userId);
+    const balances = await tx.user.findUniqueOrThrow({
+      where: { id: userId },
+      select: { coins: true, coupons: true, rareCandy: true },
+    });
+    const current = balances[currency];
+    if (amount < 0 && current < -amount) {
+      throw Errors.BadRequest(`Saldo insuficiente. Tiene ${current} ${unit}`);
+    }
+
+    // Atomic change + Transaction row (debit is guarded against going negative)
+    const description = `Ajuste del equipo: ${signed(amount)} ${unit}. Razón: ${why}`;
+    const balance = amount > 0
+      ? await usersService.creditBalance(userId, currency, amount, "admin_adjustment", description, tx)
+      : await usersService.debitBalance(userId, currency, -amount, "admin_adjustment", description, tx);
+
+    await tx.systemMessage.create({
+      data: {
+        type: "personal",
+        title: `${title}: ${amount > 0 ? "+" : "-"}${Math.abs(amount)}`,
+        content: `Se te ha ${amount > 0 ? "acreditado" : "descontado"} **${Math.abs(amount)}** ${unit} desde el panel de administración.\n\nRazón: *${why}*`,
+        category: amount > 0 ? "reward" : "penalty",
+        senderId: adminId,
+        recipientId: userId,
+      },
+    });
+
+    return balance;
+  });
+}
 
 export async function adjustCoins(userId: string, amount: number, reason: string, adminId: string) {
-  if (!Number.isInteger(amount) || amount === 0) {
-    throw Errors.BadRequest("amount debe ser un entero diferente de cero");
-  }
-  if (!reason || reason.trim().length === 0) {
-    throw Errors.BadRequest("reason es requerido");
-  }
-
-  return prisma.$transaction(async (tx) => {
-    const user = await tx.user.findUnique({
-      where: { id: userId },
-      select: { coins: true },
-    });
-    if (!user) throw Errors.NotFound("Usuario");
-
-    if (amount < 0 && user.coins < Math.abs(amount)) {
-      throw Errors.BadRequest(`Saldo insuficiente. Tiene ${user.coins} monedas`);
-    }
-
-    // Atomic change + Transaction row (debit is guarded against going negative)
-    const description = `[Admin: ${adminId}] Coins: ${amount > 0 ? "+" : ""}${amount}. Razón: ${reason.trim()}`;
-    const updated = {
-      coins: amount > 0
-        ? await usersService.creditBalance(userId, "coins", amount, "admin_adjustment", description, tx)
-        : await usersService.debitBalance(userId, "coins", -amount, "admin_adjustment", description, tx),
-    };
-
-    // Auto-send system notification to user
-    await tx.systemMessage.create({
-      data: {
-        type: "personal",
-        title: `Monedas: ${amount > 0 ? "+" : "-"}${Math.abs(amount)}`,
-        content: `Se te ha ${amount > 0 ? "acreditado" : "descontado"} **${Math.abs(amount)}** monedas desde el panel de administración.\n\nRazón: *${reason.trim()}*`,
-        category: amount > 0 ? "reward" : "penalty",
-        senderId: adminId,
-        recipientId: userId,
-      },
-    });
-
-    return { coins: updated.coins };
-  });
+  return { coins: await adjustBalance("coins", userId, amount, reason, adminId) };
 }
-
-// ---------------------------------------------------------------------------
-// Adjust coupons
-// ---------------------------------------------------------------------------
 
 export async function adjustCoupons(userId: string, amount: number, reason: string, adminId: string) {
-  if (!Number.isInteger(amount) || amount === 0) {
-    throw Errors.BadRequest("amount debe ser un entero diferente de cero");
-  }
-  if (!reason || reason.trim().length === 0) {
-    throw Errors.BadRequest("reason es requerido");
-  }
-
-  return prisma.$transaction(async (tx) => {
-    const user = await tx.user.findUnique({
-      where: { id: userId },
-      select: { coupons: true },
-    });
-    if (!user) throw Errors.NotFound("Usuario");
-
-    if (amount < 0 && user.coupons < Math.abs(amount)) {
-      throw Errors.BadRequest(`Saldo insuficiente. Tiene ${user.coupons} cupones`);
-    }
-
-    // Atomic change + Transaction row (debit is guarded against going negative)
-    const description = `[Admin: ${adminId}] Coupons: ${amount > 0 ? "+" : ""}${amount}. Razón: ${reason.trim()}`;
-    const updated = {
-      coupons: amount > 0
-        ? await usersService.creditBalance(userId, "coupons", amount, "admin_adjustment", description, tx)
-        : await usersService.debitBalance(userId, "coupons", -amount, "admin_adjustment", description, tx),
-    };
-
-    // Auto-send system notification to user
-    await tx.systemMessage.create({
-      data: {
-        type: "personal",
-        title: `Cupones: ${amount > 0 ? "+" : "-"}${Math.abs(amount)}`,
-        content: `Se te ha ${amount > 0 ? "acreditado" : "descontado"} **${Math.abs(amount)}** cupones desde el panel de administración.\n\nRazón: *${reason.trim()}*`,
-        category: amount > 0 ? "reward" : "penalty",
-        senderId: adminId,
-        recipientId: userId,
-      },
-    });
-
-    return { coupons: updated.coupons };
-  });
+  return { coupons: await adjustBalance("coupons", userId, amount, reason, adminId) };
 }
 
-// ---------------------------------------------------------------------------
-// Adjust rare candy
-// ---------------------------------------------------------------------------
-
 export async function adjustRareCandy(userId: string, amount: number, reason: string, adminId: string) {
-  if (!Number.isInteger(amount) || amount === 0) {
-    throw Errors.BadRequest("amount debe ser un entero diferente de cero");
-  }
-  if (!reason || reason.trim().length === 0) {
-    throw Errors.BadRequest("reason es requerido");
-  }
-
-  return prisma.$transaction(async (tx) => {
-    const user = await tx.user.findUnique({
-      where: { id: userId },
-      select: { rareCandy: true },
-    });
-    if (!user) throw Errors.NotFound("Usuario");
-
-    if (amount < 0 && user.rareCandy < Math.abs(amount)) {
-      throw Errors.BadRequest(`Saldo insuficiente. Tiene ${user.rareCandy} rare candy`);
-    }
-
-    // Atomic change + Transaction row (debit is guarded against going negative)
-    const description = `[Admin: ${adminId}] RareCandy: ${amount > 0 ? "+" : ""}${amount}. Razón: ${reason.trim()}`;
-    const updated = {
-      rareCandy: amount > 0
-        ? await usersService.creditBalance(userId, "rareCandy", amount, "admin_adjustment", description, tx)
-        : await usersService.debitBalance(userId, "rareCandy", -amount, "admin_adjustment", description, tx),
-    };
-
-    // Auto-send system notification to user
-    await tx.systemMessage.create({
-      data: {
-        type: "personal",
-        title: `Caramelo Raro: ${amount > 0 ? "+" : "-"}${Math.abs(amount)}`,
-        content: `Se te ha ${amount > 0 ? "acreditado" : "descontado"} **${Math.abs(amount)}** caramelo raro desde el panel de administración.\n\nRazón: *${reason.trim()}*`,
-        category: amount > 0 ? "reward" : "penalty",
-        senderId: adminId,
-        recipientId: userId,
-      },
-    });
-
-    return { rareCandy: updated.rareCandy };
-  });
+  return { rareCandy: await adjustBalance("rareCandy", userId, amount, reason, adminId) };
 }
 
 // =============================================================================
@@ -541,6 +537,11 @@ export async function adjustRareCandy(userId: string, amount: number, reason: st
 // Adjust cards
 // ---------------------------------------------------------------------------
 
+/**
+ * Add or remove copies of cards. The card history (admin-only, refId = the admin) records what
+ * was really applied: a removal stops at the copies the player has. Decks that lost copies are
+ * revalidated afterwards. No wallet (Transaction) row: cards are not a currency.
+ */
 export async function adjustCards(
   userId: string,
   cards: { cardDefId: string; quantity: number }[],
@@ -549,91 +550,58 @@ export async function adjustCards(
   if (!cards || cards.length === 0) {
     throw Errors.BadRequest("cards es requerido");
   }
+  const unknown = cards.filter((c) => !findCardById(c.cardDefId)).map((c) => c.cardDefId);
+  if (unknown.length > 0) {
+    throw Errors.BadRequest(`Cartas inexistentes: ${[...new Set(unknown)].join(", ")}`);
+  }
 
-  return prisma.$transaction(async (tx) => {
-    // Verify user exists
-    const user = await tx.user.findUnique({
-      where: { id: userId },
-      select: { id: true },
-    });
-    if (!user) throw Errors.NotFound("Usuario");
+  const outcome = await prisma.$transaction(async (tx) => {
+    await assertCanActOn(tx, adminId, userId);
 
     const results: { cardDefId: string; newQuantity: number }[] = [];
-    // What really changed (a removal stops at the copies the player has)
     const applied: CardChange[] = [];
 
     for (const card of cards) {
-      if (!card.cardDefId || !Number.isInteger(card.quantity) || card.quantity === 0) {
+      if (!Number.isInteger(card.quantity) || card.quantity === 0) continue;
+      const where = { userId_cardDefId: { userId, cardDefId: card.cardDefId } };
+
+      if (card.quantity > 0) {
+        const row = await tx.userCard.upsert({
+          where,
+          update: { quantity: { increment: card.quantity } },
+          create: { userId, cardDefId: card.cardDefId, quantity: card.quantity },
+        });
+        results.push({ cardDefId: card.cardDefId, newQuantity: row.quantity });
+        applied.push({ cardDefId: card.cardDefId, quantity: card.quantity });
         continue;
       }
 
-      if (card.quantity > 0) {
-        // Add cards: upsert with increment
-        const existing = await tx.userCard.findUnique({
-          where: {
-            userId_cardDefId: { userId, cardDefId: card.cardDefId },
-          },
-        });
-
-        if (existing) {
-          const updated = await tx.userCard.update({
-            where: { id: existing.id },
-            data: { quantity: { increment: card.quantity } },
-          });
-          results.push({ cardDefId: card.cardDefId, newQuantity: updated.quantity });
-          applied.push({ cardDefId: card.cardDefId, quantity: card.quantity });
-        } else {
-          await tx.userCard.create({
-            data: {
-              userId,
-              cardDefId: card.cardDefId,
-              quantity: card.quantity,
-            },
-          });
-          results.push({ cardDefId: card.cardDefId, newQuantity: card.quantity });
-          applied.push({ cardDefId: card.cardDefId, quantity: card.quantity });
-        }
-      } else {
-        // Remove cards: decrement and delete if reaches 0
-        const existing = await tx.userCard.findUnique({
-          where: {
-            userId_cardDefId: { userId, cardDefId: card.cardDefId },
-          },
-        });
-
-        if (!existing) continue;
-
-        const newQuantity = existing.quantity + card.quantity; // quantity is negative
-        applied.push({ cardDefId: card.cardDefId, quantity: -Math.min(existing.quantity, -card.quantity) });
-        if (newQuantity <= 0) {
-          await tx.userCard.delete({ where: { id: existing.id } });
-          results.push({ cardDefId: card.cardDefId, newQuantity: 0 });
-        } else {
-          await tx.userCard.update({
-            where: { id: existing.id },
-            data: { quantity: newQuantity },
-          });
-          results.push({ cardDefId: card.cardDefId, newQuantity });
-        }
-      }
+      const existing = await tx.userCard.findUnique({ where });
+      if (!existing || existing.quantity <= 0) continue;
+      const remove = Math.min(existing.quantity, -card.quantity);
+      // Guarded decrement: a concurrent change to this row can't be overwritten
+      const { count } = await tx.userCard.updateMany({
+        where: { id: existing.id, quantity: { gte: remove } },
+        data: { quantity: { decrement: remove } },
+      });
+      if (count === 0) throw Errors.Conflict("La colección del jugador cambió; volvé a intentarlo");
+      await tx.userCard.deleteMany({ where: { id: existing.id, quantity: { lte: 0 } } });
+      const after = await tx.userCard.findUnique({ where, select: { quantity: true } });
+      results.push({ cardDefId: card.cardDefId, newQuantity: after?.quantity ?? 0 });
+      applied.push({ cardDefId: card.cardDefId, quantity: -remove });
     }
 
-    await recordCardChange(tx, userId, "admin_adjustment", "Ajuste de un administrador", applied, adminId);
-
-    // Log transaction
-    const summary = cards.map((c) => `${c.cardDefId}:${c.quantity > 0 ? "+" : ""}${c.quantity}`).join(", ");
-    await tx.transaction.create({
-      data: {
-        userId,
-        type: "admin_adjustment",
-        description: `[Admin: ${adminId}] Cards: ${summary}`,
-        amount: 0,
-        balanceAfter: 0,
-      },
-    });
-
-    return { results };
+    await recordCardChange(tx, userId, "admin_adjustment", "Ajuste del equipo", applied, adminId);
+    return { results, removed: applied.filter((c) => c.quantity < 0) };
   });
+
+  // Decks left without enough copies show as invalid (the game also checks when it starts)
+  if (outcome.removed.length > 0) {
+    await revalidateDecks(userId, outcome.removed).catch((err: unknown) =>
+      console.error("[admin] deck revalidation failed:", err),
+    );
+  }
+  return { results: outcome.results };
 }
 
 // ---------------------------------------------------------------------------
@@ -648,57 +616,78 @@ const COSMETIC_TYPE_LABELS: Record<string, string> = {
   playmat: "Tapete",
 };
 
+type CosmeticType = "coin" | "cardBack" | "avatar" | "skin" | "playmat";
+
+/**
+ * Items an admin can grant, by type: the catalogs the market, prizes, battle pass and set
+ * milestones grant from (+ the gym-leader coins the backoffice offers). Items every player has
+ * (Eevee coin, classic back, field playmat, free avatars) are not grantable.
+ */
+const GRANTABLE_COSMETICS: Record<CosmeticType, ReadonlySet<string>> = {
+  coin: new Set([...AVAILABLE_COINS.map((c) => c.itemId), ...ADMIN_ONLY_COINS]),
+  cardBack: new Set([
+    ...AVAILABLE_CARD_BACKS.map((c) => c.itemId),
+    ...CARD_SETS.map((set) => ECONOMY.setMilestones.cardBackId(set.id)),
+  ]),
+  avatar: new Set(AVAILABLE_AVATARS.map((a) => a.itemId).filter((id) => !FREE_AVATAR_IDS.has(id))),
+  // "<pokemon-slug>-<overlayId>": every Rare Holo Pokémon × every overlay (catalog.ts)
+  skin: new Set(ALL_VARIANTS.map((v) => v.itemId)),
+  playmat: new Set(AVAILABLE_PLAYMATS.map((p) => p.itemId)),
+};
+
 export async function grantCosmetic(
   adminId: string,
   userId: string,
-  type: "coin" | "cardBack" | "avatar" | "skin" | "playmat",
+  type: CosmeticType,
   itemId: string,
 ) {
-  // Verify user exists
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { id: true },
-  });
-  if (!user) throw Errors.NotFound("Usuario");
+  if (type === "avatar" && FREE_AVATAR_IDS.has(itemId)) {
+    throw Errors.BadRequest("Ese avatar es gratuito: todos los jugadores ya lo tienen");
+  }
+  if (!GRANTABLE_COSMETICS[type].has(itemId)) {
+    throw Errors.BadRequest(`${COSMETIC_TYPE_LABELS[type]} inexistente: ${itemId}`);
+  }
+  const typeLabel = COSMETIC_TYPE_LABELS[type];
 
   try {
-    switch (type) {
-      case "coin":
-        await prisma.userCoin.create({ data: { userId, coinId: itemId } });
-        break;
-      case "cardBack":
-        await prisma.userCardBack.create({ data: { userId, cardBackId: itemId } });
-        break;
-      case "avatar":
-        await prisma.userAvatar.create({ data: { userId, avatarId: itemId } });
-        break;
-      case "skin":
-        await prisma.userCardSkin.create({ data: { userId, skinId: itemId } });
-        break;
-      case "playmat":
-        await prisma.userPlaymat.create({ data: { userId, playmatId: itemId } });
-        break;
-    }
+    await prisma.$transaction(async (tx) => {
+      await assertCanActOn(tx, adminId, userId);
+      switch (type) {
+        case "coin":
+          await tx.userCoin.create({ data: { userId, coinId: itemId } });
+          break;
+        case "cardBack":
+          await tx.userCardBack.create({ data: { userId, cardBackId: itemId } });
+          break;
+        case "avatar":
+          await tx.userAvatar.create({ data: { userId, avatarId: itemId } });
+          break;
+        case "skin":
+          await tx.userCardSkin.create({ data: { userId, skinId: itemId } });
+          break;
+        case "playmat":
+          await tx.userPlaymat.create({ data: { userId, playmatId: itemId } });
+          break;
+      }
+
+      // The grant and the player's notice go together
+      await tx.systemMessage.create({
+        data: {
+          type: "personal",
+          title: "Nuevo cosmético concedido",
+          content: `Se te ha concedido un nuevo cosmético desde el panel de administración.\n\nTipo: **${typeLabel}**\nItem: **${itemId}**`,
+          category: "reward",
+          senderId: adminId,
+          recipientId: userId,
+        },
+      });
+    });
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
       throw Errors.BadRequest("El usuario ya posee este cosmético");
     }
     throw err;
   }
-
-  const typeLabel = COSMETIC_TYPE_LABELS[type] || type;
-
-  // Auto-send system notification to user
-  await prisma.systemMessage.create({
-    data: {
-      type: "personal",
-      title: "Nuevo cosmético concedido",
-      content: `Se te ha concedido un nuevo cosmético desde el panel de administración.\n\nTipo: **${typeLabel}**\nItem: **${itemId}**`,
-      category: "reward",
-      senderId: adminId,
-      recipientId: userId,
-    },
-  });
 
   return { success: true };
 }
@@ -765,50 +754,45 @@ const VALID_STAT_FIELDS = [
   "rankedLosses",
   "draftWins",
   "draftLosses",
-];
+] as const;
+
+type StatField = (typeof VALID_STAT_FIELDS)[number];
 
 // ---------------------------------------------------------------------------
 // Adjust stats
 // ---------------------------------------------------------------------------
 
+/**
+ * Add to / subtract from one win/loss counter, atomically: the decrement is guarded in the same
+ * UPDATE, so concurrent adjustments can't take it below 0. No wallet (Transaction) row: stats are
+ * not a currency.
+ */
 export async function adjustStats(userId: string, field: string, amount: number, adminId: string) {
-  if (!VALID_STAT_FIELDS.includes(field)) {
+  if (!VALID_STAT_FIELDS.includes(field as StatField)) {
     throw Errors.BadRequest(`Campo inválido. Campos válidos: ${VALID_STAT_FIELDS.join(", ")}`);
   }
   if (!Number.isInteger(amount) || amount === 0) {
     throw Errors.BadRequest("amount debe ser un entero diferente de cero");
   }
+  const statField = field as StatField;
 
-  // Ensure UserStats exists (upsert)
-  const stats = await prisma.userStats.upsert({
-    where: { userId },
-    create: { userId },
-    update: {},
+  return prisma.$transaction(async (tx) => {
+    await assertCanActOn(tx, adminId, userId);
+    // Ensure UserStats exists
+    await tx.userStats.upsert({ where: { userId }, create: { userId }, update: {} });
+
+    const { count } = await tx.userStats.updateMany({
+      where: { userId, ...(amount < 0 ? { [statField]: { gte: -amount } } : {}) },
+      data: { [statField]: { increment: amount } },
+    });
+    if (count === 0) {
+      const current = await tx.userStats.findUniqueOrThrow({ where: { userId }, select: { [statField]: true } });
+      throw Errors.BadRequest(
+        `El resultado no puede ser negativo. Valor actual: ${(current as Record<string, number>)[statField]}`,
+      );
+    }
+    return tx.userStats.findUniqueOrThrow({ where: { userId } });
   });
-
-  // Check that result won't be negative
-  const currentValue = (stats as Record<string, unknown>)[field] as number;
-  if (currentValue + amount < 0) {
-    throw Errors.BadRequest(`El resultado no puede ser negativo. Valor actual: ${currentValue}`);
-  }
-
-  const updated = await prisma.userStats.update({
-    where: { userId },
-    data: { [field]: { increment: amount } },
-  });
-
-  // Log transaction
-  await prisma.transaction.create({
-    data: {
-      userId,
-      type: "admin_adjustment",
-      description: `[Admin: ${adminId}] Stats: ${field} ${amount > 0 ? "+" : ""}${amount}`,
-      amount: 0,
-      balanceAfter: 0,
-    },
-  });
-
-  return updated;
 }
 
 // =============================================================================
@@ -821,57 +805,48 @@ export async function adjustStats(userId: string, field: string, amount: number,
 
 export type StatsPeriod = "day" | "week" | "month";
 
-function getPeriodStart(period: StatsPeriod): Date {
-  const now = new Date();
+/**
+ * Start of a dashboard period: "day" and "week" follow the economy calendar (00:00 Argentina,
+ * weeks from Monday) like every other daily/weekly number; "month" is the last 30 days.
+ */
+function getPeriodStart(period: StatsPeriod, now = new Date()): Date {
   switch (period) {
-    case "day": {
-      const start = new Date(now);
-      start.setUTCHours(0, 0, 0, 0);
-      return start;
-    }
-    case "week": {
-      return new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-    }
-    case "month": {
+    case "day":
+      return startOfEconomyDay(now);
+    case "week":
+      return startOfEconomyWeek(now);
+    case "month":
       return new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-    }
   }
 }
 
+/**
+ * Dashboard numbers. With a period, active users / games / messages are counted from its start
+ * (`since`); without one ("all"), games and messages are all-time and active users are the
+ * accounts that ever logged in. `period` and `since` say which window was used.
+ */
 export async function getAdminStats(period?: StatsPeriod) {
-  // When no period: active today + all-time games/messages (original behavior)
-  // When period provided: filter active users, games, and messages by that date range
-  const periodStart = period ? getPeriodStart(period) : undefined;
-  const activityStart = periodStart ?? (() => {
-    const todayStart = new Date();
-    todayStart.setUTCHours(0, 0, 0, 0);
-    return todayStart;
-  })();
+  const since = period ? getPeriodStart(period) : null;
 
   const [totalUsers, activeUsers, totalGamesPlayed, totalMessages] = await Promise.all([
-    // Total users is always unfiltered
     prisma.user.count(),
-
-    // Active users: filtered by period (defaults to today)
     prisma.user.count({
-      where: { lastLoginAt: { gte: activityStart } },
+      where: { lastLoginAt: since ? { gte: since } : { not: null } },
     }),
-
-    // Games played: filtered by period when provided, all-time otherwise
     prisma.match.count({
       where: {
         status: "finished",
-        ...(periodStart ? { finishedAt: { gte: periodStart } } : {}),
+        ...(since ? { finishedAt: { gte: since } } : {}),
       },
     }),
-
-    // Messages: filtered by period when provided, all-time otherwise
     prisma.systemMessage.count({
-      ...(periodStart ? { where: { createdAt: { gte: periodStart } } } : {}),
+      where: { AND: [SENT_MESSAGE_FILTER, ...(since ? [{ createdAt: { gte: since } }] : [])] },
     }),
   ]);
 
   return {
+    period: period ?? ("all" as const),
+    since: since ? since.toISOString() : null,
     totalUsers,
     activeUsers,
     totalGamesPlayed,

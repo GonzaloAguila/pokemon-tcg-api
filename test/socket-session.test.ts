@@ -85,7 +85,8 @@ describe("session freshness on sockets", () => {
     const user = await createUser();
     const socket = await server.connect(tokenFor(user));
     const gone = waitForDisconnect(socket);
-    await adminService.toggleUserBan(user.id, true, "test");
+    const admin = await createUser({}, { role: "admin" });
+    await adminService.toggleUserBan(admin.id, user.id, true, "test");
     expect(await gone).toBe(true);
   });
 
@@ -122,7 +123,8 @@ describe("session freshness on sockets", () => {
     const b = await server.connect(tokenFor(user));
     const goneA = waitForDisconnect(a);
     const goneB = waitForDisconnect(b);
-    await adminService.suspendUser(user.id, 24, "test");
+    const admin = await createUser({}, { role: "admin" });
+    await adminService.suspendUser(admin.id, user.id, 24, "test");
     expect(await goneA).toBe(true);
     expect(await goneB).toBe(true);
   });

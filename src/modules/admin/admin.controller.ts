@@ -4,7 +4,7 @@ import { z } from "zod";
 import { Errors } from "../../middleware/error-handler.js";
 import { ALL_PERMISSIONS, type AdminPermission } from "./permissions.js";
 import * as adminService from "./admin.service.js";
-import { roomManager } from "../../socket/handlers.js";
+import { closeRoomByAdmin, roomManager } from "../../socket/handlers.js";
 import { getIo } from "../../socket/io-registry.js";
 
 const router = Router();
@@ -48,6 +48,25 @@ const adminBodies = {
   role: z.object({ role: z.enum(["user", "admin"]) }),
 };
 
+/** A query-string value given at most once ("?q=a&q=b" arrives as an array). */
+const queryString = z.string({ invalid_type_error: "debe aparecer una sola vez" });
+/** Empty query values ("?role=") count as absent. */
+const optionalQuery = <S extends z.ZodTypeAny>(schema: S) =>
+  z.preprocess((v) => (v === "" ? undefined : v), schema.optional());
+
+const adminQueries = {
+  stats: z.object({ period: optionalQuery(z.enum(["day", "week", "month", "all"])) }),
+  // Same shapes as the panel's searchUsers (src/infra/http/admin-api.ts)
+  searchUsers: z.object({
+    q: optionalQuery(queryString.trim().max(100)).transform((v) => v ?? ""),
+    page: optionalQuery(z.coerce.number().int().min(1).max(10_000)).transform((v) => v ?? 1),
+    limit: optionalQuery(z.coerce.number().int().min(1).max(50)).transform((v) => v ?? 20),
+    role: optionalQuery(z.enum(["user", "admin", "superadmin"])),
+    sortBy: optionalQuery(z.enum(adminService.SEARCH_USERS_SORT_ALLOWLIST)),
+    sortDir: optionalQuery(z.enum(["asc", "desc"])).transform((v) => v ?? "desc"),
+  }),
+};
+
 /** Parse req.body or throw a 400 (or 422 where the endpoint always used it) with the first issue. */
 function parseBody<S extends z.ZodTypeAny>(schema: S, body: unknown, status: 400 | 422 = 400): z.output<S> {
   const res = schema.safeParse(body);
@@ -79,14 +98,9 @@ router.get(
   requirePermission("dashboard:view"),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const periodParam = req.query.period as string | undefined;
-      const validPeriods = ["day", "week", "month"];
-      const period =
-        periodParam && validPeriods.includes(periodParam)
-          ? (periodParam as adminService.StatsPeriod)
-          : undefined;
-
-      const stats = await adminService.getAdminStats(period);
+      // No period (or "all"): all-time numbers; anything else unknown is a 400
+      const { period } = parseBody(adminQueries.stats, req.query);
+      const stats = await adminService.getAdminStats(period === "all" ? undefined : period);
       res.json(stats);
     } catch (err) {
       next(err);
@@ -108,14 +122,8 @@ router.get(
   requirePermission("users:view"),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const query = (req.query.q as string) || "";
-      const page = Math.max(Number(req.query.page) || 1, 1);
-      const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 50);
-      const role = (req.query.role as string) || undefined;
-      const sortBy = (req.query.sortBy as string) || undefined;
-      const sortDir = (req.query.sortDir as string) === "asc" ? "asc" as const : "desc" as const;
-
-      const result = await adminService.searchUsers(query, page, limit, role, sortBy, sortDir);
+      const { q, page, limit, role, sortBy, sortDir } = parseBody(adminQueries.searchUsers, req.query);
+      const result = await adminService.searchUsers(q, page, limit, role, sortBy, sortDir);
       res.json(result);
     } catch (err) {
       next(err);
@@ -212,7 +220,7 @@ router.delete(
   preventSelfAction,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const result = await adminService.deleteUser(req.params.userId);
+      const result = await adminService.deleteUser(req.user!.userId, req.params.userId);
       res.json(result);
     } catch (err) {
       next(err);
@@ -401,7 +409,7 @@ router.patch(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { banned, reason } = parseBody(adminBodies.ban, req.body, 422);
-      const result = await adminService.toggleUserBan(req.params.userId, banned, reason);
+      const result = await adminService.toggleUserBan(req.user!.userId, req.params.userId, banned, reason);
       res.json(result);
     } catch (err) {
       next(err);
@@ -421,7 +429,7 @@ router.post(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { hours, reason } = parseBody(adminBodies.suspend, req.body, 422);
-      const result = await adminService.suspendUser(req.params.userId, hours, reason);
+      const result = await adminService.suspendUser(req.user!.userId, req.params.userId, hours, reason);
       res.json(result);
     } catch (err) {
       next(err);
@@ -479,28 +487,10 @@ router.delete(
   requirePermission("rooms:close"),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { roomId } = req.params;
-      const room = roomManager.getRoom(roomId);
-      if (!room) {
+      // Players and spectators are told, leave the socket room, and the lobbies refresh
+      if (!closeRoomByAdmin(getIo(), req.params.roomId)) {
         throw Errors.NotFound("Sala");
       }
-
-      // Capture player socket IDs before deleting the room
-      const socketIds: string[] = [];
-      if (room.player1SocketId) socketIds.push(room.player1SocketId);
-      if (room.player2SocketId) socketIds.push(room.player2SocketId);
-
-      // Force delete the room
-      roomManager.forceDeleteRoom(roomId);
-
-      // Notify players that the room was closed by an admin
-      const io = getIo();
-      for (const socketId of socketIds) {
-        io?.to(socketId).emit("gameClosed", {
-          reason: "Mesa cerrada por un administrador",
-        });
-      }
-
       res.json({ success: true });
     } catch (err) {
       next(err);

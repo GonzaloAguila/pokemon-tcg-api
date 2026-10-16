@@ -81,6 +81,12 @@ See `.env.example`. Also used: `COOKIE_DOMAIN` (prod: `.nostalgic-tcg.online`, n
 
 Production: Hostinger VPS, `api.nostalgic-tcg.online`, Nginx (TLS via Certbot) → `127.0.0.1:3001`, PM2 process `pokemon-tcg-api`, Postgres on the same box. Code at `/var/www/pokemon-tcg-api`. The VPS installs game-core from GitHub Packages, so root's `~/.npmrc` needs a valid token. Claude has no SSH access; give the user commands to run. Full pipeline: frontend repo `.claude/skills/api-deploy/SKILL.md`.
 
+## Backoffice rules
+
+- Moderation and adjustments (ban, suspend, adjust-*, grant-cosmetic) go through `assertCanActOn` (`admin.service.ts`): never on a superadmin, on an admin only by the superadmin (403). A banned user can't be suspended (409). Deleting a user is refused while they sit in a game room or a draft (409); the delete removes the messages addressed to them (their self-sent welcome message included) in the same transaction. Prisma P2003 maps to 409.
+- Player-visible wallet rows of admin adjustments say "Ajuste del equipo" (no admin id); cards and stats write no wallet row (the card ledger keeps `refId` = admin). Cosmetic grants only take ids from the API catalogs (`prizes/catalog.ts` + `ADMIN_ONLY_COINS`, set-milestone backs, every skin variant; free/starter items rejected).
+- Welcome messages (`senderId = recipientId`) are automatic: excluded from the dashboard count and the admin list (`SENT_MESSAGE_FILTER`), not editable/deletable. Dashboard "day"/"week" use the economy day/week; the response carries `period` and `since`.
+
 ## Admin data fixes
 
 For one-off grants (cards, currency) write a temporary `npx tsx` Prisma script, run it **on the VPS** from `/var/www/pokemon-tcg-api` (prod Postgres is localhost-only), then delete it. Prefer the atomic balance helpers so a Transaction row is logged, and `recordCardChange` (reason `admin_adjustment`) for cards. `userCard.upsert` with `update: { quantity }` *sets* the value; use `{ increment: n }` to add.
@@ -110,4 +116,4 @@ Still open:
 - `console.*` logging only. Settlement runs in the background after a game ends: if its transaction fails (DB down), the match stays unsettled until the next restart refunds it as "no result" (`refundUnsettledMatches`); there is no retry.
 - `test/prize-games.test.ts` "never overspends under concurrency" is flaky: a spin can win coins that pay for a second concurrent spin (test assumption, not an overspend).
 - Daily free wheel/slot spin endpoints (`/users/me/claim-wheel-spin`, `claim-slot-spin`) only stamp a date (per economy day); not wired to `freeWheelSpins` or the UI.
-- Economy v2 (branch feat/economy-v2, not deployed): the 30 "manual" achievements can't progress (no in-game event tracking); they are flagged `unavailable` by `GET /achievements` and excluded from "Leyenda Viviente". Packs still use `Math.random` (unbiased now) and in-memory definitions (admin pack CRUD is lost on restart). vs-AI results (and their `turnNumber`) are client-reported, bounded by duration and 10 counted games/day. Set-milestone card backs (`set-<setId>`) and title medals (`title-maestro-*`) need frontend assets/labels.
+- Economy v2 (branch feat/economy-v2, not deployed): the 30 "manual" achievements can't progress (no in-game event tracking); they are flagged `unavailable` by `GET /achievements` and excluded from "Leyenda Viviente". Packs still use `Math.random` (unbiased now) and code-defined pack types (the admin pack CRUD routes were removed 2026-10-16; `/api/packs` is read-only). vs-AI results (and their `turnNumber`) are client-reported, bounded by duration and 10 counted games/day. Set-milestone card backs (`set-<setId>`) and title medals (`title-maestro-*`) need frontend assets/labels.

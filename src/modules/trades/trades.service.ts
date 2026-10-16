@@ -341,7 +341,8 @@ export async function executeTrade(a: TradeParty, b: TradeParty, now = new Date(
   return tradeId;
 }
 
-async function revalidateDecks(userId: string, gave: readonly TradeCard[]) {
+/** Mark invalid the user's valid decks that use one of the cards they gave away and no longer pass. */
+export async function revalidateDecks(userId: string, gave: readonly TradeCard[]) {
   const ids = new Set(gave.map((c) => c.cardDefId));
   const decks = await prisma.deck.findMany({ where: { userId, isValid: true }, select: { id: true, cards: true } });
   for (const deck of decks) {
@@ -407,6 +408,8 @@ export async function revertTrade(adminId: string, tradeId: string, now = new Da
             data: { quantity: { decrement: quantity } },
           });
           if (count === 0) throw Errors.BadRequest(`Un jugador ya no tiene ${findCardById(cardDefId)?.name ?? cardDefId}`);
+          // The receiver may have given back their only copies (a trade never leaves 0, a revert can)
+          await tx.userCard.deleteMany({ where: { userId: receiverId, cardDefId, quantity: { lte: 0 } } });
           await tx.userCard.upsert({
             where: { userId_cardDefId: { userId: giverId, cardDefId } },
             update: { quantity: { increment: quantity } },
@@ -421,5 +424,11 @@ export async function revertTrade(adminId: string, tradeId: string, now = new Da
     },
     { timeout: 15_000, maxWait: 10_000 },
   );
+  // Each side gave back what it had received: their decks may now be short of copies
+  const done = await prisma.trade.findUniqueOrThrow({ where: { id: tradeId }, select: { offered: true, requested: true } });
+  await Promise.all([
+    revalidateDecks(pre.toUserId, done.offered as TradeCard[]),
+    revalidateDecks(pre.fromUserId, done.requested as TradeCard[]),
+  ]).catch((err) => console.error("[trades] deck revalidation after revert failed:", err));
   return prisma.trade.findUniqueOrThrow({ where: { id: tradeId }, select: tradeSelect });
 }

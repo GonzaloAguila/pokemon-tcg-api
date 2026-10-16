@@ -8,8 +8,10 @@ import { tokenFor } from "./socket-helpers.js";
 import { startHttpApp } from "./http-helpers.js";
 
 let http: Awaited<ReturnType<typeof startHttpApp>>;
+let superadmin: Awaited<ReturnType<typeof createUser>>;
 
 beforeAll(async () => {
+  superadmin = await createUser({}, { role: "superadmin" });
   http = await startHttpApp((app) => {
     app.get("/me", requireAuth, (req, res) => res.json({ userId: req.user!.userId, role: req.user!.role }));
     app.get("/admin-only", requireAuth, requireRole("admin", "superadmin"), (_req, res) => res.json({ ok: true }));
@@ -41,7 +43,7 @@ describe("HTTP access tokens honor tokenVersion and account status", () => {
     const user = await createUser();
     const token = tokenFor(user);
     expect((await http.request("GET", "/me", { token })).status).toBe(200); // now cached
-    await adminService.toggleUserBan(user.id, true, "test");
+    await adminService.toggleUserBan(superadmin.id, user.id, true, "test");
     const res = await http.request("GET", "/me", { token });
     expect(res.status).toBe(401);
   });
@@ -50,7 +52,7 @@ describe("HTTP access tokens honor tokenVersion and account status", () => {
     const user = await createUser();
     const token = tokenFor(user);
     expect((await http.request("GET", "/me", { token })).status).toBe(200);
-    await adminService.suspendUser(user.id, 1, "test");
+    await adminService.suspendUser(superadmin.id, user.id, 1, "test");
     expect((await http.request("GET", "/me", { token })).status).toBe(401);
   });
 
@@ -92,7 +94,7 @@ describe("HTTP access tokens honor tokenVersion and account status", () => {
     const user = await createUser();
     const token = tokenFor(user);
     expect((await http.request("GET", "/optional", { token })).body.userId).toBe(user.id);
-    await adminService.toggleUserBan(user.id, true);
+    await adminService.toggleUserBan(superadmin.id, user.id, true);
     expect((await http.request("GET", "/optional", { token })).body.userId).toBeNull();
   });
 });

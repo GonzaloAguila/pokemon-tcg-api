@@ -98,6 +98,16 @@ export function errorHandler(
       });
       return;
     }
+    // Foreign key violation: something still references the row (e.g. deleting a user)
+    if (prismaError.code === "P2003") {
+      res.status(409).json({
+        error: {
+          message: "No se puede completar: hay otros registros que dependen de este",
+          code: "CONFLICT",
+        },
+      });
+      return;
+    }
     if (prismaError.code === "P2025") {
       res.status(404).json({
         error: {

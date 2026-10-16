@@ -1050,6 +1050,15 @@ export class DraftRoomManager {
     }));
   }
 
+  /** Whether `userId` is a player (not withdrawn) of a draft that isn't over, lobby included. */
+  hasActivePlayer(userId: string): boolean {
+    for (const room of this.rooms.values()) {
+      if (room.phase === "finished") continue;
+      if (room.players.some((p) => p.id === userId && !p.withdrawn)) return true;
+    }
+    return false;
+  }
+
   /** The draft `userId` is playing (started, not over, not left), to find the way back to it. */
   getActiveRoomOf(userId: string): { roomId: string; phase: DraftPhase } | null {
     for (const room of this.rooms.values()) {
