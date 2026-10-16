@@ -54,13 +54,17 @@ const publicUserSelect = {
 async function findVisiblePlayer(username: string) {
   if (!USERNAME_PATTERN.test(username)) throw playerNotFound();
   const visible = { status: { not: "banned" } };
+  // The insensitive lookup may be an ILIKE, where "_" is a wildcard: keep only real matches.
   const user =
     (await prisma.user.findFirst({ where: { username, ...visible }, select: publicUserSelect })) ??
-    (await prisma.user.findFirst({
-      where: { username: { equals: username, mode: "insensitive" }, ...visible },
-      select: publicUserSelect,
-      orderBy: { createdAt: "asc" },
-    }));
+    (
+      await prisma.user.findMany({
+        where: { username: { equals: username, mode: "insensitive" }, ...visible },
+        select: publicUserSelect,
+        orderBy: { createdAt: "asc" },
+        take: 10,
+      })
+    ).find((candidate) => candidate.username.toLowerCase() === username.toLowerCase());
   if (!user) throw playerNotFound();
   return user;
 }

@@ -121,6 +121,14 @@ describe("GET /api/players/:username", () => {
     expect(res.body.username).toBe(player.username);
   });
 
+  it("treats _ as a literal character, not a wildcard", async () => {
+    const player = await createPlayer();
+    const lookalike = `${player.username.slice(0, -1)}_`;
+    if (lookalike === player.username) return;
+    const res = await http.request("GET", `/api/players/${lookalike}`, { token: viewerToken });
+    expect(res.status).toBe(404);
+  });
+
   it("is 404 for unknown and banned players", async () => {
     const unknown = await http.request("GET", "/api/players/nobody_here_123", { token: viewerToken });
     expect(unknown.status).toBe(404);
