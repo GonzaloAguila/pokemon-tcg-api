@@ -441,11 +441,13 @@ function allowChatMessage(userId: string): boolean {
  * setup timer, every viewer's masked state and the game over. Used for players' actions and for
  * the default answers the server gives when an answer clock runs out (no actor socket).
  */
-function broadcastActionResult(io: Server, roomId: string, actionType: string, result: ActionResult, actorSocketId: string | null): void {
+function broadcastActionResult(io: Server, roomId: string, actionType: string, result: ActionResult, actor: string | string[] | null): void {
   // Broadcast action to opponent for animation (no private data). `paused`: an attack that
   // stopped at a mid-attack question (Flee, Sabrina's ESP...) and hasn't happened yet.
   const opponentAction = { type: actionType, ...(result.attackPaused ? { paused: true } : {}) };
-  if (actorSocketId) io.to(roomId).except(actorSocketId).emit("opponentAction", opponentAction);
+  // `actor`: the acting socket, or the rooms of a player the server answered for (never told
+  // about their own action as if the opponent did it)
+  if (actor && actor.length > 0) io.to(roomId).except(actor).emit("opponentAction", opponentAction);
   else io.to(roomId).emit("opponentAction", opponentAction);
 
   // Send updated state to both players
@@ -1157,11 +1159,12 @@ export function setupSocketHandlers(io: Server): void {
   // player by default; everyone gets the result like an action, plus `answerTimedOut`
   roomManager.setOnAutoAnswer((roomId, side, action, result) => {
     const room = roomManager.getRoom(roomId);
-    io.to(roomId).emit("answerTimedOut", {
-      userId: (side === "player1" ? room?.player1Id : room?.player2Id) ?? null,
-      actionType: action.type,
-    });
-    broadcastActionResult(io, roomId, action.type, result, null);
+    const userId = (side === "player1" ? room?.player1Id : room?.player2Id) ?? null;
+    const socketId = side === "player1" ? room?.player1SocketId : room?.player2SocketId;
+    io.to(roomId).emit("answerTimedOut", { userId, actionType: action.type });
+    // opponentAction to everyone but the player answered for (any of their sockets)
+    const answerer = [...(socketId ? [socketId] : []), ...(userId ? [userRoom(userId)] : [])];
+    broadcastActionResult(io, roomId, action.type, result, answerer);
   });
 
   // A waiting room deleted by the manager (its creator left the lobby): refresh the lobbies

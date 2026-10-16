@@ -3,7 +3,7 @@
  * booster (daily free pack, welcome and prize packs keep giving set boosters).
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { ALL_CARDS, CARD_SETS } from "@gonzaloaguila/game-core";
+import { ALL_CARDS, CARD_SETS, UNSUPPORTED_TRAINERS } from "@gonzaloaguila/game-core";
 import { prisma } from "../src/lib/prisma.js";
 import { ECONOMY } from "../src/modules/economy/config.js";
 import { boostersRouter } from "../src/modules/boosters/index.js";
@@ -18,7 +18,8 @@ import { createUser, getBalances } from "./helpers.js";
 import { startHttpApp } from "./http-helpers.js";
 import { tokenFor } from "./socket-helpers.js";
 
-const TRAINERS = ALL_CARDS.filter((c) => c.kind === "trainer");
+// Every Trainer the engine can play (UNSUPPORTED_TRAINERS never come out of a booster)
+const TRAINERS = ALL_CARDS.filter((c) => c.kind === "trainer" && !UNSUPPORTED_TRAINERS.includes(c.name));
 let http: Awaited<ReturnType<typeof startHttpApp>>;
 
 beforeAll(async () => {
@@ -48,7 +49,7 @@ describe("trainer booster", () => {
     expect(sets.size).toBe(CARD_SETS.length);
   });
 
-  it("odds cover exactly the Trainers", () => {
+  it("odds cover exactly the playable Trainers", () => {
     const odds = getPackOdds(TRAINER_BOOSTER_ID)!;
     expect(Object.keys(odds.cardChances).sort()).toEqual(TRAINERS.map((c) => c.id).sort());
     expect(odds.rarities.find((r) => r.rarity === "rare-holo")).toBeDefined();

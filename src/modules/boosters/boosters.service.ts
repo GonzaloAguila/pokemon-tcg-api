@@ -13,6 +13,7 @@ import {
   CARD_SETS,
   getSetById,
   isBasicEnergy,
+  UNSUPPORTED_TRAINERS,
   type Card,
 } from "@gonzaloaguila/game-core";
 
@@ -188,15 +189,24 @@ export function getPackById(packId: string): BoosterPackType | undefined {
 // Pack Opening Logic
 // =============================================================================
 
-const ALL_TRAINERS: Card[] = ALL_CARDS.filter((card) => card.kind === "trainer");
+/**
+ * Trainers the engine can't play yet (game-core UNSUPPORTED_TRAINERS: a set's cards still being
+ * built) never come out of a booster.
+ */
+const UNSUPPORTED = new Set<string>(UNSUPPORTED_TRAINERS);
+export function isOpenableCard(card: Card): boolean {
+  return !(card.kind === "trainer" && UNSUPPORTED.has(card.name));
+}
+
+const ALL_TRAINERS: Card[] = ALL_CARDS.filter((card) => card.kind === "trainer" && isOpenableCard(card));
 
 /**
- * Cards a pack draws from: every Trainer for the Trainer booster; for a set booster its set in
- * game-core's registry without the Trainers (they only come in the Trainer booster).
+ * Cards a pack draws from: every playable Trainer for the Trainer booster; for a set booster its
+ * set in game-core's registry without the Trainers (they only come in the Trainer booster).
  */
 function setCards(pack: Pick<BoosterPackType, "setId" | "trainersOnly">): Card[] {
   if (pack.trainersOnly) return ALL_TRAINERS;
-  return (getSetById(pack.setId)?.cards ?? []).filter((card) => card.kind !== "trainer");
+  return (getSetById(pack.setId)?.cards ?? []).filter((card) => card.kind !== "trainer" && isOpenableCard(card));
 }
 
 /**

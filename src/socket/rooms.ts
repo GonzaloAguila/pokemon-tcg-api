@@ -217,12 +217,12 @@ export function offTurnAnswerer(state: GameState | null | undefined): PlayerKey 
   const otherSide: PlayerKey = turnSide === "player1" ? "player2" : "player1";
   const trainerChoice = pendingTrainerChoiceOf(state);
   if (trainerChoice) return trainerChoice.chooser === "opponent" ? otherSide : null;
-  if (state.pendingAttackChoice) return state.pendingAttackChoice.step.chooser === "opponent" ? otherSide : null;
   const benchTrim = state.pendingBenchTrim?.[0];
   if (benchTrim) {
     const side: PlayerKey = benchTrim.side === "player" ? "player1" : "player2";
     return side === turnSide ? null : side;
   }
+  if (state.pendingAttackChoice) return state.pendingAttackChoice.step.chooser === "opponent" ? otherSide : null;
   return null;
 }
 
@@ -233,7 +233,8 @@ export function offTurnAnswerer(state: GameState | null | undefined): PlayerKey 
  * (`defaultSelection`, e.g. a future "decline" for Challenge!): used first when valid.
  */
 export function defaultSelection(step: SelectionStep): string[] | null {
-  const ids = step.options.map((option) => option.id);
+  // Disabled options can't be chosen: the fallbacks only take the enabled ones
+  const ids = step.options.filter((option) => !option.disabled).map((option) => option.id);
   const own = (step as SelectionStep & { defaultSelection?: string[] }).defaultSelection;
   for (const candidate of [...(own ? [own] : []), ids.slice(0, minSelectionsOf(step)), ids]) {
     try {
@@ -253,14 +254,14 @@ function defaultAnswerAction(state: GameState, side: PlayerKey): { type: string;
     const selection = defaultSelection(trainerChoice.step);
     return selection ? { type: "answerTrainerChoice", payload: { selection } } : null;
   }
-  if (state.pendingAttackChoice) {
-    const selection = defaultSelection(state.pendingAttackChoice.step);
-    return selection ? { type: "resolveAttackChoice", payload: { selection } } : null;
-  }
   if (state.pendingBenchTrim?.length) {
     // The engine's pick (its lowest-value Benched Pokémon), on that player's own view
     const discardIds = chooseBenchTrim(side === "player1" ? state : swapSides(state));
     return discardIds.length > 0 ? { type: "benchTrim", payload: { discardIds } } : null;
+  }
+  if (state.pendingAttackChoice) {
+    const selection = defaultSelection(state.pendingAttackChoice.step);
+    return selection ? { type: "resolveAttackChoice", payload: { selection } } : null;
   }
   return null;
 }
@@ -851,6 +852,7 @@ export class GameRoomManager {
     const leavingSide = room.player1SocketId === socketId ? "player1" : room.player2SocketId === socketId ? "player2" : null;
     if (leavingSide && room.status === "playing" && room.gameState) {
       room.status = "finished";
+      this.cancelAnswerTimer(roomId);
       this.cancelSetupTimer(roomId);
       this.onForfeitCallback?.(roomId, leavingSide === "player1" ? "player2" : "player1", room.gameState, "El rival abandonó la partida");
     }
@@ -872,6 +874,7 @@ export class GameRoomManager {
       this.abandonMatch(room, "Ambos jugadores abandonaron la mesa");
       this.cancelWaitingRoomTimer(roomId);
       room.status = "finished";
+      this.cancelAnswerTimer(roomId);
       this.rooms.delete(roomId);
     }
   }
@@ -1203,13 +1206,24 @@ export class GameRoomManager {
     } else if (pendingTrainerChoice && action.type !== "surrender") {
       return { success: false, error: "Primero hay que resolver la carta de Entrenador" };
     }
+    // Narrow Gym: each player over the Bench limit returns Benched Pokémon, one after the other
+    // (pendingBenchTrim queue, sides in player 1's perspective). Only the player at the head of
+    // the queue answers (off-turn included); game-core blocks everything else until it is empty.
+    // Checked before the attack / power choices, in the same order as awaitedSide and offTurnAnswerer.
+    const benchTrim = room.gameState.pendingBenchTrim?.[0];
+    if (action.type === "benchTrim") {
+      if (!benchTrim) return { success: false, error: "No hay ninguna Banca que reducir" };
+      if ((benchTrim.side === "player") !== isPlayer1) return { success: false, error: "No te corresponde elegir" };
+    } else if (benchTrim && !["surrender", "promote", "takePrize"].includes(action.type)) {
+      return { success: false, error: "Primero hay que reducir la Banca" };
+    }
     if (action.type === "resolveAttackChoice") {
       const pendingChoice = room.gameState.pendingAttackChoice;
       if (!pendingChoice) return { success: false, error: "No hay ninguna elección de ataque pendiente" };
       const attackerIsPlayer1 = room.gameState.isPlayerTurn;
       const chooserIsPlayer1 = pendingChoice.step.chooser === "opponent" ? !attackerIsPlayer1 : attackerIsPlayer1;
       if (chooserIsPlayer1 !== isPlayer1) return { success: false, error: "No te corresponde elegir" };
-    } else if (room.gameState.pendingAttackChoice && !["surrender", "promote", "takePrize"].includes(action.type)) {
+    } else if (room.gameState.pendingAttackChoice && !["surrender", "promote", "takePrize", "benchTrim"].includes(action.type)) {
       // game-core blocks everything else until the choice is answered (endTurn would be a no-op)
       return { success: false, error: "Primero hay que resolver la elección del ataque" };
     }
@@ -1217,18 +1231,8 @@ export class GameRoomManager {
     // answers it (turn check below); game-core blocks everything else until then
     if (action.type === "resolvePowerChoice") {
       if (!room.gameState.pendingPowerChoice) return { success: false, error: "No hay ninguna elección de Poder Pokémon pendiente" };
-    } else if (room.gameState.pendingPowerChoice && !["surrender", "promote", "takePrize"].includes(action.type)) {
+    } else if (room.gameState.pendingPowerChoice && !["surrender", "promote", "takePrize", "benchTrim"].includes(action.type)) {
       return { success: false, error: "Primero hay que resolver el Poder Pokémon" };
-    }
-    // Narrow Gym: each player over the Bench limit returns Benched Pokémon, one after the other
-    // (pendingBenchTrim queue, sides in player 1's perspective). Only the player at the head of
-    // the queue answers (off-turn included); game-core blocks everything else until it is empty.
-    const benchTrim = room.gameState.pendingBenchTrim?.[0];
-    if (action.type === "benchTrim") {
-      if (!benchTrim) return { success: false, error: "No hay ninguna Banca que reducir" };
-      if ((benchTrim.side === "player") !== isPlayer1) return { success: false, error: "No te corresponde elegir" };
-    } else if (benchTrim && !["surrender", "promote", "takePrize"].includes(action.type)) {
-      return { success: false, error: "Primero hay que reducir la Banca" };
     }
     const turnFreeActions = ["ready", "mulligan", "playerReady", "takePrize", "promote", "surrender", "resolveAttackChoice", "answerTrainerChoice", "benchTrim"];
     const setupActions = ["playBasicToActive", "playBasicToBench"];
@@ -1791,6 +1795,7 @@ export class GameRoomManager {
 
       if (gameOver) {
         room.status = "finished";
+        this.cancelAnswerTimer(roomId);
         // From player1's perspective: victory = player1 wins
         winner = newState.gameResult === "victory" ? "player1" : "player2";
         winReason = newState.gameResult === "victory"
@@ -1885,7 +1890,12 @@ export class GameRoomManager {
     this.cancelAnswerTimer(room.id);
     const timer = setTimeout(() => {
       this.answerTimers.delete(room.id);
-      void this.autoAnswerTimedOut(room.id);
+      this.autoAnswerTimedOut(room.id).catch((error) => {
+        // Never an unhandled rejection: the game goes on and the answerer may be kicked instead
+        console.error("[answer-clock]", error);
+        const current = this.rooms.get(room.id);
+        if (current?.answerClock) current.answerClock.autoAnswerFailed = true;
+      });
     }, room.turnTimerDuration * 1000);
     timer.unref?.();
     this.answerTimers.set(room.id, timer);
@@ -2060,6 +2070,7 @@ export class GameRoomManager {
     );
 
     room.status = "finished";
+    this.cancelAnswerTimer(roomId);
     const winner = disconnectedSide === "player1" ? "player2" : "player1";
 
     // A game created for absent players (draft round) where neither showed up: nobody wins
@@ -2138,6 +2149,7 @@ export class GameRoomManager {
     );
 
     room.status = "finished";
+    this.cancelAnswerTimer(roomId);
     const winner = readySide;
 
     if (this.onForfeitCallback) {
@@ -2161,6 +2173,7 @@ export class GameRoomManager {
         console.log(`🧹 Cleaning up abandoned room ${roomId}`);
         if (room.status === "playing") this.abandonMatch(room, "Ambos jugadores se desconectaron");
         room.status = "finished";
+        this.cancelAnswerTimer(roomId);
         this.rooms.delete(roomId);
       }
     }, 300_000); // 5 minutes
@@ -2176,6 +2189,7 @@ export class GameRoomManager {
       const room = this.rooms.get(roomId);
       if (!room || room.status !== "waiting" || room.player1SocketId) return;
       console.log(`🗑️ Waiting room ${roomId} deleted (creator left the lobby)`);
+      this.cancelAnswerTimer(roomId);
       this.rooms.delete(roomId);
       if (room.player2SocketId) this.socketToRoom.delete(room.player2SocketId);
       this.onRoomClosedCallback?.(roomId);
@@ -2213,10 +2227,12 @@ export class GameRoomManager {
       for (const [id, room] of this.rooms.entries()) {
         // Delete finished rooms older than 5 minutes
         if (room.status === "finished" && now - room.createdAt.getTime() > 300_000) {
+          this.cancelAnswerTimer(id);
           this.rooms.delete(id);
         }
         // Delete waiting rooms older than 30 minutes with no player 2
         if (room.status === "waiting" && !room.player2Id && now - room.createdAt.getTime() > 1_800_000) {
+          this.cancelAnswerTimer(id);
           this.rooms.delete(id);
           console.log(`🧹 Deleted stale waiting room ${id}`);
         }
@@ -2285,6 +2301,7 @@ export class GameRoomManager {
     }
 
     this.cancelWaitingRoomTimer(roomId);
+    this.cancelAnswerTimer(roomId);
     this.rooms.delete(roomId);
     if (room.player1SocketId) this.socketToRoom.delete(room.player1SocketId);
     if (room.player2SocketId) this.socketToRoom.delete(room.player2SocketId);
@@ -2300,11 +2317,13 @@ export class GameRoomManager {
     // A game in progress closed by an admin has no result: refund its bets
     if (room.status === "playing") this.abandonMatch(room, "Mesa cerrada por un administrador");
     room.status = "finished";
+    this.cancelAnswerTimer(roomId);
     // Clean up timers and socket mappings
     this.cancelSetupTimer(roomId);
     this.cancelWaitingRoomTimer(roomId);
     if (room.player1SocketId) this.socketToRoom.delete(room.player1SocketId);
     if (room.player2SocketId) this.socketToRoom.delete(room.player2SocketId);
+    this.cancelAnswerTimer(roomId);
     this.rooms.delete(roomId);
     return true;
   }
@@ -2351,6 +2370,7 @@ export class GameRoomManager {
 
     // Kick is valid — the requesting player wins
     room.status = "finished";
+    this.cancelAnswerTimer(roomId);
     const winner: "player1" | "player2" = isPlayer1 ? "player1" : "player2";
     console.log(`⏱️ Kick: ${winner} wins in room ${roomId} (opponent turn timed out after ${Math.floor(elapsed)}s)`);
 

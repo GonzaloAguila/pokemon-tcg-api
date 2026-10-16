@@ -428,6 +428,36 @@ describe.each(["p1", "p2"] as const)("Gym Heroes in multiplayer as %s", (actor) 
     expect(onAuto).not.toHaveBeenCalled();
   });
 
+  it("closing the room (admin close / kick / forfeit paths) leaves no answer timer behind", async () => {
+    const t = setupGame(actor, {
+      theirActive: inPlay(gh("Misty's Tentacruel", "tentacruel")),
+      theirBench: [inPlay(cardAs("Bulbasaur", "bulba"))],
+    });
+    const onAuto = vi.fn();
+    t.manager.setOnAutoAnswer(onAuto);
+    t.room.turnTimerDuration = 0.1;
+    expect((await t.act("attack", { attackIndex: 0 })).attackPaused).toBe(true);
+    const timers = (t.manager as unknown as { answerTimers: Map<string, unknown> }).answerTimers;
+    expect(timers.has(t.room.id)).toBe(true);
+    expect(t.manager.forceDeleteRoom(t.room.id)).toBe(true);
+    expect(timers.has(t.room.id)).toBe(false);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(onAuto).not.toHaveBeenCalled();
+  });
+
+  it("a surrender while an answer is pending cancels the answer timer", async () => {
+    const t = setupGame(actor, {
+      theirActive: inPlay(gh("Misty's Tentacruel", "tentacruel")),
+      theirBench: [inPlay(cardAs("Bulbasaur", "bulba"))],
+    });
+    t.room.turnTimerDuration = 60;
+    expect((await t.act("attack", { attackIndex: 0 })).attackPaused).toBe(true);
+    const timers = (t.manager as unknown as { answerTimers: Map<string, unknown> }).answerTimers;
+    expect(timers.has(t.room.id)).toBe(true);
+    expect((await t.act("surrender")).gameOver).toBe(true);
+    expect(timers.has(t.room.id)).toBe(false);
+  });
+
   it("an off-turn Bench trim that times out is answered with the engine's pick", async () => {
     const t = setupGame(actor, {
       myHand: [gh("Narrow Gym", "narrow-h")],
@@ -487,5 +517,8 @@ describe("Gym Heroes masking and coins (unit)", () => {
     expect(defaultSelection({ title: "Erika", description: "", options, maxSelections: 1 })).toEqual(["0"]);
     expect(defaultSelection({ title: "Huida", description: "", options, maxSelections: 1, minSelections: 0 })).toEqual([]);
     expect(defaultSelection({ title: "Challenge!", description: "", options, maxSelections: 1, defaultSelection: ["2"] } as never)).toEqual(["2"]);
+    // A disabled first option is skipped (it would make both fallbacks invalid)
+    const firstDisabled = [{ id: "0", label: "0", disabled: true }, ...options.slice(1)];
+    expect(defaultSelection({ title: "Erika", description: "", options: firstDisabled, maxSelections: 1 })).toEqual(["1"]);
   });
 });
