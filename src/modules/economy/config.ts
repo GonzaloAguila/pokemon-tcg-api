@@ -229,6 +229,14 @@ export const ECONOMY = {
     ],
   },
 
+  /** Tutorial and puzzle rewards (modules/progress). Client-reported completions: keep them small and once-only. */
+  progress: {
+    /** Once, after every tutorial lesson; the pack is a "choose your set" stored pack. */
+    tutorialReward: { coins: 300, packs: 1 },
+    /** Coins for the first solve of a puzzle, by tier. */
+    puzzleCoins: { easy: 50, medium: 100, hard: 200 },
+  },
+
   /** Table bets are off. The settlement code stays; flip `enabled` to bring them back. */
   tableBets: {
     enabled: false,

@@ -140,6 +140,7 @@ model User {
   tradesSent       Trade[]           @relation("TradeFrom")
   tradesReceived   Trade[]           @relation("TradeTo")
   cardLocks        CardLock[]
+  progress         UserProgress[]
 
   @@index([providerId, provider])
   @@map("users")
@@ -544,7 +545,7 @@ model UserPack {
   id           String    @id @default(uuid())
   userId       String
   packId       String? // fixed booster id, or null = the player picks any standard booster
-  source       String // "welcome" | "first_steps" | "login_calendar" | "weekly_mission" | "battle_pass"
+  source       String // "welcome" | "first_steps" | "login_calendar" | "weekly_mission" | "battle_pass" | "tutorial"
   createdAt    DateTime  @default(now())
   openedAt     DateTime?
   openedPackId String?
@@ -552,6 +553,20 @@ model UserPack {
 
   @@index([userId, openedAt])
   @@map("user_packs")
+}
+
+// Tutorial lessons and puzzles a user completed (one row per item; catalog in modules/progress).
+model UserProgress {
+  id          String   @id @default(uuid())
+  userId      String
+  track       String // "tutorial" | "puzzles"
+  itemId      String // lesson id ("basics", ...) or puzzle id ("puzzle-01", ...)
+  completedAt DateTime @default(now())
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, track, itemId])
+  @@index([userId, track])
+  @@map("user_progress")
 }
 
 // Daily / weekly mission progress (period = economy day or economy week).

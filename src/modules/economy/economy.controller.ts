@@ -74,6 +74,7 @@ function publicConfig() {
     packs: { price: cfg.packs.price, boosterIds: STANDARD_BOOSTER_IDS },
     rareCandy: cfg.rareCandy,
     tableBets: cfg.tableBets,
+    progress: cfg.progress,
   };
 }
 

@@ -28,6 +28,7 @@ import { matchesRouter } from "./modules/matches/index.js";
 import { economyRouter } from "./modules/economy/index.js";
 import { newsRouter } from "./modules/news/index.js";
 import { tradesRouter } from "./modules/trades/index.js";
+import { progressRouter } from "./modules/progress/index.js";
 import { loadCardValues } from "./modules/trades/card-values.js";
 import { refundUnsettledMatches } from "./modules/matches/matches.service.js";
 import { cleanupOldMessages } from "./modules/chat/chat.service.js";
@@ -82,6 +83,8 @@ app.use(
     "/api/users/me/deck-slots",
     "/api/matches",
     "/api/economy",
+    "/api/progress/tutorial",
+    "/api/progress/puzzles",
   ],
   economyRateLimiter,
 );
@@ -106,6 +109,7 @@ app.use("/api", matchesRouter);
 app.use("/api", economyRouter);
 app.use("/api", newsRouter);
 app.use("/api", tradesRouter);
+app.use("/api", progressRouter);
 // app.use("/api/matchmaking", matchmakingRouter);
 
 // Error handler

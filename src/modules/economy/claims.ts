@@ -32,4 +32,6 @@ export type ClaimKind =
   /** key: "<setId>:<percent>" or "all:100" */
   | "set_milestone"
   /** key: "<economy week>:<n>" (n = 1..maxCoinConversionsPerWeek) */
-  | "candy_coins";
+  | "candy_coins"
+  /** key: "v1" (tutorial reward, modules/progress) */
+  | "tutorial";
