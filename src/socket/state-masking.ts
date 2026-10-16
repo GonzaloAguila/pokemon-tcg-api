@@ -33,6 +33,7 @@
 import {
   arePrizesRevealed,
   isHandRevealed,
+  maskDuelFor,
   swapSides,
   type GameState as EngineState,
   type PendingAttackChoice,
@@ -197,6 +198,28 @@ function hideSetAsideHands(state: GameState): GameState {
   };
 }
 
+/**
+ * Misty's Duel: a player never sees the rival's pick of the current round before both are in
+ * (game-core maskDuelFor: the rival's pick null, `playerPicked` / `opponentPicked` flags kept);
+ * spectators see neither pick, only the flags. `lastRound` / `lastDuel` are public. Fails closed
+ * (both picks hidden) on a partial state.
+ */
+function maskDuel(state: GameState, viewer: Viewer): GameState {
+  const duel = state.pendingDuel as { playerPick: unknown; opponentPick: unknown } | undefined;
+  if (!duel) return state;
+  let masked: GameState;
+  try {
+    masked = maskDuelFor(state as unknown as EngineState, "player") as unknown as GameState;
+  } catch {
+    masked = {
+      ...state,
+      pendingDuel: { ...duel, playerPick: null, opponentPick: null, playerPicked: duel.playerPick !== null, opponentPicked: duel.opponentPick !== null },
+    };
+  }
+  if (viewer !== "spectator") return masked;
+  return { ...masked, pendingDuel: { ...(masked.pendingDuel as object), playerPick: null, opponentPick: null } };
+}
+
 /** Drop pending choices the viewer doesn't own (not their turn, or a spectator). */
 function stripForeignPending(state: GameState, viewer: Viewer): GameState {
   const owns = viewer !== "spectator" && state.isPlayerTurn === true;
@@ -306,7 +329,7 @@ export function maskGameStateForPlayer(
 ): GameState {
   const view = forPlayer === "spectator" ? state : getGameStateForPlayer(state, forPlayer);
   const sides: HiddenZoneSide[] = forPlayer === "spectator" ? ["player", "opponent"] : ["opponent"];
-  let masked = stripForeignPending(hideSetAsideHands(hideZones(view, sides, revealedZones(view, forPlayer))), forPlayer);
+  let masked = stripForeignPending(maskDuel(hideSetAsideHands(hideZones(view, sides, revealedZones(view, forPlayer))), forPlayer), forPlayer);
   masked = maskAttackChoice(masked, forPlayer);
   masked = maskPowerChoice(masked, forPlayer);
   return maskTrainerChoice(masked, forPlayer);

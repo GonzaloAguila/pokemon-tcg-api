@@ -257,6 +257,8 @@ export const gameActionSchema = z.discriminatedUnion("type", [
   // Narrow Gym: the Benched Pokémon the player at the head of state.pendingBenchTrim returns to
   // the hand (game-core resolveBenchTrim checks the count and that they are theirs)
   action("benchTrim", z.object({ discardIds: idList(BENCH_SIZE) })),
+  // Misty's Duel: this player's pick for the current round (either player, off-turn included)
+  action("duelPick", z.object({ choice: z.enum(["rock", "paper", "scissors"]) })),
   action("surrender", noPayload),
 ]);
 

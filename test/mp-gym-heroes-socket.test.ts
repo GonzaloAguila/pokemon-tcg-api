@@ -117,3 +117,70 @@ describe("the answer clock over sockets", () => {
     expect(room.answerClock).toBeUndefined();
   });
 });
+
+describe("Misty's Duel over sockets", () => {
+  it("no event carries a pick before both are in; the result (lastDuel) reaches both", async () => {
+    const p1 = await createUser({}, { stats: true });
+    const p2 = await createUser({}, { stats: true });
+    const s1 = await server.connect(tokenFor(p1));
+    const s2 = await server.connect(tokenFor(p2));
+    s1.emit("createRoom", { deckId: "brushfire", prizeCount: 6, betAmount: 0, friendly: true });
+    const { roomId } = await nextEvent<{ roomId: string }>(s1, "roomCreated");
+    const started = nextEvent(s2, "gameStart");
+    s2.emit("joinRoom", { roomId, deckId: "overgrowth" });
+    await started;
+
+    const room = roomManager.getRoom(roomId)!;
+    const opening = room.gameState!;
+    room.gameState = {
+      ...opening,
+      gamePhase: GamePhase.Playing,
+      gameStarted: true,
+      turnNumber: 3,
+      isPlayerTurn: true,
+      startingPlayer: "player",
+      playerReady: true,
+      opponentReady: true,
+      playerHand: [card("Misty's Duel", "Gym Heroes", "p1-duel")],
+      opponentHand: [],
+      playerActivePokemon: inPlay(card("Pikachu", "Base Set", "p1-pikachu")),
+      playerBench: [],
+      opponentActivePokemon: inPlay(card("Bulbasaur", "Base Set", "p2-bulba")),
+      opponentBench: [],
+      playerPrizes: opening.playerDeck.slice(0, 6),
+      opponentPrizes: opening.opponentDeck.slice(0, 6),
+      playerDeck: opening.playerDeck.slice(6, 30),
+      opponentDeck: opening.opponentDeck.slice(6, 30),
+    } as GameState;
+
+    // Everything player 2 receives from now on
+    const seenBy2: unknown[] = [];
+    s2.onAny((event: string, ...args: unknown[]) => seenBy2.push({ event, args }));
+    const act = async (socket: ClientSocket, type: string, payload: unknown) => {
+      const done = nextEvent<any>(socket, "actionResult");
+      socket.emit("action", { roomId, action: { type, payload } });
+      return done;
+    };
+
+    expect(await act(s1, "playTrainer", { cardId: "p1-duel", selections: [] })).toEqual({ success: true });
+    expect(await act(s1, "duelPick", { choice: "scissors" })).toEqual({ success: true });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const beforeResolution = JSON.stringify(seenBy2);
+    // The pick id never; its Spanish label never in the log (the card's own text says "piedra, papel o tijera")
+    expect(beforeResolution).not.toMatch(/scissors/);
+    const logs = seenBy2.flatMap((e: any) => (e.event === "gameState" ? e.args[0].gameState.events : [])).map((ev: any) => ev.message);
+    // Only "Misty's Duel: piedra, papel o tijera" (the duel starts); no "<pick> contra <pick>" yet
+    expect(logs.filter((m: string) => / contra |eligió/i.test(m))).toEqual([]);
+    const lastState = (seenBy2.filter((e: any) => e.event === "gameState").at(-1) as any).args[0].gameState;
+    expect(lastState.pendingDuel).toMatchObject({ opponentPick: null, opponentPicked: true, playerPicked: false });
+    expect(lastState.clock).toMatchObject({ kind: "answer", userId: p2.id });
+
+    expect(await act(s2, "duelPick", { choice: "paper" })).toEqual({ success: true });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const final = (seenBy2.filter((e: any) => e.event === "gameState").at(-1) as any).args[0].gameState;
+    expect(final.pendingDuel).toBeUndefined();
+    // Scissors beats paper: player 1 won (player 2's perspective: "opponent")
+    expect(final.lastDuel).toEqual({ picks: { player: "paper", opponent: "scissors" }, winner: "opponent" });
+    expect(final.clock).toMatchObject({ kind: "turn", userId: p1.id });
+  });
+});

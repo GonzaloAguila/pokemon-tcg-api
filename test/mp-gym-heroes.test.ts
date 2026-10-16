@@ -77,14 +77,14 @@ const isBasic = (c: GameCard) => isPokemonCard(c) && c.stage === "basic";
  * A PLAYING game where it is `actor`'s turn, built in the actor's perspective. Coins: a script
  * (throws when it runs out: no unexpected flip) or a function.
  */
-function setupGame(actor: Side, board: Board = {}, coins: Coin[] | (() => Coin) = []) {
+function setupGame(actor: Side, board: Board = {}, coins: Coin[] | (() => Coin) = [], random?: () => number) {
   const queue = Array.isArray(coins) ? [...coins] : [];
   const manager = new GameRoomManager(() => {
     if (typeof coins === "function") return coins();
     const next = queue.shift();
     if (!next) throw new Error("unexpected coin flip");
     return next;
-  });
+  }, random ? { random } : {});
   const shuffled = initializeMultiplayerGame(getDeckById("zap")!, getDeckById("overgrowth")!);
   const basicsFirst = (cards: GameCard[]) => [...cards].sort((a, b) => Number(isBasic(b)) - Number(isBasic(a)));
   const base = { ...shuffled, playerDeck: basicsFirst(shuffled.playerDeck), opponentDeck: basicsFirst(shuffled.opponentDeck) };
@@ -468,6 +468,153 @@ describe.each(["p1", "p2"] as const)("Gym Heroes in multiplayer as %s", (actor) 
     expect(t.mine().opponentBench).toHaveLength(4);
     expect(t.mine().pendingBenchTrim ?? []).toEqual([]);
     expect(t.mine().isPlayerTurn).toBe(true);
+  });
+});
+
+describe.each(["p1", "p2"] as const)("Gym Heroes Trainers the other player answers, as %s", (actor) => {
+  const opp = other(actor);
+  const RPS_WORDS = /piedra|papel|tijera/i;
+
+  // ── Tickling Machine ─────────────────────────────────────────────────────────────
+
+  it("Tickling Machine heads: the opponent's hand is set aside, face down for everyone (counts only)", async () => {
+    const theirHand = [cardAs("Potion", "their-potion"), cardAs("Bulbasaur", "their-bulba"), cardAs("Grass Energy", "their-grass")];
+    const t = setupGame(actor, { myHand: [gh("Tickling Machine", "tickle-h")], theirHand }, ["heads"]);
+    expect(t.manager.requestCoinFlip(t.room.id, SOCKET[actor], { purpose: "trainer", cardId: "tickle-h" })).toMatchObject({ success: true, results: ["heads"] });
+    const res = await t.act("playTrainer", { cardId: "tickle-h", selections: [] });
+    expect(res.success, res.error).toBe(true);
+    expect(t.mine().opponentHand).toEqual([]);
+    expect(t.mine().setAsideHands?.[0]?.cards.map((c) => c.id).sort()).toEqual(["their-bulba", "their-grass", "their-potion"]);
+    for (const viewer of [actor, opp, "spectator"] as const) {
+      const aside = t.masked(viewer).setAsideHands as { side: string; cards: { id: string; hidden?: boolean; name?: string }[] }[];
+      expect(aside).toHaveLength(1);
+      expect(aside[0].cards).toHaveLength(3);
+      expect(aside[0].cards.every((c) => c.hidden === true && c.name === undefined && !c.id.startsWith("their-"))).toBe(true);
+    }
+    // Relative sides: the actor sees the opponent's hand aside, the opponent its own
+    expect(t.masked(actor).setAsideHands[0].side).toBe("opponent");
+    expect(t.masked(opp).setAsideHands[0].side).toBe("player");
+    expect(t.mine().isPlayerTurn).toBe(true);
+  });
+
+  it("Tickling Machine tails: the turn ends exactly once", async () => {
+    const t = setupGame(actor, { myHand: [gh("Tickling Machine", "tickle-h")] }, ["tails"]);
+    expect(t.manager.requestCoinFlip(t.room.id, SOCKET[actor], { purpose: "trainer", cardId: "tickle-h" })).toMatchObject({ results: ["tails"] });
+    const res = await t.act("playTrainer", { cardId: "tickle-h", selections: [] });
+    expect(res.success, res.error).toBe(true);
+    const after = t.mine();
+    expect(after.turnNumber).toBe(6);
+    expect(after.isPlayerTurn).toBe(false);
+    expect(after.setAsideHands ?? []).toEqual([]);
+    expect(after.events.filter((e) => /^Fin del turno de Jugador/.test(e.message))).toHaveLength(1);
+    expect((await t.actAs(opp, "endTurn")).success).toBe(true);
+  });
+
+  // ── Erika, Lt. Surge's Treaty, Blaine's Quiz #1 (startTrainer / answerTrainerChoice) ──
+
+  it("Erika: the opponent answers off-turn on its own clock; control returns to the player", async () => {
+    const t = setupGame(actor, { myHand: [gh("Erika", "erika-h")], theirHand: [] });
+    const res = await t.act("startTrainer", { cardId: "erika-h", selections: [["1"]] });
+    expect(res.success, res.error).toBe(true);
+    expect(t.masked(opp).pendingTrainerChoice).toMatchObject({ chooser: "opponent" });
+    expect(t.masked(opp).pendingTrainerChoice.step.options.map((o: { id: string }) => o.id)).toEqual(["0", "1", "2", "3"]);
+    expect(t.masked(actor).pendingTrainerChoice).toMatchObject({ waiting: true });
+    expect(t.manager.getClock(t.room)).toMatchObject({ kind: "answer", userId: USER[opp], pausedUserId: USER[actor] });
+    await expectRejected(t, t.act("answerTrainerChoice", { selection: ["2"] }), /No te corresponde elegir/);
+
+    expect((await t.actAs(opp, "answerTrainerChoice", { selection: ["2"] })).success).toBe(true);
+    const after = t.mine();
+    expect(after.pendingTrainerChoice).toBeUndefined();
+    expect(after.playerHand).toHaveLength(1);
+    expect(after.opponentHand).toHaveLength(2);
+    expect(after.isPlayerTurn).toBe(true);
+    expect(t.manager.getClock(t.room)).toMatchObject({ kind: "turn", userId: USER[actor] });
+  });
+
+  it("Erika unanswered: when the opponent's clock runs out it draws 0 (default \"0\")", async () => {
+    const t = setupGame(actor, { myHand: [gh("Erika", "erika-h")], theirHand: [] });
+    expect((await t.act("startTrainer", { cardId: "erika-h", selections: [["3"]] })).success).toBe(true);
+    expect(t.manager.requestKick(t.room.id, SOCKET[actor])).toMatchObject({ success: false });
+    expect((await t.manager.autoAnswerTimedOut(t.room.id))?.success).toBe(true);
+    expect(t.mine().playerHand).toHaveLength(3);
+    expect(t.mine().opponentHand).toHaveLength(0);
+    expect(t.room.answerClock).toBeUndefined();
+  });
+
+  it("Lt. Surge's Treaty: the opponent chooses \"draw\"", async () => {
+    const t = setupGame(actor, { myHand: [gh("Lt. Surge's Treaty", "treaty-h")] });
+    expect((await t.act("startTrainer", { cardId: "treaty-h", selections: [] })).success).toBe(true);
+    expect(t.masked(opp).pendingTrainerChoice.step.options.map((o: { id: string }) => o.id)).toEqual(["prizes", "draw"]);
+    const res = await t.actAs(opp, "answerTrainerChoice", { selection: ["draw"] });
+    expect(res.success, res.error).toBe(true);
+    expect(t.mine().pendingTrainerChoice).toBeUndefined();
+    expect(t.room.pendingTrainer).toBeUndefined();
+    expect(t.mine().playerDiscard.map((c) => c.id)).toContain("treaty-h");
+    expect(t.mine().isPlayerTurn).toBe(true);
+  });
+
+  it("Blaine's Quiz #1: the player picks the Pokémon, the opponent guesses its length off-turn", async () => {
+    const t = setupGame(actor, { myHand: [gh("Blaine's Quiz #1", "quiz-h"), cardAs("Charmander", "quiz-charmander")] });
+    await expectRejected(t, t.act("playTrainer", { cardId: "quiz-h", selections: [["quiz-charmander"]] }), /startTrainer/);
+    expect((await t.act("startTrainer", { cardId: "quiz-h", selections: [["quiz-charmander"]] })).success).toBe(true);
+    const step = t.masked(opp).pendingTrainerChoice.step;
+    expect(step.options).toHaveLength(4);
+    const res = await t.actAs(opp, "answerTrainerChoice", { selection: [step.options[0].id] });
+    expect(res.success, res.error).toBe(true);
+    expect(t.room.pendingTrainer).toBeUndefined();
+    expect(t.mine().playerDiscard.map((c) => c.id)).toContain("quiz-h");
+  });
+
+  // ── Misty's Duel ─────────────────────────────────────────────────────────────────
+
+  it("Misty's Duel: both pick off-turn; a pick is never shown before both are in; the winner redraws 5", async () => {
+    const t = setupGame(actor, { myHand: [gh("Misty's Duel", "duel-h"), cardAs("Potion", "p1"), cardAs("Potion", "p2")] });
+    expect((await t.act("playTrainer", { cardId: "duel-h", selections: [] })).success).toBe(true);
+    expect(t.mine().pendingDuel).toMatchObject({ round: 1, playerPick: null, opponentPick: null });
+    expect(t.room.answerClock?.side).toBe(VIEWER[opp]); // both owe a pick: the other player's clock shows
+    await expectRejected(t, t.act("endTurn"), /Primero hay que terminar el duelo/);
+    expect((await t.manager.executeAction(t.room.id, "spectator-socket", { type: "duelPick", payload: { choice: "rock" } })).success).toBe(false);
+
+    const eventsBefore = t.room.gameState!.events.length;
+    const first = await t.act("duelPick", { choice: "paper" });
+    expect(first.success, first.error).toBe(true);
+    // (the raw result stays on the server; clients only get masked states, see the socket test)
+    expect(first.coinFlipInfo).toBeUndefined();
+    expect(t.room.gameState!.events.slice(eventsBefore).some((e) => RPS_WORDS.test(e.message))).toBe(false);
+    expect(t.masked(actor).pendingDuel).toMatchObject({ playerPick: "paper", playerPicked: true, opponentPicked: false });
+    expect(t.masked(opp).pendingDuel).toMatchObject({ opponentPick: null, opponentPicked: true, playerPicked: false });
+    expect(t.masked("spectator").pendingDuel).toMatchObject({ playerPick: null, opponentPick: null });
+    expect(JSON.stringify(t.masked(opp))).not.toMatch(/"paper"/);
+    expect(JSON.stringify(t.masked("spectator"))).not.toMatch(/"paper"/);
+    await expectRejected(t, t.act("duelPick", { choice: "rock" }), /./); // one pick per round
+    expect(t.room.answerClock?.side).toBe(VIEWER[opp]);
+
+    const second = await t.actAs(opp, "duelPick", { choice: "rock" });
+    expect(second.success, second.error).toBe(true);
+    const after = t.mine();
+    expect(after.pendingDuel).toBeUndefined();
+    expect(after.playerHand).toHaveLength(5); // paper beats rock: new hand of 5
+    expect(t.masked(opp).lastDuel).toEqual({ picks: { player: "rock", opponent: "paper" }, winner: "opponent" });
+    expect(t.masked(actor).lastDuel).toEqual({ picks: { player: "paper", opponent: "rock" }, winner: "player" });
+    expect(t.room.answerClock).toBeUndefined();
+    expect(after.isPlayerTurn).toBe(true);
+    expect((await t.act("endTurn")).success).toBe(true);
+  });
+
+  it("Misty's Duel: a tie replays the round; timed-out picks are the server's (never a kick)", async () => {
+    const t = setupGame(actor, { myHand: [gh("Misty's Duel", "duel-h")] }, [], () => 0); // server picks: rock
+    expect((await t.act("playTrainer", { cardId: "duel-h", selections: [] })).success).toBe(true);
+    expect((await t.actAs(opp, "duelPick", { choice: "rock" })).success).toBe(true);
+    // Only the player whose turn it is still owes a pick: still the answer clock, no kick
+    expect(t.room.answerClock?.side).toBe(VIEWER[actor]);
+    expect(t.manager.getClock(t.room)).toMatchObject({ kind: "answer", userId: USER[actor] });
+    t.room.turnStartedAt = Date.now() - 200_000;
+    expect(t.manager.requestKick(t.room.id, SOCKET[opp])).toMatchObject({ success: false });
+
+    expect((await t.manager.autoAnswerTimedOut(t.room.id))?.success).toBe(true);
+    const duel = t.mine().pendingDuel!;
+    expect(duel).toMatchObject({ round: 2, playerPick: null, opponentPick: null, lastRound: { playerPick: "rock", opponentPick: "rock" } });
+    expect(t.room.answerClock?.side).toBe(VIEWER[opp]);
   });
 });
 

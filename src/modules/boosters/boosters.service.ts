@@ -194,8 +194,8 @@ export function getPackById(packId: string): BoosterPackType | undefined {
  * built) never come out of a booster.
  */
 const UNSUPPORTED = new Set<string>(UNSUPPORTED_TRAINERS);
-export function isOpenableCard(card: Card): boolean {
-  return !(card.kind === "trainer" && UNSUPPORTED.has(card.name));
+export function isOpenableCard(card: Card, unsupported: ReadonlySet<string> = UNSUPPORTED): boolean {
+  return !(card.kind === "trainer" && unsupported.has(card.name));
 }
 
 const ALL_TRAINERS: Card[] = ALL_CARDS.filter((card) => card.kind === "trainer" && isOpenableCard(card));

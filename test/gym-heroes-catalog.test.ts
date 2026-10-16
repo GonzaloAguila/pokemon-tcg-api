@@ -76,8 +76,12 @@ describe("Gym Heroes: catalog, packs and economy", () => {
   });
 
   it("Trainers the engine doesn't support yet (UNSUPPORTED_TRAINERS) never come out of a booster", () => {
+    // The rule, with a made-up list (the engine's may be empty once a set is complete)
+    const recall = ALL_CARDS.find((c) => c.id === "gym-heroes-116-recall")!;
+    expect(isOpenableCard(recall, new Set(["Recall"]))).toBe(false);
+    expect(isOpenableCard(recall, new Set())).toBe(true);
+    expect(isOpenableCard(ALL_CARDS.find((c) => c.name === "Brock's Rhydon")!, new Set(["Brock's Rhydon"]))).toBe(true); // Trainers only
     const unsupported = ALL_CARDS.filter((c) => c.kind === "trainer" && UNSUPPORTED_TRAINERS.includes(c.name));
-    expect(unsupported.length).toBeGreaterThan(0); // Gym Heroes cards still being built
     expect(unsupported.every((c) => !isOpenableCard(c))).toBe(true);
     for (const packId of [TRAINER_BOOSTER_ID, ...STANDARD_BOOSTER_IDS]) {
       const odds = getPackOdds(packId)!;

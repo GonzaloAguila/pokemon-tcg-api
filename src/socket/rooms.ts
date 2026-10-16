@@ -84,6 +84,10 @@ import {
   // Answer clock: default answers when the off-turn answerer runs out of time
   minSelectionsOf,
   chooseBenchTrim,
+  // Misty's Duel (Rock-Paper-Scissors)
+  submitDuelPick,
+  aiDuelPick,
+  type RpsChoice,
 } from "@gonzaloaguila/game-core";
 import { parseGameAction } from "./schemas.js";
 
@@ -192,6 +196,9 @@ export function awaitedSide(state: GameState | null | undefined): PlayerKey | nu
   const otherSide: PlayerKey = turnSide === "player1" ? "player2" : "player1";
   const trainerChoice = pendingTrainerChoiceOf(state);
   if (trainerChoice) return trainerChoice.chooser === "opponent" ? otherSide : turnSide;
+  // Misty's Duel: whoever hasn't picked (both: the player whose turn it isn't, see duelPickers)
+  const pickers = duelPickers(state);
+  if (pickers.length > 0) return pickers.includes(otherSide) ? otherSide : pickers[0];
   // Narrow Gym: whoever must trim their Bench first (state in player 1's perspective)
   const benchTrim = state.pendingBenchTrim?.[0];
   if (benchTrim) return benchTrim.side === "player" ? "player1" : "player2";
@@ -217,6 +224,10 @@ export function offTurnAnswerer(state: GameState | null | undefined): PlayerKey 
   const otherSide: PlayerKey = turnSide === "player1" ? "player2" : "player1";
   const trainerChoice = pendingTrainerChoiceOf(state);
   if (trainerChoice) return trainerChoice.chooser === "opponent" ? otherSide : null;
+  // Misty's Duel: always on the answer clock (never a kick), even when only the player whose turn
+  // it is still has to pick; with both missing the clock shows the other player's
+  const pickers = duelPickers(state);
+  if (pickers.length > 0) return pickers.includes(otherSide) ? otherSide : pickers[0];
   const benchTrim = state.pendingBenchTrim?.[0];
   if (benchTrim) {
     const side: PlayerKey = benchTrim.side === "player" ? "player1" : "player2";
@@ -224,6 +235,19 @@ export function offTurnAnswerer(state: GameState | null | undefined): PlayerKey 
   }
   if (state.pendingAttackChoice) return state.pendingAttackChoice.step.chooser === "opponent" ? otherSide : null;
   return null;
+}
+
+/**
+ * Misty's Duel (state.pendingDuel, player 1's perspective): the players who haven't picked this
+ * round, the player whose turn it is first. Empty when no duel is pending.
+ */
+export function duelPickers(state: GameState | null | undefined): PlayerKey[] {
+  const duel = state?.pendingDuel;
+  if (!duel) return [];
+  const missing: PlayerKey[] = [];
+  if (duel.playerPick === null) missing.push("player1");
+  if (duel.opponentPick === null) missing.push("player2");
+  return state!.isPlayerTurn ? missing : missing.reverse();
 }
 
 /**
@@ -641,6 +665,13 @@ type AutoAnswerCallback = (roomId: string, side: PlayerKey, action: { type: stri
 export interface GameRoomManagerOptions {
   /** How long a waiting room survives its creator's disconnect (default WAITING_ROOM_GRACE_MS). */
   waitingRoomGraceMs?: number;
+  /** Where the server's random picks come from (a timed-out Misty's Duel pick); default CSPRNG. */
+  random?: () => number;
+}
+
+/** A uniform number in [0, 1) from the CSPRNG. */
+function serverRandom(): number {
+  return randomInt(0, 2 ** 32) / 2 ** 32;
 }
 
 export class GameRoomManager {
@@ -661,7 +692,10 @@ export class GameRoomManager {
   /** @param flipCoin - where every coin of this manager's games comes from (tests pass a scripted one) */
   constructor(private readonly flipCoin: CoinSource = serverCoin, options: GameRoomManagerOptions = {}) {
     this.waitingRoomGraceMs = options.waitingRoomGraceMs ?? WAITING_ROOM_GRACE_MS;
+    this.random = options.random ?? serverRandom;
   }
+
+  private readonly random: () => number;
 
   /**
    * Set the callback for when a player forfeits due to disconnect timeout.
@@ -1206,6 +1240,13 @@ export class GameRoomManager {
     } else if (pendingTrainerChoice && action.type !== "surrender") {
       return { success: false, error: "Primero hay que resolver la carta de Entrenador" };
     }
+    // Misty's Duel: both players pick (off-turn included; spectators aren't players); nothing
+    // else happens until the duel is decided. game-core rejects a second pick in the same round.
+    if (action.type === "duelPick") {
+      if (!room.gameState.pendingDuel) return { success: false, error: "No hay ningún duelo en curso" };
+    } else if (room.gameState.pendingDuel && !["surrender", "promote", "takePrize"].includes(action.type)) {
+      return { success: false, error: "Primero hay que terminar el duelo" };
+    }
     // Narrow Gym: each player over the Bench limit returns Benched Pokémon, one after the other
     // (pendingBenchTrim queue, sides in player 1's perspective). Only the player at the head of
     // the queue answers (off-turn included); game-core blocks everything else until it is empty.
@@ -1234,7 +1275,7 @@ export class GameRoomManager {
     } else if (room.gameState.pendingPowerChoice && !["surrender", "promote", "takePrize", "benchTrim"].includes(action.type)) {
       return { success: false, error: "Primero hay que resolver el Poder Pokémon" };
     }
-    const turnFreeActions = ["ready", "mulligan", "playerReady", "takePrize", "promote", "surrender", "resolveAttackChoice", "answerTrainerChoice", "benchTrim"];
+    const turnFreeActions = ["ready", "mulligan", "playerReady", "takePrize", "promote", "surrender", "resolveAttackChoice", "answerTrainerChoice", "benchTrim", "duelPick"];
     const setupActions = ["playBasicToActive", "playBasicToBench"];
     const isSetupPhase = room.gameState.gamePhase === "MULLIGAN" || room.gameState.gamePhase === "SETUP";
     const isMyTurn = isPlayer1 ? room.gameState.isPlayerTurn : !room.gameState.isPlayerTurn;
@@ -1629,7 +1670,9 @@ export class GameRoomManager {
           const preCoins = this.effectCoins(room, coinKey, requirement);
           // A client can't answer for the opponent (Challenge!) or pick from cards it can't see
           // (Rocket's Sneak Attack): those cards go through startTrainer
-          walkClientSteps((answered) => getTrainerSteps(actorView, cardId, answered, preCoins.length > 0 ? preCoins : undefined), selections);
+          const pendingStep = walkClientSteps((answered) => getTrainerSteps(actorView, cardId, answered, preCoins.length > 0 ? preCoins : undefined), selections);
+          // The next question is the other player's (Erika, Treaty, Blaine's Quiz) or needs hidden cards
+          if (pendingStep && isServerStep(pendingStep)) throw new IllegalActionError("Esta elección la pide el servidor: juega la carta con startTrainer");
           const postCoins = this.trainerCoinsAfterSteps(actorView, cardId, selections, preCoins);
           newState = executeForPlayer((state) =>
             playTrainerCard(state, cardId, selections, { coinResults: preCoins.length > 0 ? preCoins : postCoins, skipEndTurn: true }));
@@ -1739,6 +1782,15 @@ export class GameRoomManager {
 
         // ── Narrow Gym: the player at the head of pendingBenchTrim (checked above, off-turn
         // included) returns that many Benched Pokémon to the hand (game-core resolveBenchTrim) ──
+        // ── Misty's Duel: this player's Rock-Paper-Scissors pick (game-core submitDuelPick), on
+        // their own view so the winner's redraw is logged for the right side. The pick is never
+        // in any event or response before the round resolves (masking hides it: maskDuelFor).
+        case "duelPick": {
+          const choice = action.payload.choice as RpsChoice;
+          newState = executeForPlayer((state) => submitDuelPick(state, "player", choice));
+          break;
+        }
+
         case "benchTrim": {
           const { discardIds } = action.payload;
           newState = executeForPlayer((state) => resolveBenchTrim(state, discardIds));
@@ -1920,6 +1972,23 @@ export class GameRoomManager {
     if (!room?.gameState || room.status !== "playing" || !room.answerClock) return null;
     const side = offTurnAnswerer(room.gameState);
     if (!side || side !== room.answerClock.side) return null;
+    // Misty's Duel: the server picks (aiDuelPick, server randomness) for every side still missing
+    const pickers = duelPickers(room.gameState);
+    if (pickers.length > 0) {
+      let last: ActionResult | null = null;
+      for (const picker of pickers) {
+        const pickAction = { type: "duelPick", payload: { choice: aiDuelPick(this.random) } };
+        last = await this.runAction(roomId, { side: picker }, pickAction);
+        if (!last.success) {
+          if (room.answerClock) room.answerClock.autoAnswerFailed = true;
+          console.error(`[Room ${roomId}] Default duel pick for ${picker} failed: ${last.error}`);
+          return last;
+        }
+        console.log(`[Room ${roomId}] ${picker} ran out of time: Misty's Duel pick by default`);
+        this.onAutoAnswerCallback?.(roomId, picker, { type: pickAction.type }, last);
+      }
+      return last;
+    }
     const action = defaultAnswerAction(room.gameState, side);
     const result: ActionResult = action
       ? await this.runAction(roomId, { side }, action)
