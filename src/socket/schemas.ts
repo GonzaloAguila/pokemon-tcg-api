@@ -66,8 +66,8 @@ export type ParseResult<T> = { ok: true; data: T } | { ok: false; error: string 
 
 function describeIssue(error: z.ZodError): string {
   const issue = error.issues[0];
-  // Refinements that explain themselves in Spanish (e.g. draft prizes) reach the player as is
-  if (issue?.code === z.ZodIssueCode.custom && issue.message) return issue.message;
+  // Refinements written for the player (params.forPlayer: draft prizes) reach them as is
+  if (issue?.code === z.ZodIssueCode.custom && issue.params?.forPlayer) return issue.message;
   const path = issue?.path.length ? issue.path.join(".") : "payload";
   return `Datos inválidos (${path})`;
 }
@@ -153,7 +153,7 @@ const draftConfig = z.object({
   rewards: draftRewardsSchema.optional(),
 }).superRefine((config, ctx) => {
   const error = config.rewards && draftRewardsError(config.rewards, config.maxPlayers ?? 8);
-  if (error) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["rewards"], message: error });
+  if (error) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["rewards"], message: error, params: { forPlayer: true } });
 });
 
 export const draftSchemas = {

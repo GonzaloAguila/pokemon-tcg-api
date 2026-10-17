@@ -57,7 +57,7 @@ const tier = z
       .optional(),
   })
   .superRefine((t, ctx) => {
-    const issue = (message: string) => ctx.addIssue({ code: z.ZodIssueCode.custom, message });
+    const issue = (message: string) => ctx.addIssue({ code: z.ZodIssueCode.custom, message, params: { forPlayer: true } });
     if (!(t.coins ?? 0) && !t.packs?.length && !t.items?.length) issue("Hay un premio vacío: agrégale monedas, sobres o cosméticos");
     const setIds = (t.packs ?? []).map((p) => p.setId);
     if (new Set(setIds).size !== setIds.length) issue("Un premio repite la expansión de un sobre");
@@ -74,7 +74,7 @@ export const draftRewardsSchema = z
   .max(MAX_REWARD_TIERS)
   .superRefine((tiers, ctx) => {
     const error = draftRewardsError(tiers, MAX_PLACE);
-    if (error) ctx.addIssue({ code: z.ZodIssueCode.custom, message: error });
+    if (error) ctx.addIssue({ code: z.ZodIssueCode.custom, message: error, params: { forPlayer: true } });
   });
 
 /** The places a target covers (empty for "all"). */
