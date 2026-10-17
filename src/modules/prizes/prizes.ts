@@ -128,10 +128,21 @@ export function resolvePlaymat(): ResolvedPrize {
   return { type: "playmat", playmatId: item.itemId, playmatName: item.name, playmatImageUrl: item.imageUrl };
 }
 
-/** A random battle emote (never a starter: everyone owns those). */
-export function resolveEmote(): ResolvedPrize {
-  const emote = pick(COLLECTIBLE_EMOTES);
+/**
+ * A random battle emote the player doesn't own yet (never a starter: everyone owns those), or
+ * null when they own them all: a prize never names an emote that adds nothing.
+ */
+export function resolveEmote(owned: ReadonlySet<string> = new Set()): (ResolvedPrize & { type: "emote" }) | null {
+  const pool = COLLECTIBLE_EMOTES.filter((e) => !owned.has(e.id));
+  if (pool.length === 0) return null;
+  const emote = pick(pool);
   return { type: "emote", emoteId: emote.id, emoteName: emote.name, emoteImageUrl: emoteImageUrl(emote.id), emoteRarity: emote.rarity };
+}
+
+/** A jackpot's emote line: [an unowned emote], or [] when the player owns every emote. */
+export function jackpotEmote(owned: ReadonlySet<string>): ResolvedPrize[] {
+  const emote = resolveEmote(owned);
+  return emote ? [emote] : [];
 }
 
 export function resolveRandomOverlay(): ResolvedPrize {

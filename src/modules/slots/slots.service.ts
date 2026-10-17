@@ -11,6 +11,7 @@
 import { prisma } from "../../lib/prisma.js";
 import * as usersService from "../users/users.service.js";
 import type { PackOpeningResult } from "../boosters/boosters.types.js";
+import { getOwnedEmoteIds } from "../emotes/emotes.service.js";
 import {
   CardRarityPool,
   grantPrize,
@@ -21,7 +22,7 @@ import {
   resolveCardBack,
   resolveCoins,
   resolveCollectibleCoin,
-  resolveEmote,
+  jackpotEmote,
   resolvePlaymat,
   resolveRandomOverlay,
   type ResolvedPrize,
@@ -102,7 +103,8 @@ function buildGrid(pattern: SlotPattern): { grid: SlotSymbol[]; matchedCells: nu
   return { grid, matchedCells: cells, matchedSymbol: mainSymbol };
 }
 
-function resolvePatternPrize(pattern: SlotPattern, matchedSymbol: SlotSymbol): ResolvedPrize {
+/** `ownedEmotes`: the player's emotes (read only for the mega jackpot), so its emote is a new one. */
+export function resolvePatternPrize(pattern: SlotPattern, matchedSymbol: SlotSymbol, ownedEmotes: ReadonlySet<string> = new Set()): ResolvedPrize {
   switch (pattern) {
     case "full_grid":
       // MEGA JACKPOT: one of each prize type
@@ -114,7 +116,7 @@ function resolvePatternPrize(pattern: SlotPattern, matchedSymbol: SlotSymbol): R
           resolveCardBack(),
           resolveCollectibleCoin(),
           resolveRandomOverlay(),
-          resolveEmote(),
+          ...jackpotEmote(ownedEmotes),
           { type: "free_pack" },
         ],
       };
@@ -158,7 +160,8 @@ export interface SlotsSpinResult {
 export async function spinSlots(userId: string): Promise<SlotsSpinResult> {
   const pattern = pickWeighted(PATTERN_WEIGHTS);
   const { grid, matchedCells, matchedSymbol } = buildGrid(pattern);
-  const prize = resolvePatternPrize(pattern, matchedSymbol);
+  const ownedEmotes = pattern === "full_grid" ? await getOwnedEmoteIds(userId) : new Set<string>();
+  const prize = resolvePatternPrize(pattern, matchedSymbol, ownedEmotes);
 
   return prisma.$transaction(async (tx) => {
     await usersService.spendCoins(userId, SLOTS_SPIN_COST, "slot_spin", "Tirada de tragamonedas", tx);

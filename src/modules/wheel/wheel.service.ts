@@ -10,10 +10,11 @@ import {
   resolveCardBack,
   resolveCoins,
   resolveCollectibleCoin,
-  resolveEmote,
+  jackpotEmote,
   resolveRandomOverlay,
   type ResolvedPrize,
 } from "../prizes/prizes.js";
+import { getOwnedEmoteIds } from "../emotes/emotes.service.js";
 import { WHEEL_SEGMENTS, WHEEL_SPIN_COST, type WheelSegment } from "./wheel.config.js";
 
 export interface WheelSpinResult {
@@ -25,7 +26,8 @@ export interface WheelSpinResult {
   balances: { coins: number; coupons: number; rareCandy: number };
 }
 
-function resolveSegmentPrize(segment: WheelSegment): ResolvedPrize {
+/** `ownedEmotes`: the player's emotes (read only for a jackpot), so its emote is a new one. */
+export function resolveSegmentPrize(segment: WheelSegment, ownedEmotes: ReadonlySet<string> = new Set()): ResolvedPrize {
   const { payload } = segment;
   switch (payload.type) {
     case "card":
@@ -44,7 +46,7 @@ function resolveSegmentPrize(segment: WheelSegment): ResolvedPrize {
       return { type: "spin_again", bonusCoins: payload.bonusCoins };
     case "jackpot":
       // 1000 coins + a Rare Holo card + a random variant + a battle emote (plus candy/coupons in grantPrize)
-      return { type: "jackpot", prizes: [resolveCoins(1000), resolveCard(CardRarityPool.RareHolo), resolveRandomOverlay(), resolveEmote()] };
+      return { type: "jackpot", prizes: [resolveCoins(1000), resolveCard(CardRarityPool.RareHolo), resolveRandomOverlay(), ...jackpotEmote(ownedEmotes)] };
     case "nothing":
       return { type: "nothing" };
   }
@@ -56,7 +58,8 @@ function resolveSegmentPrize(segment: WheelSegment): ResolvedPrize {
  */
 export async function spinWheel(userId: string): Promise<WheelSpinResult> {
   const segment = pickWeighted(WHEEL_SEGMENTS.map((s) => ({ weight: s.weight, value: s })));
-  const prize = resolveSegmentPrize(segment);
+  const ownedEmotes = segment.payload.type === "jackpot" ? await getOwnedEmoteIds(userId) : new Set<string>();
+  const prize = resolveSegmentPrize(segment, ownedEmotes);
 
   return prisma.$transaction(async (tx) => {
     const { count: usedFree } = await tx.user.updateMany({

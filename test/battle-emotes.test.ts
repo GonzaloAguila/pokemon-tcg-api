@@ -16,9 +16,12 @@ import { cleanLoadout, getEmoteLoadout, getOwnedEmoteIds } from "../src/modules/
 import { emotesRouter } from "../src/modules/emotes/index.js";
 import { EMOTE_PRICES, buyCosmetic, getDailyOffers } from "../src/modules/market/market.service.js";
 import { grantPrize, resolveEmote } from "../src/modules/prizes/prizes.js";
+import { resolveSegmentPrize } from "../src/modules/wheel/wheel.service.js";
+import { WHEEL_SEGMENTS } from "../src/modules/wheel/wheel.config.js";
+import { resolvePatternPrize } from "../src/modules/slots/slots.service.js";
 import { grantCosmetic } from "../src/modules/admin/admin.service.js";
 import { isGrantableCosmetic } from "../src/modules/admin/grantable-cosmetics.js";
-import { buildRewards } from "../src/modules/battle-pass/battle-pass.service.js";
+import { buildRewards, getCurrentPassWithProgress } from "../src/modules/battle-pass/battle-pass.service.js";
 import { draftRewardsSchema } from "../src/socket/draft-rewards.js";
 import {
   EMOTE_COOLDOWN_MS,
@@ -97,6 +100,11 @@ describe("ownership and loadout", () => {
     expect(owned.body.emotes.map((e: { emoteId: string }) => e.emoteId)).toContain(RARE.id);
   });
 
+  it("a NULL stored loadout reads as the starters", () => {
+    expect(cleanLoadout(null, new Set(STARTERS))).toEqual(STARTERS);
+    expect(cleanLoadout(undefined, new Set(STARTERS))).toEqual(STARTERS);
+  });
+
   it("a stored loadout only keeps known, owned emotes (first five, no repeats)", async () => {
     const owned = new Set([...STARTERS, RARE.id]);
     expect(cleanLoadout(["gone", RARE.id, RARE.id, COMMON.id, ...STARTERS], owned)).toEqual([RARE.id, ...STARTERS.slice(0, 4)]);
@@ -136,13 +144,49 @@ describe("getting emotes", () => {
 
   it("prizes grant a random non-starter emote (idempotent)", async () => {
     const user = await createUser();
-    const prize = resolveEmote();
+    const prize = resolveEmote()!;
     expect(prize.type).toBe("emote");
-    if (prize.type !== "emote") return;
     expect(EMOTE_BY_ID.get(prize.emoteId)?.starter).toBeFalsy();
     await prisma.$transaction((tx) => grantPrize(tx, user.id, prize, { type: "wheel_spin", label: "Ruleta" }));
     await prisma.$transaction((tx) => grantPrize(tx, user.id, prize, { type: "wheel_spin", label: "Ruleta" }));
     expect(await prisma.userEmote.count({ where: { userId: user.id } })).toBe(1);
+  });
+
+  it("a jackpot's emote is one the player doesn't own; owning them all leaves the emote out", () => {
+    const allButOne = new Set(COLLECTIBLE_EMOTES.slice(1).map((e) => e.id));
+    for (let i = 0; i < 20; i++) expect(resolveEmote(allButOne)?.emoteId).toBe(COLLECTIBLE_EMOTES[0].id);
+    const all = new Set(COLLECTIBLE_EMOTES.map((e) => e.id));
+    expect(resolveEmote(all)).toBeNull();
+
+    const jackpot = WHEEL_SEGMENTS.find((s) => s.payload.type === "jackpot")!;
+    const subTypes = (p: ReturnType<typeof resolveSegmentPrize>) => (p.type === "jackpot" ? p.prizes.map((s) => s.type) : []);
+    expect(subTypes(resolveSegmentPrize(jackpot, new Set()))).toEqual(["coins", "card", "overlay", "emote"]);
+    expect(subTypes(resolveSegmentPrize(jackpot, all))).toEqual(["coins", "card", "overlay"]);
+    const mega = resolvePatternPrize("full_grid", "card", all);
+    expect(mega.type === "jackpot" && mega.prizes.some((s) => s.type === "emote")).toBe(false);
+    const megaNew = resolvePatternPrize("full_grid", "card", allButOne);
+    expect(megaNew.type === "jackpot" && megaNew.prizes.find((s) => s.type === "emote")).toMatchObject({ emoteId: COLLECTIBLE_EMOTES[0].id });
+  });
+
+  it("passes before November 2026 keep the old premium track; November on has the emotes", async () => {
+    const october = buildRewards(31, { year: 2026, month: 10 }).filter((r) => r.track === "premium");
+    expect(october.some((r) => r.rewardType === "emote")).toBe(false);
+    for (const step of [2, 9, 16, 25]) {
+      expect(october.find((r) => r.day === step)).toMatchObject({ rewardType: "coins", amount: 50, label: "50 Monedas" });
+    }
+    expect(october.filter((r) => r.rewardType === "coins").reduce((n, r) => n + (r.amount ?? 0), 0)).toBe(1000);
+
+    const november = buildRewards(30, { year: 2026, month: 11 }).filter((r) => r.track === "premium");
+    expect(november.find((r) => r.day === 9)).toMatchObject({ rewardType: "emote", rewardId: "pachirisu-dance" });
+    expect(november.find((r) => r.day === 25)).toMatchObject({ rewardType: "emote", rewardId: "pikachu-shocked" });
+    expect(buildRewards(31, { year: 2027, month: 1 }).some((r) => r.rewardType === "emote")).toBe(true);
+
+    // The pass a player sees (rebuilt from the config) follows its own month
+    const user = await createUser();
+    const oct = await getCurrentPassWithProgress(user.id, new Date(Date.UTC(2026, 9, 20, 15)));
+    expect(oct.rewards.find((r) => r.track === "premium" && r.day === 9)).toMatchObject({ rewardType: "coins", amount: 50 });
+    const nov = await getCurrentPassWithProgress(user.id, new Date(Date.UTC(2026, 10, 20, 15)));
+    expect(nov.rewards.find((r) => r.track === "premium" && r.day === 9)).toMatchObject({ rewardType: "emote" });
   });
 
   it("the premium battle pass has two emotes and still 1000 coins", () => {

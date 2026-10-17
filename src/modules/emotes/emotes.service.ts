@@ -26,9 +26,10 @@ export async function getOwnedEmoteIds(userId: string, db: Reader = prisma): Pro
 }
 
 /** A stored loadout as a game may use it: known and owned emotes, first occurrence, at most five. */
-export function cleanLoadout(stored: readonly string[], owned: ReadonlySet<string>): string[] {
+export function cleanLoadout(stored: readonly string[] | null | undefined, owned: ReadonlySet<string>): string[] {
   const out: string[] = [];
-  for (const id of stored) {
+  // A NULL column (a row written outside Prisma) means the default: the starters
+  for (const id of stored ?? STARTER_EMOTE_IDS) {
     if (out.length >= EMOTE_LOADOUT_SIZE) break;
     if (!EMOTE_BY_ID.has(id) || !owned.has(id) || out.includes(id)) continue;
     out.push(id);

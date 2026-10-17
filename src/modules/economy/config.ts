@@ -135,6 +135,18 @@ export const ECONOMY = {
       { step: 29, rewardType: "coins", amount: 50, label: "50 Monedas" },
       { step: 30, rewardType: "card_skin", rewardId: "charizard-sepia", label: "Variante: Charizard Sepia" },
     ] as BattlePassStepReward[],
+    /**
+     * Passes are rebuilt from this config, so the emote steps only apply from this month on;
+     * earlier passes keep the premium track they started with: `premiumBeforeEmotes` replaces
+     * these steps of `premium` (steps 2, 9, 16 and 25 were 50 coins each).
+     */
+    premiumEmotesFrom: { year: 2026, month: 11 },
+    premiumBeforeEmotes: [
+      { step: 2, rewardType: "coins", amount: 50, label: "50 Monedas" },
+      { step: 9, rewardType: "coins", amount: 50, label: "50 Monedas" },
+      { step: 16, rewardType: "coins", amount: 50, label: "50 Monedas" },
+      { step: 25, rewardType: "coins", amount: 50, label: "50 Monedas" },
+    ] as BattlePassStepReward[],
   },
 
   /** Per-set collection milestones (replace the collection / balance achievements). */

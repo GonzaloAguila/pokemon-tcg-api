@@ -54,7 +54,22 @@ function isCurrentMonth(pass: { year: number | null; month: number | null }, now
  * an unowned holo at the last step. Premium: ECONOMY.battlePass.premium; in shorter months the
  * step-30 rewards move to the last step.
  */
-export function buildRewards(maxSteps: number): BattlePassRewardDef[] {
+/** The premium track of a pass's month: before ECONOMY.battlePass.premiumEmotesFrom, the old one (no emotes). */
+export function premiumTrackFor(period?: { year: number | null; month: number | null }): BattlePassStepReward[] {
+  const cfg = ECONOMY.battlePass;
+  const from = cfg.premiumEmotesFrom;
+  const isBefore =
+    !!period && (period.year == null || period.month == null || period.year * 12 + period.month < from.year * 12 + from.month);
+  if (!isBefore) return cfg.premium;
+  const old = new Map(cfg.premiumBeforeEmotes.map((r) => [r.step, r]));
+  return cfg.premium.map((r) => old.get(r.step) ?? r);
+}
+
+/**
+ * Both tracks for a pass of `maxSteps` steps. `period`: the pass's month (its premium track,
+ * see premiumTrackFor); omitted = the current config.
+ */
+export function buildRewards(maxSteps: number, period?: { year: number | null; month: number | null }): BattlePassRewardDef[] {
   const cfg = ECONOMY.battlePass;
   const full = cfg.maxSteps;
   const standard: BattlePassStepReward[] = [];
@@ -76,7 +91,7 @@ export function buildRewards(maxSteps: number): BattlePassRewardDef[] {
       label: r.label,
     }));
   };
-  return [...toDefs("standard", standard), ...toDefs("premium", cfg.premium)].sort(
+  return [...toDefs("standard", standard), ...toDefs("premium", premiumTrackFor(period))].sort(
     (a, b) => a.day - b.day || (a.track === "standard" ? -1 : 1),
   );
 }
@@ -103,7 +118,7 @@ export async function getOrCreateMonthlyPass(db: Db = prisma, now = new Date()) 
       durationDays: daysInMonth,
       premiumPrice: ECONOMY.battlePass.premiumPriceRareCandy,
       status: "active",
-      rewards: buildRewards(maxStepsForMonth(daysInMonth)) as any,
+      rewards: buildRewards(maxStepsForMonth(daysInMonth), { year, month }) as any,
       year,
       month,
     }],
@@ -147,8 +162,8 @@ export async function advanceStepForLogin(tx: Db, userId: string, now = new Date
 // Read
 // =============================================================================
 
-function rewardsOf(pass: { durationDays: number }): BattlePassRewardDef[] {
-  return buildRewards(maxStepsForMonth(pass.durationDays));
+function rewardsOf(pass: { durationDays: number; year: number | null; month: number | null }): BattlePassRewardDef[] {
+  return buildRewards(maxStepsForMonth(pass.durationDays), pass);
 }
 
 function toProgress(
