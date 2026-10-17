@@ -62,6 +62,9 @@ export const AVAILABLE_PLAYMATS: CosmeticItem[] = [
   { itemId: "eevee-evos", name: "Eevee Evoluciones", imageUrl: "/bg/bg-eevee-evos.jpg" },
   { itemId: "street", name: "Calle Pokémon", imageUrl: "/bg/bg-street.png" },
   { itemId: "stadium", name: "Estadio", imageUrl: "/bg/bg2.jpg" },
+  { itemId: "kanto-sky", name: "Cielo de Kanto", imageUrl: "/bg/bg-kanto-sky.png" },
+  { itemId: "charizard-sunset", name: "Atardecer de Charizard", imageUrl: "/bg/bg-charizard-sunset.jpg" },
+  { itemId: "night-city", name: "Ciudad de Noche", imageUrl: "/bg/bg-night-city.png" },
 ];
 
 // Card skin variants: every Rare Holo Pokémon × every overlay
