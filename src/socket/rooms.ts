@@ -154,6 +154,8 @@ export interface GameRoom {
   cosmetics?: RoomCosmetics;
   /** Both seats' equipped battle emotes (room-emotes.ts): read at the start, re-read on a miss. */
   emoteLoadouts?: RoomEmoteLoadouts;
+  /** When the cleanup sweep first saw the room finished (sweepRooms): deleted FINISHED_ROOM_TTL_MS later. */
+  finishedAt?: number;
 
   // Metadata
   players: string[];
@@ -680,6 +682,11 @@ const FORFEIT_TIMEOUT_MS = 120_000; // 2 minutes
 const SETUP_TIMEOUT_MS = 90_000; // 90 seconds for opponent to finish setup
 /** A waiting room whose creator disconnected (closed / reloaded the lobby) is deleted after this. */
 const WAITING_ROOM_GRACE_MS = 15_000;
+/**
+ * A finished room lives this long after its game ended, so both players can still chat and send
+ * emotes ("gg") from the game-over screen (sweepRooms).
+ */
+export const FINISHED_ROOM_TTL_MS = 120_000;
 
 type ForfeitCallback = (
   roomId: string,
@@ -2323,22 +2330,31 @@ export class GameRoomManager {
    * Start periodic cleanup of stale rooms (call once at server start).
    */
   startPeriodicCleanup(): void {
-    setInterval(() => {
-      const now = Date.now();
-      for (const [id, room] of this.rooms.entries()) {
-        // Delete finished rooms older than 5 minutes
-        if (room.status === "finished" && now - room.createdAt.getTime() > 300_000) {
+    setInterval(() => this.sweepRooms(), 60_000); // Run every minute
+  }
+
+  /**
+   * One cleanup pass. A finished room is kept FINISHED_ROOM_TTL_MS after its game ended (stamped
+   * here the first time it is seen finished, whatever the end path), not after the room was
+   * created: before, a game longer than 5 minutes lost its room within a minute of the game
+   * over, cutting the players' chat and emotes ("gg"). Waiting rooms older than 30 minutes with
+   * no player 2 go too.
+   */
+  sweepRooms(now = Date.now()): void {
+    for (const [id, room] of this.rooms.entries()) {
+      if (room.status === "finished") {
+        room.finishedAt ??= now;
+        if (now - room.finishedAt >= FINISHED_ROOM_TTL_MS) {
           this.cancelAnswerTimer(id);
           this.rooms.delete(id);
-        }
-        // Delete waiting rooms older than 30 minutes with no player 2
-        if (room.status === "waiting" && !room.player2Id && now - room.createdAt.getTime() > 1_800_000) {
-          this.cancelAnswerTimer(id);
-          this.rooms.delete(id);
-          console.log(`🧹 Deleted stale waiting room ${id}`);
         }
       }
-    }, 60_000); // Run every minute
+      if (room.status === "waiting" && !room.player2Id && now - room.createdAt.getTime() > 1_800_000) {
+        this.cancelAnswerTimer(id);
+        this.rooms.delete(id);
+        console.log(`🧹 Deleted stale waiting room ${id}`);
+      }
+    }
   }
 
   /**

@@ -1,7 +1,8 @@
 /**
  * Battle emotes: ownership (starters always owned), the 5-emote loadout, every acquisition path
  * (market by rarity, prizes, battle pass, admin grants, draft prizes) and `sendEmote` over real
- * sockets (seated players only, loadout only, rate limit, broadcast to players and spectators).
+ * sockets (seated players only, loadout only, rate limit, broadcast to players and spectators), also
+ * after the game over while the finished room lives (tables and draft games).
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "../src/lib/prisma.js";
@@ -30,6 +31,9 @@ import {
   resetEmoteLimits,
 } from "../src/socket/room-emotes.js";
 import { roomManager } from "../src/socket/handlers.js";
+import { draftRoomManager } from "../src/socket/draft-handlers.js";
+import { FINISHED_ROOM_TTL_MS } from "../src/socket/rooms.js";
+import { ALL_CARDS, type GameCard } from "@gonzaloaguila/game-core";
 import { createUser } from "./helpers.js";
 import { startHttpApp } from "./http-helpers.js";
 import { nextEvent, startSocketServer, tokenFor } from "./socket-helpers.js";
@@ -319,5 +323,122 @@ describe("sendEmote", () => {
     expect(await send(s, { roomId: t.roomId, emoteId: "eevee-cool" })).toMatchObject({ success: false, code: "NOT_IN_GAME" });
     const anon = await server.connect();
     expect((await send(anon, { roomId: t.roomId, emoteId: "eevee-cool" })).success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// After the game over ("gg")
+// ---------------------------------------------------------------------------
+
+const surrender = (socket: Awaited<ReturnType<typeof server.connect>>, roomId: string) =>
+  socket.emit("action", { roomId, action: { type: "surrender", payload: {} } });
+
+/** A draft's (single-match) tournament game, A vs B, both connected to the game room. */
+async function draftGame() {
+  const [admin, a, b] = await Promise.all([
+    createUser({}, { role: "admin" }),
+    createUser({}, { stats: true }),
+    createUser({}, { stats: true }),
+  ]);
+  const draft = draftRoomManager.createRoom({ adminPlays: false, entryFee: 0 }, admin.id, "admin-emotes", "Admin");
+  for (const [u, name] of [[a, "A"], [b, "B"]] as const) draftRoomManager.joinRoom(draft.id, u.id, `draft-${name}`, name);
+  draft.phase = "matching";
+  draft.tournament = {
+    rounds: [{ roundNumber: 1, pairings: [{ matchNumber: 1, player1: { id: a.id, name: "A" }, player2: { id: b.id, name: "B" } }], byePlayerId: null, status: "in_progress", results: [] }],
+    standings: [a, b].map((u, i) => ({ playerId: u.id, playerName: "AB"[i], wins: 0, losses: 0, byes: 0, withdrawn: false })),
+    currentRoundNumber: 1,
+    totalRounds: 1,
+  };
+  const game = roomManager.createRoom();
+  game.isDraft = true;
+  await roomManager.joinRoom(game.id, a.id, "");
+  await roomManager.joinRoom(game.id, b.id, "");
+  const card = (name: string, id: string): GameCard => ({ ...(ALL_CARDS.find((c) => c.name === name && c.set === "Base Set")!), id });
+  const deck = Array.from({ length: 60 }, (_, i) => card(i % 3 === 0 ? "Pikachu" : "Lightning Energy", `e${i}`));
+  await roomManager.startGameWithRawDecks(game.id, deck, deck.map((x) => ({ ...x, id: `${x.id}b` })));
+  draftRoomManager.registerGameRoom(game.id, draft.id, 1, 1, a.id, b.id);
+
+  const sa = await server.connect(tokenFor(a));
+  const sb = await server.connect(tokenFor(b));
+  for (const s of [sa, sb]) {
+    const back = nextEvent(s, "gameStart");
+    s.emit("joinRoom", { roomId: game.id });
+    await back;
+  }
+  return { draft, game, a, b, sa, sb };
+}
+
+describe("sendEmote after the game over", () => {
+  it("both seated players of a finished table can still send (same loadout and rate limit); spectators can't", async () => {
+    const t = await startTable();
+    const viewer = await createUser();
+    const sv = await server.connect(tokenFor(viewer));
+    const watching = nextEvent(sv, "gameStart");
+    sv.emit("spectateRoom", { roomId: t.roomId });
+    await watching;
+
+    const over = Promise.all([nextEvent<any>(t.s1, "gameOver"), nextEvent<any>(t.s2, "gameOver")]);
+    surrender(t.s1, t.roomId);
+    expect((await over)[0]).toMatchObject({ winner: "player2" });
+    const room = roomManager.getRoom(t.roomId)!;
+    expect(room.status).toBe("finished");
+    expect(room.gameState!.gamePhase).toBe("GAME_OVER");
+
+    // The loser says gg: the winner and the spectator get it
+    const got = Promise.all([nextEvent<any>(t.s2, "emote"), nextEvent<any>(sv, "emote")]);
+    expect(await send(t.s1, { roomId: t.roomId, emoteId: "pikachu-giggle" })).toEqual({ success: true });
+    for (const payload of await got) {
+      expect(payload).toMatchObject({ roomId: t.roomId, side: "player1", userId: t.p1.id, emoteId: "pikachu-giggle" });
+    }
+    // The winner answers
+    const back = nextEvent<any>(t.s1, "emote");
+    expect(await send(t.s2, { roomId: t.roomId, emoteId: "eevee-cool" })).toEqual({ success: true });
+    expect(await back).toMatchObject({ side: "player2", emoteId: "eevee-cool" });
+
+    // Same checks as during the game
+    expect(await send(t.s1, { roomId: t.roomId, emoteId: "eevee-cool" })).toMatchObject({ success: false, code: "EMOTE_RATE_LIMITED" });
+    resetEmoteLimits();
+    expect(await send(t.s1, { roomId: t.roomId, emoteId: RARE.id })).toMatchObject({ success: false, code: "EMOTE_NOT_EQUIPPED" });
+    expect(await send(sv, { roomId: t.roomId, emoteId: "eevee-cool" })).toMatchObject({ success: false, error: "Los espectadores solo pueden mirar y chatear" });
+
+    // A player who left the finished room can't send any more
+    t.s2.emit("leaveRoom", { roomId: t.roomId });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(await send(t.s2, { roomId: t.roomId, emoteId: "eevee-cool" })).toMatchObject({ success: false, code: "NOT_IN_GAME" });
+  });
+
+  it("a finished room lives FINISHED_ROOM_TTL_MS after the end, even when the game took more than 5 minutes", async () => {
+    const t = await startTable();
+    const room = roomManager.getRoom(t.roomId)!;
+    // A long game: the room was created 30 minutes ago (the old sweep deleted it within a minute)
+    room.createdAt = new Date(Date.now() - 30 * 60_000);
+    const over = nextEvent(t.s2, "gameOver");
+    surrender(t.s1, t.roomId);
+    await over;
+
+    const end = Date.now();
+    roomManager.sweepRooms(end);
+    roomManager.sweepRooms(end + FINISHED_ROOM_TTL_MS - 1);
+    expect(roomManager.getRoom(t.roomId)).toBeDefined();
+    expect(await send(t.s2, { roomId: t.roomId, emoteId: "eevee-cool" })).toEqual({ success: true });
+
+    roomManager.sweepRooms(end + FINISHED_ROOM_TTL_MS);
+    expect(roomManager.getRoom(t.roomId)).toBeUndefined();
+    expect(await send(t.s1, { roomId: t.roomId, emoteId: "eevee-cool" })).toMatchObject({ success: false, code: "NOT_IN_GAME" });
+  });
+
+  it("both players of a finished draft game can still send", async () => {
+    const m = await draftGame();
+    const over = Promise.all([nextEvent<any>(m.sa, "gameOver"), nextEvent<any>(m.sb, "gameOver")]);
+    surrender(m.sb, m.game.id);
+    await over;
+    expect(m.game.status).toBe("finished");
+
+    const toB = nextEvent<any>(m.sb, "emote");
+    expect(await send(m.sa, { roomId: m.game.id, emoteId: "charizard-think" })).toEqual({ success: true });
+    expect(await toB).toMatchObject({ roomId: m.game.id, side: "player1", userId: m.a.id, emoteId: "charizard-think" });
+    const toA = nextEvent<any>(m.sa, "emote");
+    expect(await send(m.sb, { roomId: m.game.id, emoteId: "bulbasaur-drink" })).toEqual({ success: true });
+    expect(await toA).toMatchObject({ side: "player2", userId: m.b.id, emoteId: "bulbasaur-drink" });
   });
 });

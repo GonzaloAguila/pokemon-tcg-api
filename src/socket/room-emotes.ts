@@ -2,7 +2,9 @@
  * Battle emotes in game rooms (tables and draft games). A seated player sends `sendEmote
  * { roomId, emoteId }`; the server checks the seat, the rate limit and the sender's loadout, then
  * broadcasts `emote { roomId, side, userId, emoteId, sentAt }` to the room (players and
- * spectators). Nothing is stored: an emote is a passing reaction.
+ * spectators). Nothing is stored: an emote is a passing reaction. They keep working after the
+ * game over (to say "gg") while the finished room exists (`FINISHED_ROOM_TTL_MS` after the end,
+ * rooms.ts `sweepRooms`) and the player hasn't left it.
  *
  * Loadouts are read from the DB when the game starts (`snapshotRoomEmotes`, called with the
  * cosmetics snapshot) and re-read when a player sends one that isn't in the snapshot, so a

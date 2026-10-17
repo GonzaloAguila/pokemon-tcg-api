@@ -956,7 +956,8 @@ export function setupSocketHandlers(io: Server): void {
 
     // sendEmote { roomId, emoteId } (ack { success, error?, code? }): only a seated player of a
     // started game, rate limited, an emote of their loadout. Everyone in the room (both players
-    // and the spectators) gets emote { roomId, side, userId, emoteId, sentAt }.
+    // and the spectators) gets emote { roomId, side, userId, emoteId, sentAt }. Also after the
+    // game over ("gg"): a finished room keeps its seats and lives FINISHED_ROOM_TTL_MS more.
     socket.on("sendEmote", async (payload: unknown, ack?: (res: unknown) => void) => {
       const reply = (res: { success: boolean; error?: string; code?: string }) => {
         if (typeof ack === "function") ack(res);
