@@ -11,12 +11,15 @@ export interface DailyCardOffer {
 }
 
 export interface DailyCosmeticOffer {
-  type: "coin" | "cardBack" | "avatar" | "variant" | "playmat";
+  type: "coin" | "cardBack" | "avatar" | "variant" | "playmat" | "emote";
   itemId: string;
   name: string;
   imageUrl?: string;
   /** Overlay effect ID for variant skins (e.g. "rainbow", "frost") */
   overlayId?: string;
+  /** Battle emotes: rarity (sets the price) and whether it is an animated WebP */
+  rarity?: string;
+  animated?: boolean;
   price: number;
 }
 

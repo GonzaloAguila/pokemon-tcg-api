@@ -34,14 +34,14 @@ function wheelPrizeLabel(payload: WheelPayload): string {
     case "spin_again":
       return `+${payload.bonusCoins} monedas y un giro gratis`;
     case "jackpot":
-      return "Jackpot: 1.000 monedas + carta holo + variante al azar + 1 Caramelo Raro + 100 cupones";
+      return "Jackpot: 1.000 monedas + carta holo + variante al azar + emote al azar + 1 Caramelo Raro + 100 cupones";
     case "nothing":
       return "Nada";
   }
 }
 
 const PATTERN_PRIZES: Record<SlotPattern, string> = {
-  full_grid: "Mega jackpot: carta holo + 300 monedas + dorso + moneda coleccionable + variante + sobre + 1 Caramelo Raro + 100 cupones",
+  full_grid: "Mega jackpot: carta holo + 300 monedas + dorso + moneda coleccionable + variante + emote + sobre + 1 Caramelo Raro + 100 cupones",
   pokeball: "Sobre gratis (set al azar)",
   cross: "Carta Pokémon rara (2/3) u holo (1/3)",
   x_pattern: "200, 250 o 300 monedas",

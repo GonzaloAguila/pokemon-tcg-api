@@ -1,8 +1,8 @@
 /**
  * Cosmetics an admin can hand out (backoffice grants, draft prizes): the catalogs the market,
  * prizes, battle pass and set milestones grant from (+ the gym-leader coins the backoffice
- * offers). Items every player has (Eevee coin, classic back, field playmat, free avatars) are
- * not grantable.
+ * offers). Items every player has (Eevee coin, classic back, field playmat, free avatars, starter
+ * emotes) are not grantable.
  */
 import { CARD_SETS } from "@gonzaloaguila/game-core";
 import {
@@ -15,8 +15,9 @@ import {
 } from "../prizes/catalog.js";
 import { ECONOMY } from "../economy/config.js";
 import { FREE_AVATAR_IDS } from "../users/users.service.js";
+import { COLLECTIBLE_EMOTES } from "../emotes/catalog.js";
 
-export const COSMETIC_TYPES = ["coin", "cardBack", "avatar", "skin", "playmat"] as const;
+export const COSMETIC_TYPES = ["coin", "cardBack", "avatar", "skin", "playmat", "emote"] as const;
 export type CosmeticType = (typeof COSMETIC_TYPES)[number];
 
 export const COSMETIC_TYPE_LABELS: Record<CosmeticType, string> = {
@@ -25,6 +26,7 @@ export const COSMETIC_TYPE_LABELS: Record<CosmeticType, string> = {
   avatar: "Avatar",
   skin: "Skin de carta",
   playmat: "Tapete",
+  emote: "Emote",
 };
 
 export const GRANTABLE_COSMETICS: Record<CosmeticType, ReadonlySet<string>> = {
@@ -37,6 +39,7 @@ export const GRANTABLE_COSMETICS: Record<CosmeticType, ReadonlySet<string>> = {
   // "<pokemon-slug>-<overlayId>": every Rare Holo Pokémon × every overlay (catalog.ts)
   skin: new Set(ALL_VARIANTS.map((v) => v.itemId)),
   playmat: new Set(AVAILABLE_PLAYMATS.map((p) => p.itemId)),
+  emote: new Set(COLLECTIBLE_EMOTES.map((e) => e.id)),
 };
 
 export function isGrantableCosmetic(type: CosmeticType, itemId: string): boolean {

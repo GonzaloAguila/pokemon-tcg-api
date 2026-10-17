@@ -22,6 +22,8 @@ import {
   MARKET_VARIANTS,
 } from "../prizes/catalog.js";
 import type { PlaymatRarity } from "../prizes/catalog.js";
+import { COLLECTIBLE_EMOTES, emoteImageUrl, type EmoteRarity } from "../emotes/catalog.js";
+import { grantEmote } from "../emotes/emotes.service.js";
 import type {
   DailyCardOffer,
   DailyCosmeticOffer,
@@ -76,6 +78,13 @@ export const PLAYMAT_PRICES: Record<PlaymatRarity, number> = {
   legendary: 50,
 };
 
+/** Battle emotes cost coupons by rarity (animated ones are rare) */
+export const EMOTE_PRICES: Record<EmoteRarity, number> = {
+  common: 5,
+  uncommon: 10,
+  rare: 20,
+};
+
 const ENERGY_PRICE = 10;
 export const MAX_ENERGY_PER_PURCHASE = 99;
 
@@ -116,7 +125,17 @@ function getDailySeed(now = new Date()): number {
   return Math.abs(hash);
 }
 
-function seededPick<T>(arr: T[], seed: number, offset: number): T {
+/**
+ * Integer hash of the daily seed: consecutive days' seeds are close, so a pick by `seed % length`
+ * walks the list in runs. Used for the emote offer, so the rarities alternate day to day.
+ */
+function scrambleSeed(seed: number): number {
+  let n = Math.imul(seed ^ (seed >>> 16), 0x45d9f3b);
+  n = Math.imul(n ^ (n >>> 16), 0x45d9f3b);
+  return (n ^ (n >>> 16)) >>> 0;
+}
+
+function seededPick<T>(arr: readonly T[], seed: number, offset: number): T {
   return arr[((seed + offset * 7919) >>> 0) % arr.length];
 }
 
@@ -164,6 +183,7 @@ export async function getDailyOffers(userId?: string, now = new Date()): Promise
   const dailyAvatar = seededPick(AVAILABLE_AVATARS, seed, 12);
   const dailyVariant = seededPick(MARKET_VARIANTS, seed, 13);
   const dailyPlaymat = seededPick(AVAILABLE_PLAYMATS, seed, 14);
+  const dailyEmote = seededPick(COLLECTIBLE_EMOTES, scrambleSeed(seed), 15);
 
   const cosmeticOffers: DailyCosmeticOffer[] = [
     { type: "coin", itemId: dailyCoin.itemId, name: dailyCoin.name, imageUrl: dailyCoin.imageUrl, price: COSMETIC_PRICES.coin },
@@ -171,6 +191,7 @@ export async function getDailyOffers(userId?: string, now = new Date()): Promise
     { type: "avatar", itemId: dailyAvatar.itemId, name: dailyAvatar.name, imageUrl: dailyAvatar.imageUrl, price: COSMETIC_PRICES.avatar },
     { type: "variant", itemId: dailyVariant.itemId, name: dailyVariant.name, imageUrl: dailyVariant.imageUrl, overlayId: dailyVariant.overlayId, price: COSMETIC_PRICES.variant },
     { type: "playmat", itemId: dailyPlaymat.itemId, name: dailyPlaymat.name, imageUrl: dailyPlaymat.imageUrl, price: PLAYMAT_PRICES[dailyPlaymat.rarity] },
+    { type: "emote", itemId: dailyEmote.id, name: dailyEmote.name, imageUrl: emoteImageUrl(dailyEmote.id), rarity: dailyEmote.rarity, animated: dailyEmote.animated, price: EMOTE_PRICES[dailyEmote.rarity] },
   ];
 
   // Energy offers (static — always the same 6)
@@ -196,7 +217,7 @@ export async function getDailyOffers(userId?: string, now = new Date()): Promise
     purchasedToday = purchases.map((p) => p.itemKey);
 
     // Check ownership of today's cosmetic offers
-    const [ownedCoins, ownedCardBacks, ownedAvatars, ownedSkins, ownedPlaymats] = await Promise.all([
+    const [ownedCoins, ownedCardBacks, ownedAvatars, ownedSkins, ownedPlaymats, ownedEmotes] = await Promise.all([
       prisma.userCoin.findMany({
         where: { userId, coinId: { in: cosmeticOffers.filter((o) => o.type === "coin").map((o) => o.itemId) } },
         select: { coinId: true },
@@ -217,6 +238,10 @@ export async function getDailyOffers(userId?: string, now = new Date()): Promise
         where: { userId, playmatId: { in: cosmeticOffers.filter((o) => o.type === "playmat").map((o) => o.itemId) } },
         select: { playmatId: true },
       }),
+      prisma.userEmote.findMany({
+        where: { userId, emoteId: { in: cosmeticOffers.filter((o) => o.type === "emote").map((o) => o.itemId) } },
+        select: { emoteId: true },
+      }),
     ]);
 
     for (const c of ownedCoins) {
@@ -233,6 +258,9 @@ export async function getDailyOffers(userId?: string, now = new Date()): Promise
     }
     for (const p of ownedPlaymats) {
       ownedItems.push(`own:playmat:${p.playmatId}`);
+    }
+    for (const e of ownedEmotes) {
+      ownedItems.push(`own:emote:${e.emoteId}`);
     }
   }
 
@@ -331,6 +359,11 @@ export async function buyCosmetic(
       if (existing) throw Errors.BadRequest("Ya posees este tapete");
       await charge("tapete");
       await tx.userPlaymat.create({ data: { userId, playmatId: itemId } });
+    } else if (type === "emote") {
+      const existing = await tx.userEmote.findUnique({ where: { userId_emoteId: { userId, emoteId: itemId } } });
+      if (existing) throw Errors.BadRequest("Ya posees este emote");
+      await charge("emote");
+      await grantEmote(tx, userId, itemId);
     } else {
       throw Errors.BadRequest("Tipo de cosmético inválido");
     }

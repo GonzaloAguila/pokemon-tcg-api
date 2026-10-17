@@ -148,12 +148,13 @@ export async function searchUsersBrief(query: string, limit = 10) {
 // ---------------------------------------------------------------------------
 
 export async function getUserOwnedCosmetics(userId: string) {
-  const [coins, cardBacks, avatars, skins, playmats] = await Promise.all([
+  const [coins, cardBacks, avatars, skins, playmats, emotes] = await Promise.all([
     prisma.userCoin.findMany({ where: { userId }, select: { coinId: true } }),
     prisma.userCardBack.findMany({ where: { userId }, select: { cardBackId: true } }),
     prisma.userAvatar.findMany({ where: { userId }, select: { avatarId: true } }),
     prisma.userCardSkin.findMany({ where: { userId }, select: { skinId: true } }),
     prisma.userPlaymat.findMany({ where: { userId }, select: { playmatId: true } }),
+    prisma.userEmote.findMany({ where: { userId }, select: { emoteId: true } }),
   ]);
 
   return {
@@ -162,6 +163,7 @@ export async function getUserOwnedCosmetics(userId: string) {
     avatarIds: avatars.map((a) => a.avatarId),
     skinIds: skins.map((s) => s.skinId),
     playmatIds: playmats.map((p) => p.playmatId),
+    emoteIds: emotes.map((e) => e.emoteId),
   };
 }
 
@@ -632,6 +634,9 @@ export async function grantCosmetic(
           break;
         case "playmat":
           await tx.userPlaymat.create({ data: { userId, playmatId: itemId } });
+          break;
+        case "emote":
+          await tx.userEmote.create({ data: { userId, emoteId: itemId } });
           break;
       }
 

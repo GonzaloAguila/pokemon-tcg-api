@@ -10,6 +10,7 @@ import {
   resolveCardBack,
   resolveCoins,
   resolveCollectibleCoin,
+  resolveEmote,
   resolveRandomOverlay,
   type ResolvedPrize,
 } from "../prizes/prizes.js";
@@ -42,8 +43,8 @@ function resolveSegmentPrize(segment: WheelSegment): ResolvedPrize {
     case "spin_again":
       return { type: "spin_again", bonusCoins: payload.bonusCoins };
     case "jackpot":
-      // 1000 coins + a Rare Holo card + a random variant (plus candy/coupons in grantPrize)
-      return { type: "jackpot", prizes: [resolveCoins(1000), resolveCard(CardRarityPool.RareHolo), resolveRandomOverlay()] };
+      // 1000 coins + a Rare Holo card + a random variant + a battle emote (plus candy/coupons in grantPrize)
+      return { type: "jackpot", prizes: [resolveCoins(1000), resolveCard(CardRarityPool.RareHolo), resolveRandomOverlay(), resolveEmote()] };
     case "nothing":
       return { type: "nothing" };
   }

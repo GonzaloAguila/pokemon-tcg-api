@@ -4,6 +4,7 @@ import { z } from "zod";
 import { Errors } from "../../middleware/error-handler.js";
 import { ALL_PERMISSIONS, type AdminPermission } from "./permissions.js";
 import * as adminService from "./admin.service.js";
+import { COSMETIC_TYPES } from "./grantable-cosmetics.js";
 import { closeRoomByAdmin, roomManager } from "../../socket/handlers.js";
 import { getIo } from "../../socket/io-registry.js";
 
@@ -40,7 +41,7 @@ const adminBodies = {
     amount: signedAmount(100_000),
   }),
   grantCosmetic: z.object({
-    type: z.enum(["coin", "cardBack", "avatar", "skin", "playmat"]),
+    type: z.enum(COSMETIC_TYPES),
     itemId: z.string().trim().min(1).max(100),
   }),
   ban: z.object({ banned: z.boolean(), reason: optionalReason }),

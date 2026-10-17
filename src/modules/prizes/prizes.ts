@@ -20,6 +20,8 @@ import {
   AVAILABLE_PLAYMATS,
   ALL_VARIANTS,
 } from "./catalog.js";
+import { COLLECTIBLE_EMOTES, emoteImageUrl } from "../emotes/catalog.js";
+import { grantEmote } from "../emotes/emotes.service.js";
 
 export type ResolvedPrize =
   | {
@@ -40,6 +42,7 @@ export type ResolvedPrize =
   | { type: "spin_again"; bonusCoins: number }
   | { type: "jackpot"; prizes: ResolvedPrize[] }
   | { type: "playmat"; playmatId: string; playmatName: string; playmatImageUrl: string }
+  | { type: "emote"; emoteId: string; emoteName: string; emoteImageUrl: string; emoteRarity: string }
   | { type: "nothing" };
 
 // ---------------------------------------------------------------------------
@@ -123,6 +126,12 @@ export function resolveAvatar(): ResolvedPrize {
 export function resolvePlaymat(): ResolvedPrize {
   const item = pick(AVAILABLE_PLAYMATS);
   return { type: "playmat", playmatId: item.itemId, playmatName: item.name, playmatImageUrl: item.imageUrl };
+}
+
+/** A random battle emote (never a starter: everyone owns those). */
+export function resolveEmote(): ResolvedPrize {
+  const emote = pick(COLLECTIBLE_EMOTES);
+  return { type: "emote", emoteId: emote.id, emoteName: emote.name, emoteImageUrl: emoteImageUrl(emote.id), emoteRarity: emote.rarity };
 }
 
 export function resolveRandomOverlay(): ResolvedPrize {
@@ -210,6 +219,10 @@ export async function grantPrize(
         update: {},
         create: { userId, playmatId: prize.playmatId },
       });
+      return {};
+
+    case "emote":
+      await grantEmote(tx, userId, prize.emoteId);
       return {};
 
     case "free_pack": {

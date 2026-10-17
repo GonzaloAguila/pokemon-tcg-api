@@ -16,7 +16,8 @@ export interface BattlePassRewardDef {
     | "playmat"
     | "random_card"
     | "card_skin"
-    | "unowned_holo";
+    | "unowned_holo"
+    | "emote";
   rewardId?: string;
   amount?: number;
   label: string;

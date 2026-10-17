@@ -20,6 +20,7 @@ import { recordCardChange } from "../users/card-ledger.js";
 import { ECONOMY, type BattlePassStepReward } from "../economy/config.js";
 import { economyCalendar, economyDay } from "../economy/economy-time.js";
 import { grantPacks } from "../economy/pack-inventory.js";
+import { grantEmote } from "../emotes/emotes.service.js";
 import type {
   BattlePassRewardDef,
   BattlePassWithProgress,
@@ -379,6 +380,12 @@ async function grantReward(tx: Db, userId: string, reward: BattlePassRewardDef) 
         create: { userId, playmatId: reward.rewardId },
       });
       return { type: "playmat", playmatId: reward.rewardId };
+    }
+
+    case "emote": {
+      if (!reward.rewardId) throw Errors.BadRequest("Reward missing rewardId");
+      await grantEmote(tx, userId, reward.rewardId);
+      return { type: "emote", emoteId: reward.rewardId };
     }
 
     case "card_skin": {

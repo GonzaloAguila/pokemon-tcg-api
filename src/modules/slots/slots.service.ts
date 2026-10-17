@@ -21,6 +21,7 @@ import {
   resolveCardBack,
   resolveCoins,
   resolveCollectibleCoin,
+  resolveEmote,
   resolvePlaymat,
   resolveRandomOverlay,
   type ResolvedPrize,
@@ -113,6 +114,7 @@ function resolvePatternPrize(pattern: SlotPattern, matchedSymbol: SlotSymbol): R
           resolveCardBack(),
           resolveCollectibleCoin(),
           resolveRandomOverlay(),
+          resolveEmote(),
           { type: "free_pack" },
         ],
       };

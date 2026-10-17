@@ -8,7 +8,7 @@ const router = Router();
 
 const buyCardSchema = z.object({ cardDefId: z.string().min(1).max(100) });
 const buyCosmeticSchema = z.object({
-  type: z.enum(["coin", "cardBack", "avatar", "variant", "playmat"]),
+  type: z.enum(["coin", "cardBack", "avatar", "variant", "playmat", "emote"]),
   itemId: z.string().min(1).max(100),
 });
 const buyEnergySchema = z.object({

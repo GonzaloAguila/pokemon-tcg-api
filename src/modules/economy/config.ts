@@ -20,7 +20,7 @@ export interface DailyMissionDef {
 
 export interface BattlePassStepReward {
   step: number;
-  rewardType: "coins" | "pack" | "unowned_holo" | "profile_coin" | "card_back" | "playmat" | "avatar" | "card_skin";
+  rewardType: "coins" | "pack" | "unowned_holo" | "profile_coin" | "card_back" | "playmat" | "avatar" | "card_skin" | "emote";
   amount?: number;
   rewardId?: string;
   label: string;
@@ -100,26 +100,26 @@ export const ECONOMY = {
     standardPackSteps: [10, 20],
     // The free track's last step (30) gives a holo the user doesn't own (fallback: any holo).
     /**
-     * Premium track (2 Rare Candies): cosmetics + 4 packs + 1000 coins. Steps not listed give
-     * nothing. In months shorter than 30 days the step-30 rewards move to the month's last step.
+     * Premium track (2 Rare Candies): cosmetics (two battle emotes among them) + 4 packs + 1000
+     * coins. Steps not listed give nothing. In months shorter than 30 days the step-30 rewards move to the month's last step.
      */
     premium: [
       { step: 1, rewardType: "coins", amount: 100, label: "100 Monedas" },
-      { step: 2, rewardType: "coins", amount: 50, label: "50 Monedas" },
+      { step: 2, rewardType: "coins", amount: 100, label: "100 Monedas" },
       { step: 3, rewardType: "profile_coin", rewardId: "charizard", label: "Moneda: Charizard" },
       { step: 4, rewardType: "coins", amount: 50, label: "50 Monedas" },
       { step: 5, rewardType: "profile_coin", rewardId: "lucario", label: "Moneda: Lucario" },
       { step: 6, rewardType: "coins", amount: 50, label: "50 Monedas" },
       { step: 7, rewardType: "pack", label: "Sobre a elección" },
       { step: 8, rewardType: "coins", amount: 50, label: "50 Monedas" },
-      { step: 9, rewardType: "coins", amount: 50, label: "50 Monedas" },
+      { step: 9, rewardType: "emote", rewardId: "pachirisu-dance", label: "Emote: Pachirisu bailando" },
       { step: 10, rewardType: "card_back", rewardId: "pikachu", label: "Dorso: Pikachu" },
       { step: 11, rewardType: "coins", amount: 50, label: "50 Monedas" },
       { step: 12, rewardType: "coins", amount: 100, label: "100 Monedas" },
       { step: 13, rewardType: "card_back", rewardId: "haymaker", label: "Dorso: Haymaker" },
       { step: 14, rewardType: "pack", label: "Sobre a elección" },
       { step: 15, rewardType: "playmat", rewardId: "stadium", label: "Tapete: Estadio" },
-      { step: 16, rewardType: "coins", amount: 50, label: "50 Monedas" },
+      { step: 16, rewardType: "coins", amount: 100, label: "100 Monedas" },
       { step: 17, rewardType: "coins", amount: 50, label: "50 Monedas" },
       { step: 18, rewardType: "playmat", rewardId: "street", label: "Tapete: Calle" },
       { step: 19, rewardType: "coins", amount: 50, label: "50 Monedas" },
@@ -128,7 +128,7 @@ export const ECONOMY = {
       { step: 22, rewardType: "coins", amount: 50, label: "50 Monedas" },
       { step: 23, rewardType: "avatar", rewardId: "pikachu", label: "Avatar: Pikachu" },
       { step: 24, rewardType: "coins", amount: 100, label: "100 Monedas" },
-      { step: 25, rewardType: "coins", amount: 50, label: "50 Monedas" },
+      { step: 25, rewardType: "emote", rewardId: "pikachu-shocked", label: "Emote: Pikachu sorprendido" },
       { step: 26, rewardType: "pack", label: "Sobre a elección" },
       { step: 27, rewardType: "coins", amount: 50, label: "50 Monedas" },
       { step: 28, rewardType: "coins", amount: 50, label: "50 Monedas" },
