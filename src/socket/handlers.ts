@@ -8,7 +8,8 @@ import {
   decks as themeDeckList,
 } from "@gonzaloaguila/game-core";
 import type { GameState } from "@gonzaloaguila/game-core";
-import { GameRoomManager, RoomNotFoundError, SeatedSpectatorError, type ActionResult, type GameRoom, type PlayerKey } from "./rooms.js";
+import { GameRoomManager, PrivateTableError, RoomNotFoundError, SeatedSpectatorError, isPublicTable, type ActionResult, type GameRoom, type PlayerKey } from "./rooms.js";
+import { SPECTATE_RATE_LIMITED, allowSpectate, forgetSpectateSocket } from "./spectate-limit.js";
 import { maskRoomState } from "./room-state.js";
 import type { Viewer } from "./state-masking.js";
 import { maxBetForTitle, titleIdFromStats } from "../modules/users/titles.js";
@@ -329,13 +330,34 @@ function serializeRoom(r: ReturnType<typeof roomManager.getRoom>) {
     joinerAvatarId: r.joiner.avatarId,
     joinerTitleId: r.joiner.titleId,
     spectatorCount: roomManager.spectatorCount(r),
+    /** Anyone may watch it (not friendly, not reserved): only these are in "En curso". */
+    watchable: isPublicTable(r),
   };
 }
 
+/** A spectator-count change waiting to go out with the next room list. */
+let pendingRoomList: ReturnType<typeof setTimeout> | null = null;
+/** Spectators come and go often: their counts reach the lobbies at most once per this. */
+const SPECTATOR_LIST_DELAY_MS = 1000;
+
 function broadcastRoomList(io: Server) {
+  if (pendingRoomList) {
+    clearTimeout(pendingRoomList);
+    pendingRoomList = null;
+  }
   io.emit("roomList", {
     rooms: roomManager.getActiveRooms().map(serializeRoom).filter(Boolean),
   });
+}
+
+/** The room list after spectators changed: one trailing broadcast per SPECTATOR_LIST_DELAY_MS. */
+function scheduleRoomList(io: Server) {
+  if (pendingRoomList) return;
+  pendingRoomList = setTimeout(() => {
+    pendingRoomList = null;
+    broadcastRoomList(io);
+  }, SPECTATOR_LIST_DELAY_MS);
+  pendingRoomList.unref?.();
 }
 
 /** What a spectator is told when it tries to act (play, ready, kick, coins). */
@@ -347,7 +369,7 @@ const SPECTATOR_ONLY_ERROR = "Los espectadores solo pueden mirar y chatear";
  */
 function announceSpectators(io: Server, room: GameRoom): void {
   io.to(room.id).emit("spectatorUpdate", { roomId: room.id, count: roomManager.spectatorCount(room) });
-  if (!room.isDraft) broadcastRoomList(io);
+  if (!room.isDraft) scheduleRoomList(io);
 }
 
 /**
@@ -969,7 +991,7 @@ export function setupSocketHandlers(io: Server): void {
       const isSpectator = room.spectators.has(socket.id) || !roomManager.seatOf(room, tokenUser.userId);
       const message = await buildRoomChatMessage(tokenUser.userId, socket.id, content, isSpectator);
       rememberChatMessage(room.chat, message);
-      io.to(roomId).emit("chatMessage", message);
+      io.to(roomId).emit("chatMessage", { roomId, ...message });
     });
 
     // ==========================================================================
@@ -1069,6 +1091,10 @@ export function setupSocketHandlers(io: Server): void {
         const parsed = parsePayload(socketSchemas.roomRef, payload);
         if (!parsed.ok) { socket.emit("error", { message: parsed.error }); return; }
         const { roomId } = parsed.data;
+        if (!allowSpectate(socket.id)) {
+          socket.emit("error", SPECTATE_RATE_LIMITED);
+          return;
+        }
         const room = roomManager.addSpectator(roomId, socket.id, userId);
 
         if (!room?.gameState) {
@@ -1106,7 +1132,7 @@ export function setupSocketHandlers(io: Server): void {
         announceSpectators(io, room);
         console.log(`👁️ Spectator ${userId} watches room ${roomId} (${roomManager.spectatorCount(room)} watching)`);
       } catch (error) {
-        if (error instanceof SeatedSpectatorError) {
+        if (error instanceof SeatedSpectatorError || error instanceof PrivateTableError) {
           socket.emit("error", { code: error.code, message: error.message });
           return;
         }
@@ -1150,6 +1176,7 @@ export function setupSocketHandlers(io: Server): void {
       }
 
       // Rooms it watched: one spectator less
+      forgetSpectateSocket(socket.id);
       for (const watchedId of roomManager.removeSpectatorSocket(socket.id)) {
         const watched = roomManager.getRoom(watchedId);
         if (watched) announceSpectators(io, watched);

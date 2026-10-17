@@ -29,6 +29,21 @@ const CHAT_WINDOW_MS = 10_000;
 const CHAT_MAX_PER_WINDOW = 8;
 const chatTimestamps = new Map<string, number[]>();
 
+/** Forget the users who haven't written within the window (the map would only grow otherwise). */
+export function pruneChatTimestamps(now = Date.now()): void {
+  for (const [userId, times] of chatTimestamps) {
+    if (times.length === 0 || now - times[times.length - 1] >= CHAT_WINDOW_MS) chatTimestamps.delete(userId);
+  }
+}
+
+/** Users the flood control currently remembers (tests). */
+export function chatFloodEntryCount(): number {
+  return chatTimestamps.size;
+}
+
+const pruneTimer = setInterval(() => pruneChatTimestamps(), 60_000);
+pruneTimer.unref?.();
+
 /** Whether `userId` may send another chat message now (and count it). */
 export function allowChatMessage(userId: string): boolean {
   const now = Date.now();

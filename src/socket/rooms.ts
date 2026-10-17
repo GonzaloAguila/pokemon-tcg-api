@@ -179,6 +179,23 @@ export class SeatedSpectatorError extends Error {
   }
 }
 
+/** spectateRoom on a friendly or reserved (invite) table: only public tables can be watched. */
+export class PrivateTableError extends Error {
+  readonly code = "PRIVATE_TABLE";
+  constructor() {
+    super("Esta mesa es privada: no se puede mirar");
+    this.name = "PrivateTableError";
+  }
+}
+
+/**
+ * Whether anyone may watch this table: not friendly, not reserved for one opponent. Draft games
+ * can always be watched (the draft's players and spectators follow its tournament).
+ */
+export function isPublicTable(room: GameRoom): boolean {
+  return !!room.isDraft || (!room.config.friendly && !room.config.reservedUserId);
+}
+
 /** joinRoom on a room that doesn't exist (finished, deleted, or lost in an API restart). */
 export class RoomNotFoundError extends Error {
   readonly code = "ROOM_NOT_FOUND";
@@ -2458,13 +2475,15 @@ export class GameRoomManager {
   /**
    * Watch a game in progress (status "playing"): the spectator gets the neutral masked state
    * (no hands, decks or prizes) and the room chat, and may only chat. A player of the room
-   * can't watch it (SeatedSpectatorError: they rejoin their seat instead). Returns null when the
-   * room doesn't exist or isn't being played.
+   * can't watch it (SeatedSpectatorError: they rejoin their seat instead), nor anyone a private
+   * table (PrivateTableError: friendly / reserved). Returns null when the room doesn't exist or
+   * isn't being played.
    */
   addSpectator(roomId: string, socketId: string, userId: string): GameRoom | null {
     const room = this.rooms.get(roomId);
     if (!room || room.status !== "playing") return null;
     if (this.seatOf(room, userId)) throw new SeatedSpectatorError();
+    if (!isPublicTable(room)) throw new PrivateTableError();
     room.spectators.set(socketId, userId);
     return room;
   }

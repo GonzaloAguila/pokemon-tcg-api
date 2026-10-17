@@ -17,6 +17,7 @@ import { clearAccountStateCache } from "../src/lib/account-state.js";
 import { roomManager } from "../src/socket/handlers.js";
 import { draftRoomManager } from "../src/socket/draft-handlers.js";
 import { maskGameStateForPlayer } from "../src/socket/state-masking.js";
+import { chatFloodEntryCount, pruneChatTimestamps } from "../src/socket/room-chat.js";
 import { createUser } from "./helpers.js";
 import { nextEvent, startSocketServer, tokenFor } from "./socket-helpers.js";
 
@@ -64,12 +65,18 @@ function arrives(socket: ClientSocket, event: string, ms = 400): Promise<boolean
   );
 }
 
-/** A friendly table in progress: two players with theme decks. */
-async function startTable() {
+/** A public table in progress (`friendly` / `reserve`: a private one): two players with theme decks. */
+async function startTable(options: { friendly?: boolean; reserve?: boolean } = {}) {
   const [p1, p2] = await Promise.all([createUser({}, { stats: true }), createUser({}, { stats: true })]);
   const s1 = await server.connect(tokenFor(p1));
   const s2 = await server.connect(tokenFor(p2));
-  s1.emit("createRoom", { deckId: "brushfire", prizeCount: 6, betAmount: 0, friendly: true });
+  s1.emit("createRoom", {
+    deckId: "brushfire",
+    prizeCount: 6,
+    betAmount: 0,
+    friendly: options.friendly ?? false,
+    ...(options.reserve ? { reservedUserId: p2.id } : {}),
+  });
   const { roomId } = await nextEvent<{ roomId: string }>(s1, "roomCreated");
   const started1 = nextEvent(s1, "gameStart");
   const started2 = nextEvent(s2, "gameStart");
@@ -100,6 +107,7 @@ describe("watching a table", () => {
     const { start, history } = await spectate(sv, t.roomId);
 
     expect(start).toMatchObject({ roomId: t.roomId, isSpectator: true, isPlayer1: true, spectatorCount: 1, draftRoomId: null });
+    expect((await lobbyHears).rooms.find((r: any) => r.id === t.roomId).watchable).toBe(true);
     expect(start.creatorInfo.username).toBe(t.p1.username);
     expect(start.opponentInfo.username).toBe(t.p2.username);
     const state = start.gameState;
@@ -172,7 +180,7 @@ describe("watching a table", () => {
     const p2Reads = nextEvent<any>(t.s2, "chatMessage");
     sv.emit("chatMessage", { roomId: t.roomId, message: { content: "¡buena jugada!" } });
     for (const msg of [await p1Reads, await p2Reads]) {
-      expect(msg).toMatchObject({ userId: viewer.id, username: viewer.username, content: "¡buena jugada!", isSpectator: true });
+      expect(msg).toMatchObject({ roomId: t.roomId, userId: viewer.id, username: viewer.username, content: "¡buena jugada!", isSpectator: true });
     }
 
     const viewerReads = waitFor<any>(sv, "chatMessage", (m) => m.content === "gracias");
@@ -204,6 +212,44 @@ describe("watching a table", () => {
     viewer.emit("spectateRoom", { roomId: "NOPE00" });
     expect((await missing).code).toBe("ROOM_NOT_FOUND");
     expect(roomManager.spectatorCount(roomManager.getRoom(t.roomId)!)).toBe(0);
+  });
+
+  it("friendly and reserved (invite) tables can't be watched and aren't watchable in the list", async () => {
+    for (const options of [{ friendly: true }, { reserve: true }]) {
+      const t = await startTable(options);
+      const sv = await server.connect(tokenFor(await createUser()));
+      const refused = nextEvent<any>(sv, "error");
+      sv.emit("spectateRoom", { roomId: t.roomId });
+      expect(await refused).toEqual({ code: "PRIVATE_TABLE", message: "Esta mesa es privada: no se puede mirar" });
+      expect(roomManager.spectatorCount(roomManager.getRoom(t.roomId)!)).toBe(0);
+      const list = nextEvent<any>(sv, "roomList");
+      sv.emit("getRooms");
+      expect((await list).rooms.find((r: any) => r.id === t.roomId).watchable).toBe(false);
+    }
+  });
+
+  it("watching is throttled per socket and the lobby list follows spectators at most once a second", async () => {
+    const t = await startTable();
+    const sv = await server.connect(tokenFor(await createUser()));
+    const lobby = await server.connect(tokenFor(await createUser()));
+    let lists = 0;
+    lobby.on("roomList", () => lists++);
+    for (let i = 0; i < 5; i++) {
+      await spectate(sv, t.roomId);
+      sv.emit("stopSpectating", { roomId: t.roomId });
+    }
+    const refused = nextEvent<any>(sv, "error");
+    sv.emit("spectateRoom", { roomId: t.roomId });
+    expect((await refused).code).toBe("SPECTATE_RATE_LIMITED");
+    await sleep(1300);
+    expect(lists).toBeGreaterThan(0);
+    expect(lists).toBeLessThanOrEqual(2);
+    expect(roomManager.spectatorCount(roomManager.getRoom(t.roomId)!)).toBe(0);
+  });
+
+  it("the chat flood control forgets users who stopped writing", () => {
+    pruneChatTimestamps(Date.now() + 60_000);
+    expect(chatFloodEntryCount()).toBe(0);
   });
 
   it("a spectator who disconnects is no longer counted", async () => {

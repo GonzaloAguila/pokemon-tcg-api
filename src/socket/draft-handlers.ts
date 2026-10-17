@@ -9,6 +9,7 @@ import type { Server, Socket } from "socket.io";
 import type { z } from "zod";
 import { DraftMemberError, DraftRoomManager, catalogIdOf, type DraftClosedInfo, type DraftPlayer, type DraftRoom } from "./draft-rooms.js";
 import { allowChatMessage, buildRoomChatMessage, rememberChatMessage } from "./room-chat.js";
+import { SPECTATE_RATE_LIMITED, allowSpectate } from "./spectate-limit.js";
 import { GameRoomManager } from "./rooms.js";
 import { maskRoomState } from "./room-state.js";
 import { prisma } from "../lib/prisma.js";
@@ -75,14 +76,22 @@ function broadcastDraftState(io: Server, roomId: string): void {
 
 /** The last "En curso" draft list sent to the lobbies (only re-sent when it changes). */
 let lastLiveDrafts = "";
+let pendingLiveDrafts: ReturnType<typeof setTimeout> | null = null;
+/** Picks and spectators change it often: the lobbies get it at most once per this (trailing). */
+const LIVE_DRAFTS_DELAY_MS = 1000;
 
-/** draft:liveRooms: the drafts being played, to every client, when the list changed. */
+/** draft:liveRooms: the drafts being played, to every client, when the list changed (throttled). */
 function broadcastLiveDrafts(io: Server): void {
-  const live = draftRoomManager.getLiveRooms();
-  const signature = JSON.stringify(live);
-  if (signature === lastLiveDrafts) return;
-  lastLiveDrafts = signature;
-  io.emit("draft:liveRooms", live);
+  if (pendingLiveDrafts) return;
+  pendingLiveDrafts = setTimeout(() => {
+    pendingLiveDrafts = null;
+    const live = draftRoomManager.getLiveRooms();
+    const signature = JSON.stringify(live);
+    if (signature === lastLiveDrafts) return;
+    lastLiveDrafts = signature;
+    io.emit("draft:liveRooms", live);
+  }, LIVE_DRAFTS_DELAY_MS);
+  pendingLiveDrafts.unref?.();
 }
 
 /**
@@ -474,6 +483,10 @@ export function registerDraftEvents(
       if (!userId) return;
       const data = parseDraft(socket, draftSchemas.roomRef, payload);
       if (!data) return;
+      if (!allowSpectate(socket.id)) {
+        socket.emit("draft:error", SPECTATE_RATE_LIMITED);
+        return;
+      }
       const account = await prisma.user.findUnique({ where: { id: userId }, select: { username: true } });
       if (!account) {
         socket.emit("draft:error", { message: "Solicitud inválida" });
