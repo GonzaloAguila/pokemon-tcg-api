@@ -4,8 +4,8 @@
  * Manages multiplayer booster draft rooms: lobby, drafting (pick & rotate),
  * deck building, and match pairing phases.
  *
- * Draft packs include Pokemon + Trainers + Double Colorless Energy (Jungle and Fossil packs
- * come without Trainers: those come in the Trainers pack, from the sets the admin chose).
+ * Draft packs include Pokemon + Double Colorless Energy. No set pack (nor a mixed one) holds a
+ * Trainer: Trainers only come in the Trainers pack, from the sets the admin chose.
  * Basic energy is excluded (players add unlimited basic energy during deck building).
  */
 
@@ -36,8 +36,6 @@ export const DRAFT_PACK_SETS: readonly [DraftPackSet, ...DraftPackSet[]] = [
 ];
 /** Every set id, in registry order. */
 export const CARD_SET_IDS = CARD_SETS.map((set) => set.id) as [CardSetId, ...CardSetId[]];
-/** Set packs that come without Trainers in a draft (their Trainers only come in the Trainers pack). */
-export const SETS_WITHOUT_TRAINERS_IN_DRAFT: readonly CardSetId[] = ["jungle", "fossil"];
 
 export type DraftConfig = {
   maxPlayers: number; // 2-8
@@ -319,11 +317,13 @@ function rarityPools(cards: readonly Card[]) {
 
 const setNameOf = (setId: CardSetId): string | undefined => CARD_SETS.find((set) => set.id === setId)?.name;
 
-/** The cards a single-set draft pack is opened from (Jungle and Fossil without their Trainers). */
+/** Every draft card but the Trainers: what set packs and mixed packs are opened from. */
+export const nonTrainerPool: readonly Card[] = draftPool.filter((c) => c.kind !== "trainer");
+
+/** The cards a single-set draft pack is opened from (no Trainers: they come in the Trainers pack). */
 export function setPackPool(setId: CardSetId): readonly Card[] {
   const name = setNameOf(setId);
-  const withoutTrainers = SETS_WITHOUT_TRAINERS_IN_DRAFT.includes(setId);
-  return draftPool.filter((c) => c.set === name && !(withoutTrainers && c.kind === "trainer"));
+  return nonTrainerPool.filter((c) => c.set === name);
 }
 
 /** The Trainers of `trainerSets` (the Trainers pack's cards). */
@@ -333,7 +333,7 @@ export function trainerPackPool(trainerSets: readonly CardSetId[]): readonly Car
 }
 
 const poolsByPackSet = new Map<DraftPackSet, ReturnType<typeof rarityPools>>([
-  [MIXED_PACK, rarityPools(draftPool)],
+  [MIXED_PACK, rarityPools(nonTrainerPool)],
   ...CARD_SETS.map((set) => [set.id, rarityPools(setPackPool(set.id))] as const),
 ]);
 const trainerPoolsByKey = new Map<string, ReturnType<typeof rarityPools>>();
@@ -377,14 +377,18 @@ export function normalizeTrainerSets(trainerSets: readonly CardSetId[] | undefin
 }
 
 /**
- * Bonus picks come from what the draft was played with: every card if any pack was mixed,
- * else the cards of the chosen sets' packs plus the Trainers pack's cards if one was opened.
+ * Bonus picks come from what the draft was played with: every non-Trainer card if any pack was
+ * mixed (or none was chosen), else the cards of the chosen sets' packs; plus the Trainers pack's
+ * cards if one was opened.
  */
 export function bonusPoolFor(packSets: readonly DraftPackSet[], trainerSets?: readonly CardSetId[]): readonly Card[] {
-  if (packSets.length === 0 || packSets.includes(MIXED_PACK)) return draftPool;
   const cards = new Set<Card>();
-  for (const id of CARD_SET_IDS) {
-    if (packSets.includes(id)) for (const card of setPackPool(id)) cards.add(card);
+  if (packSets.length === 0 || packSets.includes(MIXED_PACK)) {
+    for (const card of nonTrainerPool) cards.add(card);
+  } else {
+    for (const id of CARD_SET_IDS) {
+      if (packSets.includes(id)) for (const card of setPackPool(id)) cards.add(card);
+    }
   }
   if (packSets.includes(TRAINERS_PACK)) {
     for (const card of trainerPackPool(trainerSets ?? participatingSets(packSets))) cards.add(card);

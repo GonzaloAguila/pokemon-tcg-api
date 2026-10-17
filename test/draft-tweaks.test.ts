@@ -185,7 +185,7 @@ describe("draft:editDeck over sockets", () => {
   });
 });
 
-describe("Jungle and Fossil draft packs come without Trainers", () => {
+describe("draft set packs come without Trainers", () => {
   it("their packs never hold a Trainer, keep their size, have no repeats and bring a rare", () => {
     for (const setId of ["jungle", "fossil"] as const) {
       expect(setPackPool(setId).some((c) => c.kind === "trainer")).toBe(false);
@@ -202,10 +202,16 @@ describe("Jungle and Fossil draft packs come without Trainers", () => {
     }
   });
 
-  it("Base Set, Team Rocket and Gym Heroes packs keep their Trainers", () => {
+  it("no set pack and no mixed pack holds a Trainer: they only come in the Trainers pack", () => {
     for (const setId of ["base-set", "team-rocket", "gym-heroes"] as const) {
-      expect(setPackPool(setId).some((c) => c.kind === "trainer")).toBe(true);
+      expect(setPackPool(setId).length).toBeGreaterThan(0);
+      expect(setPackPool(setId).some((c) => c.kind === "trainer")).toBe(false);
     }
+    for (let i = 0; i < 30; i++) {
+      expect(generatePack(11, "mixed").filter((c) => c.kind === "trainer")).toEqual([]);
+      expect(generatePack(11, "base-set").filter((c) => c.kind === "trainer")).toEqual([]);
+    }
+    expect(generatePack(11, "trainers").every((c) => c.kind === "trainer")).toBe(true);
   });
 
   it("bonus picks of a Jungle/Fossil draft without a Trainers pack hold no Trainer", () => {

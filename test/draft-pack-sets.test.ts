@@ -84,15 +84,18 @@ describe("draft pack sets", () => {
     const pool = bonusPoolFor(["jungle", "trainers"]);
     expect(pool.every((c) => c.set === "Jungle")).toBe(true);
     expect(pool.filter((c) => c.kind === "trainer").map((c) => c.name)).toEqual(["Poké Ball"]);
+    // A mixed pack: every non-Trainer card, plus the Trainers pack's (the chosen sets' Trainers)
     const chosen = bonusPoolFor(["jungle", "mixed", "trainers"], ["base-set", "gym-heroes"]);
-    expect(chosen).toBe(draftPool); // a mixed pack: every card
+    expect(chosen.filter((c) => c.kind !== "trainer")).toEqual(draftPool.filter((c) => c.kind !== "trainer"));
+    expect(new Set(chosen.filter((c) => c.kind === "trainer").map((c) => c.set))).toEqual(new Set(["Base Set", "Gym Heroes"]));
     const withBase = bonusPoolFor(["jungle", "base-set", "trainers"], ["base-set"]);
     expect(withBase.filter((c) => c.kind === "trainer").every((c) => c.set === "Base Set")).toBe(true);
   });
 
   it("bonus picks come from the sets the draft used (all of them when a pack was mixed)", () => {
     expect(new Set(bonusPoolFor(["fossil", "jungle", "fossil"]).map((c) => c.set))).toEqual(new Set(["Fossil", "Jungle"]));
-    expect(bonusPoolFor(["fossil", "mixed"])).toBe(draftPool);
+    // A mixed pack without a Trainers pack: every card but the Trainers
+    expect(bonusPoolFor(["fossil", "mixed"])).toEqual(draftPool.filter((c) => c.kind !== "trainer"));
   });
 
   it("packSets are padded/trimmed to the pack count and validated", () => {
