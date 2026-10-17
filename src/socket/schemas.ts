@@ -8,6 +8,7 @@
  */
 import { z } from "zod";
 import { CARD_SET_IDS, DRAFT_PACK_SETS } from "./draft-rooms.js";
+import { draftRewardsError, draftRewardsSchema } from "./draft-rewards.js";
 
 // ---------------------------------------------------------------------------
 // Primitives
@@ -65,6 +66,8 @@ export type ParseResult<T> = { ok: true; data: T } | { ok: false; error: string 
 
 function describeIssue(error: z.ZodError): string {
   const issue = error.issues[0];
+  // Refinements written for the player (params.forPlayer: draft prizes) reach them as is
+  if (issue?.code === z.ZodIssueCode.custom && issue.params?.forPlayer) return issue.message;
   const path = issue?.path.length ? issue.path.join(".") : "payload";
   return `Datos inválidos (${path})`;
 }
@@ -146,6 +149,11 @@ const draftConfig = z.object({
   minDeckSize: z.number().int().min(20).max(60).optional(),
   entryFee: z.number().int().min(0).max(10_000).optional(),
   adminPlays: z.boolean().optional(),
+  /** Admin prizes on top of the entry-fee pool (draft-rewards.ts); places must exist in this draft */
+  rewards: draftRewardsSchema.optional(),
+}).superRefine((config, ctx) => {
+  const error = config.rewards && draftRewardsError(config.rewards, config.maxPlayers ?? 8);
+  if (error) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["rewards"], message: error, params: { forPlayer: true } });
 });
 
 export const draftSchemas = {

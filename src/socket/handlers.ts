@@ -20,6 +20,7 @@ import {
   announceDraftResult,
 } from "./draft-handlers.js";
 import { registerTradeEvents } from "./trade-handlers.js";
+import { draftGameWasPlayed } from "./draft-rewards.js";
 import { InsufficientStakeError, betIneligibilityReason } from "../modules/matches/matches.service.js";
 import { ECONOMY } from "../modules/economy/config.js";
 import { openRoomMatch, roomMatchMode, settleRoomResult } from "./match-settlement.js";
@@ -307,6 +308,7 @@ function reportDraftGame(io: Server, roomId: string, winner: PlayerKey | null, f
     winnerId,
     loserId,
     roomId,
+    draftGameWasPlayed(roomManager.getRoom(roomId)?.gameState),
   );
   announceDraftResult(io, draftInfo.draftRoomId, { gameRoomId: roomId, winnerId, loserId, forfeit }, progress, roomManager);
 }

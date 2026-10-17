@@ -21,6 +21,7 @@ import {
 import type { Card, CardSetId, GameCard } from "@gonzaloaguila/game-core";
 import { ECONOMY } from "../modules/economy/config.js";
 import type { RoomChatMessage } from "./room-chat.js";
+import { draftRewardExclusions, rewardsForPosition, type DraftRewardGrant, type DraftRewardTier } from "./draft-rewards.js";
 
 // ============================================================================
 // Types
@@ -54,6 +55,8 @@ export type DraftConfig = {
   minDeckSize: number; // default 40
   entryFee: number; // 0 = free, default 2000
   adminPlays: boolean; // if true, admin takes seat 0 and plays (doesn't pay)
+  /** Prizes the admin set on top of the entry-fee pool: every finisher and given places (draft-rewards.ts). */
+  rewards: DraftRewardTier[];
 };
 
 export type DraftPhase =
@@ -130,6 +133,10 @@ export type DraftRoom = {
   /** Set when the tournament ends: each final position and its coins (paid once: prizesPaid). */
   prizes: DraftPrize[] | null;
   prizesPaid: boolean;
+  /** The admin-log row written when the room was created with prizes (draft-payout.ts logDraftRewards). */
+  rewardsLogId: string | null;
+  /** Prizes whose payout failed, retried with backoff while the room lives (draft-payout.ts). */
+  unpaidPrizes: DraftPrize[];
   /** Removes a finished room after FINISHED_ROOM_TTL_MS, or a lobby nobody is in after EMPTY_LOBBY_TTL_MS. */
   expiryTimer: ReturnType<typeof setTimeout> | null;
   /** draft:start is charging the entry fees: nobody new may sit down meanwhile. */
@@ -151,6 +158,8 @@ export type DraftPrize = {
   position: number;
   coins: number;
   withdrawn: boolean;
+  /** The admin's prizes for this player (config.rewards: "all" + their place), on top of `coins`. */
+  rewards: DraftRewardGrant;
 };
 
 /** Masked player visible to other players (hides pack & specific cards) */
@@ -185,6 +194,8 @@ export type MatchResult = {
   isBye: boolean;
   /** Not played: a player had left the tournament (both of them when winnerId is null). */
   walkover: boolean;
+  /** false: the game never left the opening (a player never showed up); no admin prizes for it. */
+  played?: boolean;
   gameRoomId: string | null;
 };
 
@@ -632,6 +643,7 @@ export class DraftRoomManager {
       minDeckSize: config.minDeckSize ?? 40,
       entryFee: config.entryFee ?? 2000,
       adminPlays: config.adminPlays ?? false,
+      rewards: config.rewards ?? [],
     };
 
     const players: DraftPlayer[] = [];
@@ -677,6 +689,8 @@ export class DraftRoomManager {
       prizePool: 0,
       prizes: null,
       prizesPaid: false,
+      rewardsLogId: null,
+      unpaidPrizes: [],
       expiryTimer: null,
       starting: false,
       spectators: new Map(),
@@ -1850,6 +1864,8 @@ export class DraftRoomManager {
     winnerId: string | null,
     loserId: string | null,
     gameRoomId: string,
+    /** false: the game never left the opening (draftGameWasPlayed); it counts, but not for the admin's prizes */
+    played = true,
   ): TournamentProgress {
     const room = this.rooms.get(draftRoomId);
     const round = room?.tournament?.rounds.find((r) => r.roundNumber === roundNumber);
@@ -1860,6 +1876,7 @@ export class DraftRoomManager {
     }
 
     this.recordResult(room, round, pairing, winnerId, false, gameRoomId);
+    if (!played) round.results[round.results.length - 1].played = false;
 
     const nameOf = (id: string | null) => room.players.find((p) => p.id === id)?.name ?? "?";
     room.events.push(
@@ -2001,7 +2018,11 @@ export class DraftRoomManager {
     const tournament = room.tournament!;
     this.sortStandings(tournament);
     room.phase = "finished";
-    room.prizes = computeDraftPrizes(tournament.standings, room.prizePool);
+    const excluded = draftRewardExclusions(tournament.standings, tournament.rounds.flatMap((r) => r.results), room.adminId);
+    room.prizes = computeDraftPrizes(tournament.standings, room.prizePool).map((prize) => ({
+      ...prize,
+      rewards: rewardsForPosition(room.config.rewards, prize.position, excluded.has(prize.playerId)),
+    }));
     const champion = tournament.standings[0];
     room.events.push(
       this.createEvent("system", champion ? `¡Torneo finalizado! Campeón: ${champion.playerName}` : "¡Torneo finalizado!"),
@@ -2067,7 +2088,7 @@ export function computeDraftPrizes(
   standings: readonly PlayerStanding[],
   pool: number,
   splits: readonly { minPlayers: number; percents: readonly number[] }[] = ECONOMY.draft.prizeSplit,
-): DraftPrize[] {
+): Omit<DraftPrize, "rewards">[] {
   const percents = splits.find((s) => standings.length >= s.minPlayers)?.percents ?? [];
   const shares = percents.slice(0, standings.filter((s) => !s.withdrawn).length);
   const totalShare = shares.reduce((sum, share) => sum + share, 0);

@@ -58,6 +58,9 @@ function tournament(names: string[], entryFee = 0) {
   return { manager, room, finished, playRound, registerRound };
 }
 
+/** No admin prizes configured (config.rewards: []). */
+const noRewards = { coins: 0, packs: [], items: [] };
+
 const standing = (room: DraftRoom, id: string) => room.tournament!.standings.find((s) => s.playerId === id)!;
 
 describe("byes", () => {
@@ -114,8 +117,8 @@ describe("withdrawing", () => {
     expect(room.phase).toBe("finished");
     expect(finished).toEqual([room]);
     expect(room.prizes).toEqual([
-      { playerId: "p1", playerName: "Beto", position: 1, coins: 5000, withdrawn: false },
-      { playerId: "p0", playerName: "Ana", position: 2, coins: 0, withdrawn: true },
+      { playerId: "p1", playerName: "Beto", position: 1, coins: 5000, withdrawn: false, rewards: noRewards },
+      { playerId: "p0", playerName: "Ana", position: 2, coins: 0, withdrawn: true, rewards: noRewards },
     ]);
   });
 

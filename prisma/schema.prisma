@@ -545,7 +545,7 @@ model UserPack {
   id           String    @id @default(uuid())
   userId       String
   packId       String? // fixed booster id, or null = the player picks any standard booster
-  source       String // "welcome" | "first_steps" | "login_calendar" | "weekly_mission" | "battle_pass" | "tutorial"
+  source       String // "welcome" | "first_steps" | "login_calendar" | "weekly_mission" | "battle_pass" | "tutorial" | "draft_prize"
   createdAt    DateTime  @default(now())
   openedAt     DateTime?
   openedPackId String?
