@@ -27,3 +27,14 @@ export function canManageDraftRooms(account: { role: string; permissions: unknow
     account.permissions.includes(ADMIN_PERMISSIONS.ROOMS_CLOSE)
   );
 }
+
+/** Draft prizes (coins, packs, cosmetics) are economy grants: superadmin or admins with users:economy. */
+export function canGrantDraftRewards(account: { role: string; permissions: unknown } | null): boolean {
+  if (!account) return false;
+  if (account.role === "superadmin") return true;
+  return (
+    account.role === "admin" &&
+    Array.isArray(account.permissions) &&
+    account.permissions.includes(ADMIN_PERMISSIONS.USERS_EDIT_ECONOMY)
+  );
+}

@@ -20,7 +20,7 @@ import {
 } from "@gonzaloaguila/game-core";
 import type { Card, CardSetId, GameCard } from "@gonzaloaguila/game-core";
 import { ECONOMY } from "../modules/economy/config.js";
-import { rewardsForPosition, type DraftRewardGrant, type DraftRewardTier } from "./draft-rewards.js";
+import { draftRewardExclusions, rewardsForPosition, type DraftRewardGrant, type DraftRewardTier } from "./draft-rewards.js";
 
 // ============================================================================
 // Types
@@ -132,6 +132,10 @@ export type DraftRoom = {
   /** Set when the tournament ends: each final position and its coins (paid once: prizesPaid). */
   prizes: DraftPrize[] | null;
   prizesPaid: boolean;
+  /** The admin-log row written when the room was created with prizes (draft-payout.ts logDraftRewards). */
+  rewardsLogId: string | null;
+  /** Prizes whose payout failed, retried with backoff while the room lives (draft-payout.ts). */
+  unpaidPrizes: DraftPrize[];
   /** Removes a finished room after FINISHED_ROOM_TTL_MS, or a lobby nobody is in after EMPTY_LOBBY_TTL_MS. */
   expiryTimer: ReturnType<typeof setTimeout> | null;
   /** draft:start is charging the entry fees: nobody new may sit down meanwhile. */
@@ -181,6 +185,8 @@ export type MatchResult = {
   isBye: boolean;
   /** Not played: a player had left the tournament (both of them when winnerId is null). */
   walkover: boolean;
+  /** false: the game never left the opening (a player never showed up); no admin prizes for it. */
+  played?: boolean;
   gameRoomId: string | null;
 };
 
@@ -634,6 +640,8 @@ export class DraftRoomManager {
       prizePool: 0,
       prizes: null,
       prizesPaid: false,
+      rewardsLogId: null,
+      unpaidPrizes: [],
       expiryTimer: null,
       starting: false,
     };
@@ -1705,6 +1713,8 @@ export class DraftRoomManager {
     winnerId: string | null,
     loserId: string | null,
     gameRoomId: string,
+    /** false: the game never left the opening (draftGameWasPlayed); it counts, but not for the admin's prizes */
+    played = true,
   ): TournamentProgress {
     const room = this.rooms.get(draftRoomId);
     const round = room?.tournament?.rounds.find((r) => r.roundNumber === roundNumber);
@@ -1715,6 +1725,7 @@ export class DraftRoomManager {
     }
 
     this.recordResult(room, round, pairing, winnerId, false, gameRoomId);
+    if (!played) round.results[round.results.length - 1].played = false;
 
     const nameOf = (id: string | null) => room.players.find((p) => p.id === id)?.name ?? "?";
     room.events.push(
@@ -1856,9 +1867,10 @@ export class DraftRoomManager {
     const tournament = room.tournament!;
     this.sortStandings(tournament);
     room.phase = "finished";
+    const excluded = draftRewardExclusions(tournament.standings, tournament.rounds.flatMap((r) => r.results), room.adminId);
     room.prizes = computeDraftPrizes(tournament.standings, room.prizePool).map((prize) => ({
       ...prize,
-      rewards: rewardsForPosition(room.config.rewards, prize.position, prize.withdrawn),
+      rewards: rewardsForPosition(room.config.rewards, prize.position, excluded.has(prize.playerId)),
     }));
     const champion = tournament.standings[0];
     room.events.push(

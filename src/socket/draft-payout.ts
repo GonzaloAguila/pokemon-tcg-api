@@ -4,6 +4,7 @@
  * once in the DB (EconomyClaim "draft_prize"), so calling it again pays nobody twice.
  */
 import { CARD_SETS } from "@gonzaloaguila/game-core";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
 import * as usersService from "../modules/users/users.service.js";
 import type { Db } from "../modules/users/users.service.js";
@@ -21,19 +22,91 @@ export function draftPrizeClaimKey(room: Pick<DraftRoom, "id" | "createdAt">): s
   return `${room.id}:${room.createdAt.getTime()}`;
 }
 
-/** The prizes of a finished tournament (room.prizes), once per room and once per player in the DB. */
-export async function payDraftPrizes(room: DraftRoom): Promise<void> {
+/**
+ * The admin log of a draft created with prizes: who set them, for which room, every tier. There
+ * is no admin audit table; like the backoffice grants it is a SystemMessage row, sent by the admin
+ * to themselves (automatic: kept out of the backoffice's sent list). Returns its id.
+ */
+export async function logDraftRewards(room: Pick<DraftRoom, "id" | "createdAt" | "adminId" | "adminName" | "config">): Promise<string> {
+  const tiers = room.config.rewards;
+  const row = await prisma.systemMessage.create({
+    data: {
+      type: "personal",
+      title: `Draft ${room.id} creado con premios`,
+      content: `Creaste la mesa de draft **${room.id}** con ${tiers.length} ${tiers.length === 1 ? "premio" : "premios"}. Se pagan al terminar el torneo.`,
+      category: "info",
+      senderId: room.adminId,
+      recipientId: room.adminId,
+      metadata: {
+        kind: "draft_rewards",
+        draftRoomId: room.id,
+        draftCreatedAt: room.createdAt.toISOString(),
+        adminId: room.adminId,
+        tiers,
+      } as unknown as Prisma.InputJsonValue,
+    },
+    select: { id: true },
+  });
+  console.log(`[draft] Room ${room.id} created by ${room.adminName} (${room.adminId}) with prizes (log ${row.id}): ${JSON.stringify(tiers)}`);
+  return row.id;
+}
+
+/** Waits before each new try of the prizes that failed (the room lives FINISHED_ROOM_TTL_MS: 30 min). */
+export const PRIZE_RETRY_DELAYS_MS: readonly number[] = [30_000, 120_000, 600_000];
+
+/**
+ * The prizes of a finished tournament (room.prizes), once per room and once per player in the DB.
+ * Failed ones stay in room.unpaidPrizes and are tried again after each of `retryDelaysMs` while
+ * `isAlive()`; every failure is logged with what was owed, to pay by hand if they never go through.
+ */
+export async function payDraftPrizes(
+  room: DraftRoom,
+  { isAlive = () => true, retryDelaysMs = PRIZE_RETRY_DELAYS_MS }: { isAlive?: () => boolean; retryDelaysMs?: readonly number[] } = {},
+): Promise<void> {
   if (room.prizesPaid || !room.prizes) return;
   room.prizesPaid = true;
-  for (const prize of room.prizes) {
-    await payDraftPrize(room, prize).catch((err) =>
-      console.error(`[draft] Prize of ${prize.playerId} in room ${room.id} failed:`, err),
-    );
+  room.unpaidPrizes = await payEach(room, room.prizes);
+
+  for (const delay of retryDelaysMs) {
+    if (room.unpaidPrizes.length === 0) return;
+    await new Promise<void>((resolve) => setTimeout(resolve, delay).unref?.());
+    if (!isAlive()) break;
+    room.unpaidPrizes = await payEach(room, room.unpaidPrizes);
+  }
+  for (const prize of room.unpaidPrizes) {
+    console.error(`[draft] PRIZE NOT PAID (pay by hand): ${prizeLogLine(room, prize)}`);
   }
 }
 
+/** Pays each prize; returns the ones that failed. */
+async function payEach(room: DraftRoom, prizes: readonly DraftPrize[]): Promise<DraftPrize[]> {
+  const failed: DraftPrize[] = [];
+  for (const prize of prizes) {
+    try {
+      await payDraftPrize(room, prize);
+    } catch (err) {
+      failed.push(prize);
+      console.error(`[draft] Prize payout failed: ${prizeLogLine(room, prize)}`, err);
+    }
+  }
+  return failed;
+}
+
+function prizeLogLine(room: Pick<DraftRoom, "id">, prize: DraftPrize): string {
+  return JSON.stringify({
+    userId: prize.playerId,
+    roomId: room.id,
+    position: prize.position,
+    poolCoins: prize.coins,
+    rewards: prize.rewards ?? null,
+  });
+}
+
 /** One player's prize; false when there was nothing to pay or it was already paid. */
-export async function payDraftPrize(room: Pick<DraftRoom, "id" | "createdAt">, prize: DraftPrize): Promise<boolean> {
+export async function payDraftPrize(
+  room: Pick<DraftRoom, "id" | "createdAt"> & Partial<Pick<DraftRoom, "adminId" | "rewardsLogId">>,
+  prize: DraftPrize,
+): Promise<boolean> {
   const rewards: DraftRewardGrant = prize.rewards ?? { coins: 0, packs: [], items: [] };
   if (prize.withdrawn || (prize.coins <= 0 && isEmptyGrant(rewards))) return false;
   const userId = prize.playerId;
@@ -47,7 +120,7 @@ export async function payDraftPrize(room: Pick<DraftRoom, "id" | "createdAt">, p
       await usersService.addCoins(userId, prize.coins, "draft_prize", `Premio de draft: ${prize.position}° puesto`, tx);
     }
     if (rewards.coins > 0) {
-      await usersService.addCoins(userId, rewards.coins, "draft_reward", `Premio de draft: ${place} (premios del torneo)`, tx);
+      await usersService.addCoins(userId, rewards.coins, "draft_reward", `Premio de draft ${room.id}: ${place} (premios del torneo)`, tx);
     }
     for (const pack of rewards.packs) {
       const packId = boosterIdForSet(pack.setId);
@@ -65,7 +138,13 @@ export async function payDraftPrize(room: Pick<DraftRoom, "id" | "createdAt">, p
         // Automatic message (like the welcome one): sent by the recipient, not by an admin
         senderId: userId,
         recipientId: userId,
-        metadata: { draftRoomId: room.id, position: prize.position, coins: prize.coins + rewards.coins },
+        metadata: {
+          draftRoomId: room.id,
+          position: prize.position,
+          coins: prize.coins + rewards.coins,
+          // The admin who set the prizes and their log row (logDraftRewards)
+          ...(isEmptyGrant(rewards) ? {} : { grantedBy: room.adminId ?? null, rewardsLogId: room.rewardsLogId ?? null }),
+        },
       },
     });
     return true;

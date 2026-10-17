@@ -113,11 +113,11 @@ function tierCovers(tier: DraftRewardTier, position: number): boolean {
 
 /**
  * What the player at `position` wins: "all" plus their place's tier, merged (packs of a set
- * added up; a cosmetic in both only once). Players who left the tournament get nothing.
+ * added up; a cosmetic in both only once). `excluded` (see draftRewardExclusions) gets nothing.
  */
-export function rewardsForPosition(tiers: readonly DraftRewardTier[], position: number, withdrawn: boolean): DraftRewardGrant {
+export function rewardsForPosition(tiers: readonly DraftRewardTier[], position: number, excluded: boolean): DraftRewardGrant {
   const grant: DraftRewardGrant = { coins: 0, packs: [], items: [] };
-  if (withdrawn) return grant;
+  if (excluded) return grant;
   for (const tier of tiers) {
     if (!tierCovers(tier, position)) continue;
     grant.coins += tier.coins ?? 0;
@@ -135,4 +135,31 @@ export function rewardsForPosition(tiers: readonly DraftRewardTier[], position: 
 
 export function isEmptyGrant(grant: DraftRewardGrant | null | undefined): boolean {
   return !grant || (grant.coins <= 0 && grant.packs.length === 0 && grant.items.length === 0);
+}
+
+/** A draft game counts as played once it left the opening (both players got ready): turn 1+. */
+export function draftGameWasPlayed(gameState: { turnNumber?: number } | null | undefined): boolean {
+  return (gameState?.turnNumber ?? 0) >= 1;
+}
+
+type ResultLike = { player1Id: string; player2Id: string; isBye: boolean; walkover: boolean; played?: boolean };
+
+/**
+ * Who gets none of the admin's prizes (every tier, "all" and places): players who left, the
+ * creating admin's own seat (adminPlays), and players without one real game (only byes,
+ * walkovers or games that never left the opening: AFK accounts). The entry-fee pool split
+ * doesn't change.
+ */
+export function draftRewardExclusions(
+  players: readonly { playerId: string; withdrawn: boolean }[],
+  results: readonly ResultLike[],
+  adminId: string,
+): Set<string> {
+  const played = new Set<string>();
+  for (const r of results) {
+    if (r.isBye || r.walkover || r.played === false) continue;
+    played.add(r.player1Id);
+    played.add(r.player2Id);
+  }
+  return new Set(players.filter((p) => p.withdrawn || p.playerId === adminId || !played.has(p.playerId)).map((p) => p.playerId));
 }

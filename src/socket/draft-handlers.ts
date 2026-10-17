@@ -17,11 +17,12 @@ import { lockUsers } from "../modules/users/xp.service.js";
 import { draftSchemas, parsePayload } from "./schemas.js";
 import { requireSocketUser } from "./session-guard.js";
 import { openRoomMatch, settleRoomResult } from "./match-settlement.js";
-import { canManageDraftRooms } from "../modules/admin/permissions.js";
+import { canGrantDraftRewards, canManageDraftRooms } from "../modules/admin/permissions.js";
 import { ECONOMY } from "../modules/economy/config.js";
 import { titleIdFromStats } from "../modules/users/titles.js";
 import type { TournamentProgress } from "./draft-rooms.js";
-import { payDraftPrizes } from "./draft-payout.js";
+import { logDraftRewards, payDraftPrizes } from "./draft-payout.js";
+import { draftGameWasPlayed } from "./draft-rewards.js";
 
 /**
  * Time a player has to show up in a draft game created for them. The next round's games are
@@ -392,7 +393,9 @@ export function registerDraftEvents(
     },
     onFinished: (room) => {
       creditDraftedCards(room).catch((err) => console.error("[draft] credit failed:", err));
-      payDraftPrizes(room).catch((err) => console.error("[draft] prizes failed:", err));
+      payDraftPrizes(room, { isAlive: () => draftRoomManager.getRoom(room.id) === room }).catch((err) =>
+        console.error("[draft] prizes failed:", err),
+      );
     },
   });
 
@@ -444,6 +447,12 @@ export function registerDraftEvents(
           return;
         }
 
+        // Prizes are economy grants: only admins who may change balances set them
+        if (config?.rewards?.length && !canGrantDraftRewards(user)) {
+          socket.emit("draft:error", { message: "No tienes permiso para dar premios" });
+          return;
+        }
+
         const name = user.username;
         const room = draftRoomManager.createRoom(
           config ?? {},
@@ -451,6 +460,16 @@ export function registerDraftEvents(
           socket.id,
           name,
         );
+        if (room.config.rewards.length > 0) {
+          // The admin log of these prizes comes first: a room whose prizes can't be logged isn't opened
+          try {
+            room.rewardsLogId = await logDraftRewards(room);
+          } catch (err) {
+            console.error(`[draft] Could not log the prizes of room ${room.id}:`, err);
+            draftRoomManager.deleteRoom(room.id, userId, true);
+            throw new Error("No se pudieron registrar los premios del draft");
+          }
+        }
 
         socket.join(room.id);
         socket.emit("draft:created", { roomId: room.id });
@@ -776,6 +795,7 @@ export function registerDraftEvents(
           winnerId,
           loserId,
           gameRoomId,
+          draftGameWasPlayed(gameRoomManager.getRoom(gameRoomId)?.gameState),
         );
         // The forfeiter loses the game (the room was checked to be still playing above)
         endDraftGame(io, gameRoomManager, gameRoomId, winnerId, `${forfeitingPlayer.name} abandonó la partida`);

@@ -4,12 +4,13 @@
  * the tournament: coins with a transaction row, packs in "Mis sobres", cosmetics, a message,
  * exactly once per player even when it runs again or concurrently.
  */
+import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "../src/lib/prisma.js";
 import { clearAccountStateCache } from "../src/lib/account-state.js";
 import { draftSchemas, parsePayload } from "../src/socket/schemas.js";
 import { DraftRoomManager, type DraftRoom } from "../src/socket/draft-rooms.js";
-import { rewardsForPosition, type DraftRewardTier } from "../src/socket/draft-rewards.js";
+import { draftGameWasPlayed, draftRewardExclusions, rewardsForPosition, type DraftRewardTier } from "../src/socket/draft-rewards.js";
 import { payDraftPrize, payDraftPrizes } from "../src/socket/draft-payout.js";
 import { draftRoomManager } from "../src/socket/draft-handlers.js";
 import { createUser, getBalances } from "./helpers.js";
@@ -94,6 +95,27 @@ describe("who gets what", () => {
   });
 });
 
+describe("who counts for the admin's prizes", () => {
+  it("a game counts once it left the opening (turn 1); a no-show's game never does", () => {
+    expect(draftGameWasPlayed({ turnNumber: 0 })).toBe(false);
+    expect(draftGameWasPlayed(null)).toBe(false);
+    expect(draftGameWasPlayed({ turnNumber: 1 })).toBe(true);
+  });
+
+  it("excludes who left, the admin's seat and players with only byes / walkovers / unplayed games", () => {
+    const standings = ["adm", "a", "b", "c", "d", "e"].map((playerId) => ({ playerId, withdrawn: playerId === "e" }));
+    const r = (player1Id: string, player2Id: string, extra: { isBye?: boolean; walkover?: boolean; played?: boolean } = {}) => ({
+      player1Id, player2Id, isBye: false, walkover: false, ...extra,
+    });
+    const excluded = draftRewardExclusions(
+      standings,
+      [r("adm", "a"), r("b", "c", { walkover: true }), r("c", "d", { played: false }), r("b", "e"), r("d", "d", { isBye: true })],
+      "adm",
+    );
+    expect([...excluded].sort()).toEqual(["adm", "c", "d", "e"]);
+  });
+});
+
 describe("socket: only draft admins set prizes", () => {
   let server: Awaited<ReturnType<typeof startSocketServer>>;
   beforeAll(async () => {
@@ -110,14 +132,29 @@ describe("socket: only draft admins set prizes", () => {
     ps.emit("draft:create", { config: { adminPlays: false, rewards: OWNER_EXAMPLE } });
     expect((await nextEvent<{ message: string }>(ps, "draft:error")).message).toBe("Solo los administradores pueden crear salas de draft");
 
-    const admin = await createUser({}, { role: "admin", permissions: ["rooms:close"] });
+    // Running drafts (rooms:close) isn't enough: prizes are economy grants (users:economy)
+    const roomsAdmin = await createUser({}, { role: "admin", permissions: ["rooms:close"] });
+    const rs = await server.connect(tokenFor(roomsAdmin));
+    rs.emit("draft:create", { config: { adminPlays: false, rewards: OWNER_EXAMPLE } });
+    expect((await nextEvent<{ message: string }>(rs, "draft:error")).message).toBe("No tienes permiso para dar premios");
+    expect(draftRoomManager.getAllRooms().some((r) => r.adminId === roomsAdmin.id)).toBe(false);
+    rs.emit("draft:create", { config: { adminPlays: false } }); // without prizes they still can
+    const plain = await nextEvent<{ roomId: string }>(rs, "draft:created");
+    draftRoomManager.deleteRoom(plain.roomId, roomsAdmin.id, true);
+
+    const admin = await createUser({}, { role: "admin", permissions: ["rooms:close", "users:economy"] });
     const as = await server.connect(tokenFor(admin));
     as.emit("draft:create", { config: { adminPlays: false, maxPlayers: 4, rewards: [{ target: { place: 6 }, coins: 10 }] } });
     expect((await nextEvent<{ message: string }>(as, "draft:error")).message).toBe("El 6.º puesto no existe en un draft de 4 jugadores");
 
     as.emit("draft:create", { config: { adminPlays: false, entryFee: 0, rewards: OWNER_EXAMPLE } });
     const { roomId } = await nextEvent<{ roomId: string }>(as, "draft:created");
-    expect(draftRoomManager.getRoom(roomId)!.config.rewards).toEqual(OWNER_EXAMPLE);
+    const created = draftRoomManager.getRoom(roomId)!;
+    expect(created.config.rewards).toEqual(OWNER_EXAMPLE);
+    // The admin log row: who, which room, every tier
+    const log = await prisma.systemMessage.findUniqueOrThrow({ where: { id: created.rewardsLogId! } });
+    expect(log).toMatchObject({ senderId: admin.id, recipientId: admin.id, title: `Draft ${roomId} creado con premios` });
+    expect(log.metadata).toMatchObject({ kind: "draft_rewards", draftRoomId: roomId, adminId: admin.id, tiers: OWNER_EXAMPLE });
     // The lobby list shows them to everyone
     expect(draftRoomManager.getAvailableRooms().find((r) => r.id === roomId)!.config.rewards).toEqual(OWNER_EXAMPLE);
     draftRoomManager.deleteRoom(roomId, admin.id, true);
@@ -145,15 +182,23 @@ describe("payout at the end of the tournament", () => {
     await prisma.$disconnect();
   });
 
-  /** An 8-player tournament with `rewards` where the lower seat always wins; seat 7 leaves after round 1. */
-  async function playTournament(rewards: DraftRewardTier[], entryFee = 0) {
+  /**
+   * An 8-player tournament with `rewards` where the lower seat always wins; seat 7 leaves after
+   * round 1. `adminPlays`: the admin is seat 0. `noShowSeat`: every game of that seat never
+   * leaves the opening (an AFK account), though it still wins or loses them.
+   */
+  async function playTournament(
+    rewards: DraftRewardTier[],
+    entryFee = 0,
+    { adminPlays = false, noShowSeat = -1 }: { adminPlays?: boolean; noShowSeat?: number } = {},
+  ) {
     vi.spyOn(console, "log").mockImplementation(() => {});
     const admin = await createUser({}, { role: "admin" });
-    const users = await Promise.all(Array.from({ length: 8 }, () => createUser()));
+    const users = [...(adminPlays ? [admin] : []), ...(await Promise.all(Array.from({ length: adminPlays ? 7 : 8 }, () => createUser())))];
     const manager = new DraftRoomManager();
     managers.push(manager);
-    const room = manager.createRoom({ adminPlays: false, entryFee, rewards }, admin.id, "admin-sock", "Admin");
-    users.forEach((u, i) => manager.joinRoom(room.id, u.id, `s${i}`, `P${i}`));
+    const room = manager.createRoom({ adminPlays, entryFee, rewards }, admin.id, "admin-sock", "Admin");
+    users.forEach((u, i) => (adminPlays && i === 0 ? undefined : manager.joinRoom(room.id, u.id, `s${i}`, `P${i}`)));
     room.prizePool = entryFee * users.length;
     for (const p of room.players) p.deck = [];
     (manager as unknown as { startTournament(r: DraftRoom): void }).startTournament(room);
@@ -175,7 +220,8 @@ describe("payout at the end of the tournament", () => {
           .find(([, info]) => info.draftRoomId === room.id && info.roundNumber === round.roundNumber && info.matchNumber === pairing.matchNumber)?.[0];
         if (!gameRoomId) continue;
         const [w, l] = seat(pairing.player1.id) < seat(pairing.player2.id) ? [pairing.player1.id, pairing.player2.id] : [pairing.player2.id, pairing.player1.id];
-        next = manager.reportMatchResult(room.id, round.roundNumber, pairing.matchNumber, w, l, gameRoomId).newRoundStarted || next;
+        const played = seat(w) !== noShowSeat && seat(l) !== noShowSeat;
+        next = manager.reportMatchResult(room.id, round.roundNumber, pairing.matchNumber, w, l, gameRoomId, played).newRoundStarted || next;
       }
       if (next) registerRound();
     };
@@ -210,8 +256,8 @@ describe("payout at the end of the tournament", () => {
     expect((await getBalances(third.id)).coins).toBe(0);
     expect((await getBalances(left.id)).coins).toBe(0);
 
-    expect(await txOf(first.id)).toEqual([{ type: "draft_reward", amount: 1500, description: "Premio de draft: 1.º puesto (premios del torneo)" }]);
-    expect(await txOf(second.id)).toEqual([{ type: "draft_reward", amount: 1000, description: "Premio de draft: 2.º puesto (premios del torneo)" }]);
+    expect(await txOf(first.id)).toEqual([{ type: "draft_reward", amount: 1500, description: `Premio de draft ${room.id}: 1.º puesto (premios del torneo)` }]);
+    expect(await txOf(second.id)).toEqual([{ type: "draft_reward", amount: 1000, description: `Premio de draft ${room.id}: 2.º puesto (premios del torneo)` }]);
     expect(await txOf(third.id)).toEqual([]);
 
     const fixed = (packId: string, n: number) => Array.from({ length: n }, () => ({ packId, source: "draft_prize", openedAt: null }));
@@ -250,7 +296,7 @@ describe("payout at the end of the tournament", () => {
     expect(await txOf(users[0].id)).toEqual(
       expect.arrayContaining([
         { type: "draft_prize", amount: 4000, description: "Premio de draft: 1° puesto" },
-        { type: "draft_reward", amount: 300, description: "Premio de draft: 1.º puesto (premios del torneo)" },
+        { type: "draft_reward", amount: 300, description: `Premio de draft ${room.id}: 1.º puesto (premios del torneo)` },
       ]),
     );
     expect(await prisma.userPlaymat.count({ where: { userId: users[0].id, playmatId: "street" } })).toBe(1);
@@ -258,5 +304,58 @@ describe("payout at the end of the tournament", () => {
     expect(await prisma.userCardSkin.count({ where: { userId: users[2].id } })).toBe(0);
     expect(await prisma.userPlaymat.count({ where: { userId: users[6].id, playmatId: "street" } })).toBe(1);
     expect(await prisma.userPlaymat.count({ where: { userId: users[7].id } })).toBe(0);
+  });
+
+  it("adminPlays: the creating admin's seat gets its pool share but none of the admin's prizes", async () => {
+    const { room, users } = await playTournament(OWNER_EXAMPLE, 1000, { adminPlays: true });
+    const [admin, second, third] = users;
+    expect(room.prizes![0]).toMatchObject({ playerId: admin.id, position: 1, coins: 4000, rewards: { coins: 0, packs: [], items: [] } });
+    await payDraftPrizes(room);
+    expect((await getBalances(admin.id)).coins).toBe(4000);
+    expect(await packsOf(admin.id)).toEqual([]);
+    expect(await prisma.userCoin.count({ where: { userId: admin.id } })).toBe(0);
+    // The 1st place prize isn't moved to anyone: the 2nd gets the 2nd's
+    expect((await getBalances(second.id)).coins).toBe(2400 + 1000);
+    expect((await getBalances(third.id)).coins).toBe(1600);
+    expect(await prisma.userCoin.count({ where: { userId: third.id, coinId: "charizard" } })).toBe(1);
+  });
+
+  it("a player without one real game (only no-shows) gets none of the admin's prizes", async () => {
+    const { room, users } = await playTournament(OWNER_EXAMPLE, 0, { noShowSeat: 3 });
+    expect(room.prizes!.find((p) => p.playerId === users[3].id)!.rewards).toEqual({ coins: 0, packs: [], items: [] });
+    // Their opponents still played other real games
+    expect(room.prizes!.find((p) => p.playerId === users[4].id)!.rewards.items).toEqual([{ type: "coin", id: "charizard" }]);
+    await payDraftPrizes(room);
+    expect(await prisma.userCoin.count({ where: { userId: users[3].id } })).toBe(0);
+    expect(await prisma.userCoin.count({ where: { userId: users[4].id, coinId: "charizard" } })).toBe(1);
+    expect((await getBalances(users[0].id)).coins).toBe(1500);
+  });
+
+  it("failed payouts stay on the room, are retried with backoff and logged with what is owed", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const admin = await createUser({}, { role: "admin" });
+    const lateId = randomUUID(); // no account yet: the first try fails (foreign key)
+    const neverId = randomUUID(); // never exists: given up after the last retry
+    const grant = { coins: 700, packs: [], items: [] };
+    const prize = (playerId: string, position: number) => ({ playerId, playerName: "X", position, coins: 0, withdrawn: false, rewards: grant });
+    const room = {
+      id: "RETRY1",
+      createdAt: new Date(),
+      adminId: admin.id,
+      rewardsLogId: null,
+      prizes: [prize(lateId, 1), prize(neverId, 2)],
+      prizesPaid: false,
+      unpaidPrizes: [],
+    } as unknown as DraftRoom;
+
+    const paying = payDraftPrizes(room, { retryDelaysMs: [200, 200] });
+    await vi.waitFor(() => expect(room.unpaidPrizes).toHaveLength(2));
+    expect(errors.mock.calls.some(([line]) => String(line).includes(`"userId":"${lateId}"`) && String(line).includes('"roomId":"RETRY1"'))).toBe(true);
+    await prisma.user.create({ data: { id: lateId, email: `late-${lateId}@example.com`, username: `late_${lateId.slice(0, 8)}` } });
+    await paying;
+
+    expect((await getBalances(lateId)).coins).toBe(700);
+    expect(room.unpaidPrizes.map((p) => p.playerId)).toEqual([neverId]);
+    expect(errors.mock.calls.some(([line]) => String(line).startsWith("[draft] PRIZE NOT PAID") && String(line).includes(neverId))).toBe(true);
   });
 });
