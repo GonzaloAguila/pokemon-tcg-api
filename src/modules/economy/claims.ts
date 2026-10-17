@@ -34,4 +34,6 @@ export type ClaimKind =
   /** key: "<economy week>:<n>" (n = 1..maxCoinConversionsPerWeek) */
   | "candy_coins"
   /** key: "v1" (tutorial reward, modules/progress) */
-  | "tutorial";
+  | "tutorial"
+  /** key: "<draft room id>:<room createdAt ms>" (a finished draft's prizes, socket/draft-payout.ts) */
+  | "draft_prize";

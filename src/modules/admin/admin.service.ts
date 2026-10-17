@@ -1,5 +1,5 @@
 import { type UserRole, Prisma } from "@prisma/client";
-import { CARD_SETS, findCardById } from "@gonzaloaguila/game-core";
+import { findCardById } from "@gonzaloaguila/game-core";
 import { prisma } from "../../lib/prisma.js";
 import { endAllRefreshSessions } from "../auth/refresh-sessions.js";
 import { Errors } from "../../middleware/error-handler.js";
@@ -9,15 +9,7 @@ import { FREE_AVATAR_IDS, type Db } from "../users/users.service.js";
 import { recordCardChange, type CardChange } from "../users/card-ledger.js";
 import { revalidateDecks } from "../trades/trades.service.js";
 import { SENT_MESSAGE_FILTER } from "../messaging/messaging.service.js";
-import {
-  ADMIN_ONLY_COINS,
-  ALL_VARIANTS,
-  AVAILABLE_AVATARS,
-  AVAILABLE_CARD_BACKS,
-  AVAILABLE_COINS,
-  AVAILABLE_PLAYMATS,
-} from "../prizes/catalog.js";
-import { ECONOMY } from "../economy/config.js";
+import { COSMETIC_TYPE_LABELS, GRANTABLE_COSMETICS, type CosmeticType } from "./grantable-cosmetics.js";
 import { startOfEconomyDay, startOfEconomyWeek } from "../economy/economy-time.js";
 import { invalidateAccountState } from "../../lib/account-state.js";
 import { disconnectUserSockets } from "../../socket/io-registry.js";
@@ -607,33 +599,6 @@ export async function adjustCards(
 // ---------------------------------------------------------------------------
 // Grant cosmetic to user
 // ---------------------------------------------------------------------------
-
-const COSMETIC_TYPE_LABELS: Record<string, string> = {
-  coin: "Moneda",
-  cardBack: "Dorso de carta",
-  avatar: "Avatar",
-  skin: "Skin de carta",
-  playmat: "Tapete",
-};
-
-type CosmeticType = "coin" | "cardBack" | "avatar" | "skin" | "playmat";
-
-/**
- * Items an admin can grant, by type: the catalogs the market, prizes, battle pass and set
- * milestones grant from (+ the gym-leader coins the backoffice offers). Items every player has
- * (Eevee coin, classic back, field playmat, free avatars) are not grantable.
- */
-const GRANTABLE_COSMETICS: Record<CosmeticType, ReadonlySet<string>> = {
-  coin: new Set([...AVAILABLE_COINS.map((c) => c.itemId), ...ADMIN_ONLY_COINS]),
-  cardBack: new Set([
-    ...AVAILABLE_CARD_BACKS.map((c) => c.itemId),
-    ...CARD_SETS.map((set) => ECONOMY.setMilestones.cardBackId(set.id)),
-  ]),
-  avatar: new Set(AVAILABLE_AVATARS.map((a) => a.itemId).filter((id) => !FREE_AVATAR_IDS.has(id))),
-  // "<pokemon-slug>-<overlayId>": every Rare Holo Pokémon × every overlay (catalog.ts)
-  skin: new Set(ALL_VARIANTS.map((v) => v.itemId)),
-  playmat: new Set(AVAILABLE_PLAYMATS.map((p) => p.itemId)),
-};
 
 export async function grantCosmetic(
   adminId: string,

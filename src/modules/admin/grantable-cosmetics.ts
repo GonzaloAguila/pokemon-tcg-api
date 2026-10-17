@@ -1,0 +1,44 @@
+/**
+ * Cosmetics an admin can hand out (backoffice grants, draft prizes): the catalogs the market,
+ * prizes, battle pass and set milestones grant from (+ the gym-leader coins the backoffice
+ * offers). Items every player has (Eevee coin, classic back, field playmat, free avatars) are
+ * not grantable.
+ */
+import { CARD_SETS } from "@gonzaloaguila/game-core";
+import {
+  ADMIN_ONLY_COINS,
+  ALL_VARIANTS,
+  AVAILABLE_AVATARS,
+  AVAILABLE_CARD_BACKS,
+  AVAILABLE_COINS,
+  AVAILABLE_PLAYMATS,
+} from "../prizes/catalog.js";
+import { ECONOMY } from "../economy/config.js";
+import { FREE_AVATAR_IDS } from "../users/users.service.js";
+
+export const COSMETIC_TYPES = ["coin", "cardBack", "avatar", "skin", "playmat"] as const;
+export type CosmeticType = (typeof COSMETIC_TYPES)[number];
+
+export const COSMETIC_TYPE_LABELS: Record<CosmeticType, string> = {
+  coin: "Moneda",
+  cardBack: "Dorso de carta",
+  avatar: "Avatar",
+  skin: "Skin de carta",
+  playmat: "Tapete",
+};
+
+export const GRANTABLE_COSMETICS: Record<CosmeticType, ReadonlySet<string>> = {
+  coin: new Set([...AVAILABLE_COINS.map((c) => c.itemId), ...ADMIN_ONLY_COINS]),
+  cardBack: new Set([
+    ...AVAILABLE_CARD_BACKS.map((c) => c.itemId),
+    ...CARD_SETS.map((set) => ECONOMY.setMilestones.cardBackId(set.id)),
+  ]),
+  avatar: new Set(AVAILABLE_AVATARS.map((a) => a.itemId).filter((id) => !FREE_AVATAR_IDS.has(id))),
+  // "<pokemon-slug>-<overlayId>": every Rare Holo Pokémon × every overlay (catalog.ts)
+  skin: new Set(ALL_VARIANTS.map((v) => v.itemId)),
+  playmat: new Set(AVAILABLE_PLAYMATS.map((p) => p.itemId)),
+};
+
+export function isGrantableCosmetic(type: CosmeticType, itemId: string): boolean {
+  return GRANTABLE_COSMETICS[type].has(itemId);
+}

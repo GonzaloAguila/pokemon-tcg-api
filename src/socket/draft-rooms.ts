@@ -20,6 +20,7 @@ import {
 } from "@gonzaloaguila/game-core";
 import type { Card, CardSetId, GameCard } from "@gonzaloaguila/game-core";
 import { ECONOMY } from "../modules/economy/config.js";
+import { rewardsForPosition, type DraftRewardGrant, type DraftRewardTier } from "./draft-rewards.js";
 
 // ============================================================================
 // Types
@@ -53,6 +54,8 @@ export type DraftConfig = {
   minDeckSize: number; // default 40
   entryFee: number; // 0 = free, default 2000
   adminPlays: boolean; // if true, admin takes seat 0 and plays (doesn't pay)
+  /** Prizes the admin set on top of the entry-fee pool: every finisher and given places (draft-rewards.ts). */
+  rewards: DraftRewardTier[];
 };
 
 export type DraftPhase =
@@ -142,6 +145,8 @@ export type DraftPrize = {
   position: number;
   coins: number;
   withdrawn: boolean;
+  /** The admin's prizes for this player (config.rewards: "all" + their place), on top of `coins`. */
+  rewards: DraftRewardGrant;
 };
 
 /** Masked player visible to other players (hides pack & specific cards) */
@@ -583,6 +588,7 @@ export class DraftRoomManager {
       minDeckSize: config.minDeckSize ?? 40,
       entryFee: config.entryFee ?? 2000,
       adminPlays: config.adminPlays ?? false,
+      rewards: config.rewards ?? [],
     };
 
     const players: DraftPlayer[] = [];
@@ -1850,7 +1856,10 @@ export class DraftRoomManager {
     const tournament = room.tournament!;
     this.sortStandings(tournament);
     room.phase = "finished";
-    room.prizes = computeDraftPrizes(tournament.standings, room.prizePool);
+    room.prizes = computeDraftPrizes(tournament.standings, room.prizePool).map((prize) => ({
+      ...prize,
+      rewards: rewardsForPosition(room.config.rewards, prize.position, prize.withdrawn),
+    }));
     const champion = tournament.standings[0];
     room.events.push(
       this.createEvent("system", champion ? `¡Torneo finalizado! Campeón: ${champion.playerName}` : "¡Torneo finalizado!"),
@@ -1916,7 +1925,7 @@ export function computeDraftPrizes(
   standings: readonly PlayerStanding[],
   pool: number,
   splits: readonly { minPlayers: number; percents: readonly number[] }[] = ECONOMY.draft.prizeSplit,
-): DraftPrize[] {
+): Omit<DraftPrize, "rewards">[] {
   const percents = splits.find((s) => standings.length >= s.minPlayers)?.percents ?? [];
   const shares = percents.slice(0, standings.filter((s) => !s.withdrawn).length);
   const totalShare = shares.reduce((sum, share) => sum + share, 0);

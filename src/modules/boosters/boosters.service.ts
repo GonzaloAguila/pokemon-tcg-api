@@ -109,6 +109,11 @@ export const STANDARD_BOOSTER_IDS: string[] = CARD_SETS.flatMap((set) => {
   return def ? [def.id] : [];
 });
 
+/** The standard booster of a set, or null when the set has none. */
+export function boosterIdForSet(setId: string): string | null {
+  return SET_BOOSTERS[setId]?.id ?? null;
+}
+
 export function isStandardBoosterId(packId: string): boolean {
   return STANDARD_BOOSTER_IDS.includes(packId);
 }

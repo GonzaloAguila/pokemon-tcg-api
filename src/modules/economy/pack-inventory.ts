@@ -21,7 +21,8 @@ export type PackSource =
   | "login_calendar"
   | "weekly_mission"
   | "battle_pass"
-  | "tutorial";
+  | "tutorial"
+  | "draft_prize";
 
 export const PACK_SOURCE_LABELS: Record<PackSource, string> = {
   welcome: "Bienvenida",
@@ -30,6 +31,7 @@ export const PACK_SOURCE_LABELS: Record<PackSource, string> = {
   weekly_mission: "Misión semanal",
   battle_pass: "Pase de batalla",
   tutorial: "Tutorial completado",
+  draft_prize: "Premio de draft",
 };
 
 /** Add `count` unopened packs. `packId` null = player's choice of set. */
@@ -81,6 +83,7 @@ const STORED_PACK_SOURCE_LABEL: Record<string, string> = {
   weekly_mission: "misión semanal",
   battle_pass: "pase de batalla",
   tutorial: "tutorial",
+  draft_prize: "premio de draft",
 };
 
 /**

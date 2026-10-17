@@ -21,6 +21,7 @@ import { canManageDraftRooms } from "../modules/admin/permissions.js";
 import { ECONOMY } from "../modules/economy/config.js";
 import { titleIdFromStats } from "../modules/users/titles.js";
 import type { TournamentProgress } from "./draft-rooms.js";
+import { payDraftPrizes } from "./draft-payout.js";
 
 /**
  * Time a player has to show up in a draft game created for them. The next round's games are
@@ -211,18 +212,6 @@ export function announceDraftResult(
     createMatchGames(io, draftRoomId, draftRoom.tournament.currentRoundNumber, gameRoomManager).catch((err) => {
       console.error("Error creating next round games:", err);
     });
-  }
-}
-
-/** The prizes of a finished tournament (room.prizes), paid once per room. */
-export async function payDraftPrizes(room: DraftRoom): Promise<void> {
-  if (room.prizesPaid || !room.prizes) return;
-  room.prizesPaid = true;
-  for (const prize of room.prizes) {
-    if (prize.coins <= 0) continue;
-    await usersService
-      .addCoins(prize.playerId, prize.coins, "draft_prize", `Premio de draft: ${prize.position}° puesto`)
-      .catch((err) => console.error(`[draft] Prize of ${prize.playerId} in room ${room.id} failed:`, err));
   }
 }
 
