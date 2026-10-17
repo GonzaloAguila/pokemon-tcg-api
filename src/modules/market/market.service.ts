@@ -21,6 +21,7 @@ import {
   AVAILABLE_PLAYMATS,
   MARKET_VARIANTS,
 } from "../prizes/catalog.js";
+import type { PlaymatRarity } from "../prizes/catalog.js";
 import type {
   DailyCardOffer,
   DailyCosmeticOffer,
@@ -65,7 +66,14 @@ const COSMETIC_PRICES: Record<string, number> = {
   cardBack: 15,
   avatar: 5,
   variant: 50,
-  playmat: 20,
+};
+
+/** Playmats cost coupons by rarity */
+export const PLAYMAT_PRICES: Record<PlaymatRarity, number> = {
+  common: 15,
+  uncommon: 20,
+  rare: 35,
+  legendary: 50,
 };
 
 const ENERGY_PRICE = 10;
@@ -162,7 +170,7 @@ export async function getDailyOffers(userId?: string, now = new Date()): Promise
     { type: "cardBack", itemId: dailyCardBack.itemId, name: dailyCardBack.name, imageUrl: dailyCardBack.imageUrl, price: COSMETIC_PRICES.cardBack },
     { type: "avatar", itemId: dailyAvatar.itemId, name: dailyAvatar.name, imageUrl: dailyAvatar.imageUrl, price: COSMETIC_PRICES.avatar },
     { type: "variant", itemId: dailyVariant.itemId, name: dailyVariant.name, imageUrl: dailyVariant.imageUrl, overlayId: dailyVariant.overlayId, price: COSMETIC_PRICES.variant },
-    { type: "playmat", itemId: dailyPlaymat.itemId, name: dailyPlaymat.name, imageUrl: dailyPlaymat.imageUrl, price: COSMETIC_PRICES.playmat },
+    { type: "playmat", itemId: dailyPlaymat.itemId, name: dailyPlaymat.name, imageUrl: dailyPlaymat.imageUrl, price: PLAYMAT_PRICES[dailyPlaymat.rarity] },
   ];
 
   // Energy offers (static — always the same 6)

@@ -58,13 +58,16 @@ export const AVAILABLE_AVATARS: CosmeticItem[] = [
   { itemId: "voltorb", name: "Voltorb", imageUrl: "/avatars/darius-dan/voltorb.png" },
 ];
 
-export const AVAILABLE_PLAYMATS: CosmeticItem[] = [
-  { itemId: "eevee-evos", name: "Eevee Evoluciones", imageUrl: "/bg/bg-eevee-evos.jpg" },
-  { itemId: "street", name: "Calle Pokémon", imageUrl: "/bg/bg-street.png" },
-  { itemId: "stadium", name: "Estadio", imageUrl: "/bg/bg2.jpg" },
-  { itemId: "kanto-sky", name: "Cielo de Kanto", imageUrl: "/bg/bg-kanto-sky.png" },
-  { itemId: "charizard-sunset", name: "Atardecer de Charizard", imageUrl: "/bg/bg-charizard-sunset.jpg" },
-  { itemId: "night-city", name: "Ciudad de Noche", imageUrl: "/bg/bg-night-city.png" },
+/** Playmat rarity (mirrors the frontend's PLAYMAT_COLLECTION): it sets the market price. */
+export type PlaymatRarity = "common" | "uncommon" | "rare" | "legendary";
+
+export const AVAILABLE_PLAYMATS: (CosmeticItem & { rarity: PlaymatRarity })[] = [
+  { itemId: "eevee-evos", name: "Eevee Evoluciones", imageUrl: "/bg/bg-eevee-evos.jpg", rarity: "uncommon" },
+  { itemId: "street", name: "Calle Pokémon", imageUrl: "/bg/bg-street.png", rarity: "uncommon" },
+  { itemId: "stadium", name: "Estadio", imageUrl: "/bg/bg2.jpg", rarity: "rare" },
+  { itemId: "kanto-sky", name: "Cielo de Kanto", imageUrl: "/bg/bg-kanto-sky.png", rarity: "common" },
+  { itemId: "charizard-sunset", name: "Atardecer de Charizard", imageUrl: "/bg/bg-charizard-sunset.jpg", rarity: "uncommon" },
+  { itemId: "night-city", name: "Ciudad de Noche", imageUrl: "/bg/bg-night-city.png", rarity: "uncommon" },
 ];
 
 // Card skin variants: every Rare Holo Pokémon × every overlay
