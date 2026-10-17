@@ -92,6 +92,7 @@ import {
 import { parseGameAction } from "./schemas.js";
 import type { RoomChatMessage } from "./room-chat.js";
 import type { RoomCosmetics } from "./room-cosmetics.js";
+import type { RoomEmoteLoadouts } from "./room-emotes.js";
 
 interface RoomConfig {
   prizeCount: number;           // 4, 5, or 6
@@ -151,6 +152,8 @@ export interface GameRoom {
   joiner: CreatorInfo;
   /** Both seats' cosmetics, read from the DB when the game started (room-cosmetics.ts). */
   cosmetics?: RoomCosmetics;
+  /** Both seats' equipped battle emotes (room-emotes.ts): read at the start, re-read on a miss. */
+  emoteLoadouts?: RoomEmoteLoadouts;
 
   // Metadata
   players: string[];

@@ -9,6 +9,7 @@ import { prisma } from "../lib/prisma.js";
 import type { DeckCardEntry } from "../modules/decks/decks.service.js";
 import type { GameRoom } from "./rooms.js";
 import type { Viewer } from "./state-masking.js";
+import { snapshotRoomEmotes } from "./room-emotes.js";
 
 /** The free items every player has (users.service `updateCosmetics`). */
 export const DEFAULT_COSMETICS = { playmatId: "field", coinId: "eevee", cardBackId: "default" } as const;
@@ -104,11 +105,15 @@ async function loadSeatCosmeticsOrDefaults(userId: string | null, deckId: string
   }
 }
 
-/** Read both seats' cosmetics from the DB and keep them with the room (call when the game starts). */
+/**
+ * Read both seats' cosmetics from the DB and keep them with the room (call when the game starts).
+ * The seats' battle emotes are read at the same time (room-emotes.ts).
+ */
 export async function snapshotRoomCosmetics(room: GameRoom): Promise<RoomCosmetics> {
   const [player1, player2] = await Promise.all([
     loadSeatCosmeticsOrDefaults(room.player1Id, room.player1DeckId),
     loadSeatCosmeticsOrDefaults(room.player2Id, room.player2DeckId),
+    snapshotRoomEmotes(room),
   ]);
   room.cosmetics = { player1, player2 };
   return room.cosmetics;

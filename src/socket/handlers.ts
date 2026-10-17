@@ -29,6 +29,7 @@ import { setIo, userRoom } from "./io-registry.js";
 import { authenticateHandshake, checkSocketSession, kickBlockedUser, requireSocketUser } from "./session-guard.js";
 import * as chatService from "../modules/chat/chat.service.js";
 import { allowChatMessage, buildRoomChatMessage, rememberChatMessage } from "./room-chat.js";
+import { EMOTE_ERRORS, allowEmote, seatHasEmote } from "./room-emotes.js";
 import { getChatPresence, joinChatPresence, leaveChatPresence, trackOnline, untrackOnline } from "./presence.js";
 import { prisma } from "../lib/prisma.js";
 import type { DeckCardEntry } from "../modules/decks/decks.service.js";
@@ -947,6 +948,42 @@ export function setupSocketHandlers(io: Server): void {
       const message = await buildRoomChatMessage(tokenUser.userId, socket.id, content, isSpectator);
       rememberChatMessage(room.chat, message);
       io.to(roomId).emit("chatMessage", { roomId, ...message });
+    });
+
+    // ==========================================================================
+    // Battle emotes (room-emotes.ts)
+    // ==========================================================================
+
+    // sendEmote { roomId, emoteId } (ack { success, error?, code? }): only a seated player of a
+    // started game, rate limited, an emote of their loadout. Everyone in the room (both players
+    // and the spectators) gets emote { roomId, side, userId, emoteId, sentAt }.
+    socket.on("sendEmote", async (payload: unknown, ack?: (res: unknown) => void) => {
+      const reply = (res: { success: boolean; error?: string; code?: string }) => {
+        if (typeof ack === "function") ack(res);
+      };
+      try {
+        const session = await checkSocketSession(socket);
+        if (!session.ok) {
+          reply({ success: false, error: session.error });
+          if (session.blocked) kickBlockedUser(socket);
+          return;
+        }
+        const parsed = parsePayload(socketSchemas.sendEmote, payload);
+        if (!parsed.ok) return reply({ success: false, error: parsed.error });
+        const { roomId, emoteId } = parsed.data;
+        const room = roomManager.getRoom(roomId);
+        if (!room || !room.gameState || !socket.rooms.has(roomId)) return reply({ success: false, ...EMOTE_ERRORS.notInGame });
+        if (room.spectators.has(socket.id)) return reply({ success: false, error: SPECTATOR_ONLY_ERROR });
+        const seat = roomManager.seatOf(room, session.userId);
+        if (!seat) return reply({ success: false, ...EMOTE_ERRORS.notInGame });
+        if (!allowEmote(session.userId)) return reply({ success: false, ...EMOTE_ERRORS.rateLimited });
+        if (!(await seatHasEmote(room, seat, emoteId))) return reply({ success: false, ...EMOTE_ERRORS.notInLoadout });
+        io.to(roomId).emit("emote", { roomId, side: seat, userId: session.userId, emoteId, sentAt: Date.now() });
+        reply({ success: true });
+      } catch (error) {
+        console.error("[sendEmote]", error);
+        reply({ success: false, error: "No se pudo enviar el emote" });
+      }
     });
 
     // ==========================================================================

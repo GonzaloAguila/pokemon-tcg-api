@@ -128,6 +128,12 @@ export const socketSchemas = {
     message: z.object({ content: z.string().trim().min(1).max(500) }),
   }),
 
+  /** A battle emote (room-emotes.ts): the server checks it is in the sender's loadout. */
+  sendEmote: z.object({
+    roomId,
+    emoteId: z.string().regex(/^[a-z0-9-]{1,40}$/, "emote inválido"),
+  }),
+
   globalChatMessage,
 };
 
