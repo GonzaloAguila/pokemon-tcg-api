@@ -93,10 +93,13 @@ model User {
   permissions Json @default("[]")
 
   // Active cosmetics
-  activeCoinId     String? @default("eevee")
-  activeCardBackId String? @default("default")
-  activeAvatarId   String? @default("collector")
-  activePlaymatId  String? @default("field")
+  activeCoinId     String?  @default("eevee")
+  activeCardBackId String?  @default("default")
+  activeAvatarId   String?  @default("collector")
+  activePlaymatId  String?  @default("field")
+  // Battle emotes equipped for games (max 5, owned only: modules/emotes). The column default is
+  // the starters, so accounts created before emotes existed have them equipped too.
+  emoteLoadout     String[] @default(["pikachu-giggle", "eevee-cool", "psyduck-stressed", "charizard-think", "bulbasaur-drink"])
 
   // Starter deck color chosen at signup
   starterColor String?
@@ -126,6 +129,7 @@ model User {
   ownedAvatars     UserAvatar[]
   ownedCardSkins   UserCardSkin[]
   ownedPlaymats    UserPlaymat[]
+  ownedEmotes      UserEmote[]
   battlePasses     UserBattlePass[]
   dailyPurchases   DailyPurchase[]
   chatMessages     ChatMessage[]
@@ -437,6 +441,19 @@ model UserPlaymat {
 
   @@unique([userId, playmatId])
   @@map("user_playmats")
+}
+
+// Battle emotes a player obtained (market, prizes, battle pass, grants). The starters are owned
+// by everyone without a row (modules/emotes/catalog.ts).
+model UserEmote {
+  id         String   @id @default(uuid())
+  userId     String
+  emoteId    String // e.g. "sylveon-kiss", "pikachu-shocked"
+  obtainedAt DateTime @default(now())
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, emoteId])
+  @@map("user_emotes")
 }
 
 // =============================================================================
