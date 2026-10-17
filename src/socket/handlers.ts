@@ -3,7 +3,6 @@ import {
   type GameCard,
   findCardById,
   findCardDefinition,
-  isPokemonCard,
   getDeckById as getThemeDeckById,
   decks as themeDeckList,
 } from "@gonzaloaguila/game-core";
@@ -11,6 +10,7 @@ import type { GameState } from "@gonzaloaguila/game-core";
 import { GameRoomManager, PrivateTableError, RoomNotFoundError, SeatedSpectatorError, isPublicTable, type ActionResult, type GameRoom, type PlayerKey } from "./rooms.js";
 import { SPECTATE_RATE_LIMITED, allowSpectate, forgetSpectateSocket } from "./spectate-limit.js";
 import { maskRoomState } from "./room-state.js";
+import { cosmeticsPayload, getRoomCosmetics, snapshotRoomCosmetics } from "./room-cosmetics.js";
 import type { Viewer } from "./state-masking.js";
 import { maxBetForTitle, titleIdFromStats } from "../modules/users/titles.js";
 import { checkDeckPlayable } from "../modules/decks/decks.service.js";
@@ -106,42 +106,6 @@ async function resolveDeckCards(deckId: string | null): Promise<GameCard[] | nul
 }
 
 /**
- * Build a variant map from deck entries: card name -> overlay ID.
- * Only includes entries that have a variantId set.
- */
-function buildVariantMap(entries: DeckCardEntry[]): Record<string, string> {
-  const map: Record<string, string> = {};
-  for (const entry of entries) {
-    if (!entry.variantId) continue;
-    const card = findCardById(entry.cardDefId);
-    if (!card) continue;
-    const name = isPokemonCard(card) ? card.name : card.name;
-    map[name] = entry.variantId;
-  }
-  return map;
-}
-
-/**
- * Fetch deck entries from the database and build a variant map.
- * Returns an empty map if the deck is not found or is a theme deck ID.
- */
-async function getVariantMapForDeck(deckId: string | null): Promise<Record<string, string>> {
-  if (!deckId) return {};
-  // Theme deck IDs (from game-core) won't be UUIDs — skip DB lookup
-  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(deckId);
-  if (!isUuid) return {};
-
-  const deck = await prisma.deck.findUnique({
-    where: { id: deckId },
-    select: { cards: true },
-  });
-  if (!deck || !deck.cards) return {};
-
-  const entries = deck.cards as unknown as DeckCardEntry[];
-  return buildVariantMap(entries);
-}
-
-/**
  * Resolve both players' decks and start the game in the given room.
  *
  * When either (or both) players have selected a user-created database deck
@@ -214,7 +178,10 @@ async function startRoomGame(io: Server, roomId: string): Promise<GameState | nu
     if (roomManager.getRoom(roomId) !== room || room.status !== "waiting" || !room.player1Id || !room.player2Id) {
       throw new Error("La mesa se cerró antes de empezar la partida");
     }
-    return await resolveAndStartGame(roomManager, roomId);
+    const state = await resolveAndStartGame(roomManager, roomId);
+    // Both players' cosmetics (owned only) as they are now: rejoins and spectators get the same
+    await snapshotRoomCosmetics(room);
+    return state;
   } catch (err) {
     // Nothing was played: refund the stakes, and let the room take a fresh match if it starts later
     settleRoomResult(io, room, null, "La partida no pudo comenzar");
@@ -761,11 +728,8 @@ export function setupSocketHandlers(io: Server): void {
           console.log(`[joinRoom] Reconnecting to existing game, sending current state to socket ${socket.id}`);
           console.log(`[joinRoom] Room socket IDs: P1=${room.player1SocketId}, P2=${room.player2SocketId}`);
 
-          // Build variant maps for reconnection
-          const [p1Variants, p2Variants] = await Promise.all([
-            getVariantMapForDeck(room.player1DeckId),
-            getVariantMapForDeck(room.player2DeckId),
-          ]);
+          // Both players' cosmetics, taken when the game started
+          const cosmetics = await getRoomCosmetics(room);
 
           // Send current game state to the reconnecting player
           socket.emit("gameStart", {
@@ -773,8 +737,7 @@ export function setupSocketHandlers(io: Server): void {
             gameState: stateFor(room, room.gameState, isPlayer1 ? "player1" : "player2"),
             isPlayer1,
             opponentInfo: isPlayer1 ? room.joiner : room.creator,
-            playerVariantMap: isPlayer1 ? p1Variants : p2Variants,
-            opponentVariantMap: isPlayer1 ? p2Variants : p1Variants,
+            ...cosmeticsPayload(cosmetics, isPlayer1 ? "player1" : "player2"),
             turnStartedAt: room.turnStartedAt,
             turnTimerDuration: room.turnTimerDuration,
             spectatorCount: roomManager.spectatorCount(room),
@@ -794,11 +757,8 @@ export function setupSocketHandlers(io: Server): void {
           // Update room list (room now playing)
           broadcastRoomList(io);
 
-          // Build variant maps from deck entries
-          const [p1Variants, p2Variants] = await Promise.all([
-            getVariantMapForDeck(room.player1DeckId),
-            getVariantMapForDeck(room.player2DeckId),
-          ]);
+          // Both players' cosmetics (read when the game started)
+          const cosmetics = await getRoomCosmetics(room);
 
           // Send masked state to each player
           io.to(room.player1SocketId!).emit("gameStart", {
@@ -806,8 +766,7 @@ export function setupSocketHandlers(io: Server): void {
             gameState: stateFor(room, gameState, "player1"),
             isPlayer1: true,
             opponentInfo: room.joiner,
-            playerVariantMap: p1Variants,
-            opponentVariantMap: p2Variants,
+            ...cosmeticsPayload(cosmetics, "player1"),
             turnStartedAt: room.turnStartedAt,
             turnTimerDuration: room.turnTimerDuration,
           });
@@ -816,8 +775,7 @@ export function setupSocketHandlers(io: Server): void {
             gameState: stateFor(room, gameState, "player2"),
             isPlayer1: false,
             opponentInfo: room.creator,
-            playerVariantMap: p2Variants,
-            opponentVariantMap: p1Variants,
+            ...cosmeticsPayload(cosmetics, "player2"),
             turnStartedAt: room.turnStartedAt,
             turnTimerDuration: room.turnTimerDuration,
           });
@@ -883,26 +841,21 @@ export function setupSocketHandlers(io: Server): void {
           const gameState = await startRoomGame(io, roomId);
           if (!gameState) return;
 
-          // Build variant maps from deck entries
-          const [p1Variants, p2Variants] = await Promise.all([
-            getVariantMapForDeck(room.player1DeckId),
-            getVariantMapForDeck(room.player2DeckId),
-          ]);
+          // Both players' cosmetics (read when the game started)
+          const cosmetics = await getRoomCosmetics(room);
 
           // Send masked state to each player
           io.to(room.player1SocketId!).emit("gameStart", {
             gameState: stateFor(room, gameState, "player1"),
             opponentInfo: room.joiner,
-            playerVariantMap: p1Variants,
-            opponentVariantMap: p2Variants,
+            ...cosmeticsPayload(cosmetics, "player1"),
             turnStartedAt: room.turnStartedAt,
             turnTimerDuration: room.turnTimerDuration,
           });
           io.to(room.player2SocketId!).emit("gameStart", {
             gameState: stateFor(room, gameState, "player2"),
             opponentInfo: room.creator,
-            playerVariantMap: p2Variants,
-            opponentVariantMap: p1Variants,
+            ...cosmeticsPayload(cosmetics, "player2"),
             turnStartedAt: room.turnStartedAt,
             turnTimerDuration: room.turnTimerDuration,
           });
@@ -1107,10 +1060,7 @@ export function setupSocketHandlers(io: Server): void {
 
         socket.join(roomId);
 
-        const [p1Variants, p2Variants] = await Promise.all([
-          getVariantMapForDeck(room.player1DeckId),
-          getVariantMapForDeck(room.player2DeckId),
-        ]);
+        const cosmetics = await getRoomCosmetics(room);
         // It may have stopped watching (or the room closed) during the lookups
         if (!room.spectators.has(socket.id) || !room.gameState) return;
 
@@ -1122,8 +1072,8 @@ export function setupSocketHandlers(io: Server): void {
           isSpectator: true,
           opponentInfo: room.joiner,
           creatorInfo: room.creator,
-          playerVariantMap: p1Variants,
-          opponentVariantMap: p2Variants,
+          // Player 1's cosmetics are the bottom side's ("player"), player 2's the top side's
+          ...cosmeticsPayload(cosmetics, "spectator"),
           turnStartedAt: room.turnStartedAt,
           turnTimerDuration: room.turnTimerDuration,
           spectatorCount: roomManager.spectatorCount(room),

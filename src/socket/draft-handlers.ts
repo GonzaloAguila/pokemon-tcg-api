@@ -12,6 +12,7 @@ import { allowChatMessage, buildRoomChatMessage, rememberChatMessage } from "./r
 import { SPECTATE_RATE_LIMITED, allowSpectate } from "./spectate-limit.js";
 import { GameRoomManager } from "./rooms.js";
 import { maskRoomState } from "./room-state.js";
+import { snapshotRoomCosmetics } from "./room-cosmetics.js";
 import { prisma } from "../lib/prisma.js";
 import * as usersService from "../modules/users/users.service.js";
 import { recordCardChange } from "../modules/users/card-ledger.js";
@@ -170,6 +171,8 @@ async function createMatchGame(
 
   // Start the game with their drafted decks
   const gameState = await gameRoomManager.startGameWithRawDecks(gameRoomId, [...p1.deck], [...p2.deck]);
+  // Both players' playmat, coin and card back (owned only) for the game screen; drafted decks have no variants
+  await snapshotRoomCosmetics(gameRoom);
 
   console.log(`🎮 Draft match R${roundNumber}-M${matchNumber}: ${p1.name} vs ${p2.name} → room ${gameRoomId}`);
   // A player who isn't connected right now (e.g. still on the last game's screen) has

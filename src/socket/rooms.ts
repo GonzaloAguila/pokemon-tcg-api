@@ -91,6 +91,7 @@ import {
 } from "@gonzaloaguila/game-core";
 import { parseGameAction } from "./schemas.js";
 import type { RoomChatMessage } from "./room-chat.js";
+import type { RoomCosmetics } from "./room-cosmetics.js";
 
 interface RoomConfig {
   prizeCount: number;           // 4, 5, or 6
@@ -148,6 +149,8 @@ export interface GameRoom {
   config: RoomConfig;
   creator: CreatorInfo;
   joiner: CreatorInfo;
+  /** Both seats' cosmetics, read from the DB when the game started (room-cosmetics.ts). */
+  cosmetics?: RoomCosmetics;
 
   // Metadata
   players: string[];
