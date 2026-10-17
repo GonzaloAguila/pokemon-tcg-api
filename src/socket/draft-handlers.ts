@@ -721,6 +721,21 @@ export function registerDraftEvents(
     },
   );
 
+  // draft:editDeck { roomId }: a player who sent their deck goes back to editing it (isReady
+  // false), only while the room is still building (once every deck is in the tournament starts
+  // and decks are final). Everyone gets the new draft:state; refusals are a draft:error.
+  socket.on("draft:editDeck", async (payload: unknown) => {
+    try {
+      if (!(await requireDraftUser(socket))) return;
+      const data = parseDraft(socket, draftSchemas.roomRef, payload);
+      if (!data) return;
+      draftRoomManager.unreadyDeck(data.roomId, socket.id);
+      broadcastDraftState(io, data.roomId);
+    } catch (error) {
+      socket.emit("draft:error", { message: (error as Error).message });
+    }
+  });
+
   // --------------------------------------------------------------------------
   // Forfeit (voluntary disconnect from draft match)
   // --------------------------------------------------------------------------

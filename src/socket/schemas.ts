@@ -7,7 +7,7 @@
  * Identity never comes from a payload; see getAuthUserId() in handlers.ts.
  */
 import { z } from "zod";
-import { DRAFT_PACK_SETS } from "./draft-rooms.js";
+import { CARD_SET_IDS, DRAFT_PACK_SETS } from "./draft-rooms.js";
 
 // ---------------------------------------------------------------------------
 // Primitives
@@ -138,6 +138,8 @@ const draftConfig = z.object({
   packsPerPlayer: z.number().int().min(1).max(6).optional(),
   /** Set of each pack in round order ("mixed" = every set); missing rounds are mixed */
   packSets: z.array(z.enum(DRAFT_PACK_SETS)).max(6).optional(),
+  /** Sets whose Trainers go into the Trainers pack (default: every set of the draft); checked against packSets by createRoom */
+  trainerSets: z.array(z.enum(CARD_SET_IDS)).min(1, "Elige al menos una expansión para el sobre de Entrenadores").max(CARD_SET_IDS.length).optional(),
   cardsPerPack: z.number().int().min(5).max(15).optional(),
   pickTimeSeconds: z.number().int().min(15).max(90).optional(),
   keepInCollection: z.boolean().optional(),
@@ -148,7 +150,7 @@ const draftConfig = z.object({
 
 export const draftSchemas = {
   create: z.object({ config: optional(draftConfig) }),
-  /** draft:join, draft:leave, draft:delete, draft:start */
+  /** draft:join, draft:leave, draft:delete, draft:start, draft:editDeck */
   roomRef: z.object({ roomId }),
   pick: z.object({ roomId, cardId: instanceId }),
   bonusPick: z.object({ roomId, cardDefIds: idList(10) }),

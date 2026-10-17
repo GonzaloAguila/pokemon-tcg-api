@@ -80,10 +80,14 @@ describe("draft pack sets", () => {
     expect(parsePayload(draftSchemas.create, { config: { packSets: ["trainers", "jungle"] } }).ok).toBe(true);
   });
 
-  it("with a Trainers pack the bonus picks add every Trainer to the chosen sets", () => {
+  it("with a Trainers pack the bonus picks add the Trainers pack's cards (the draft's sets) to the chosen sets", () => {
     const pool = bonusPoolFor(["jungle", "trainers"]);
-    expect(pool.every((c) => c.set === "Jungle" || c.kind === "trainer")).toBe(true);
-    expect(pool.filter((c) => c.kind === "trainer")).toHaveLength(draftPool.filter((c) => c.kind === "trainer").length);
+    expect(pool.every((c) => c.set === "Jungle")).toBe(true);
+    expect(pool.filter((c) => c.kind === "trainer").map((c) => c.name)).toEqual(["Poké Ball"]);
+    const chosen = bonusPoolFor(["jungle", "mixed", "trainers"], ["base-set", "gym-heroes"]);
+    expect(chosen).toBe(draftPool); // a mixed pack: every card
+    const withBase = bonusPoolFor(["jungle", "base-set", "trainers"], ["base-set"]);
+    expect(withBase.filter((c) => c.kind === "trainer").every((c) => c.set === "Base Set")).toBe(true);
   });
 
   it("bonus picks come from the sets the draft used (all of them when a pack was mixed)", () => {

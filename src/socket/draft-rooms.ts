@@ -4,7 +4,8 @@
  * Manages multiplayer booster draft rooms: lobby, drafting (pick & rotate),
  * deck building, and match pairing phases.
  *
- * Draft packs include Pokemon + Trainers + Double Colorless Energy.
+ * Draft packs include Pokemon + Trainers + Double Colorless Energy (Jungle and Fossil packs
+ * come without Trainers: those come in the Trainers pack, from the sets the admin chose).
  * Basic energy is excluded (players add unlimited basic energy during deck building).
  */
 
@@ -33,12 +34,21 @@ export const DRAFT_PACK_SETS: readonly [DraftPackSet, ...DraftPackSet[]] = [
   TRAINERS_PACK,
   ...CARD_SETS.map((set) => set.id),
 ];
+/** Every set id, in registry order. */
+export const CARD_SET_IDS = CARD_SETS.map((set) => set.id) as [CardSetId, ...CardSetId[]];
+/** Set packs that come without Trainers in a draft (their Trainers only come in the Trainers pack). */
+export const SETS_WITHOUT_TRAINERS_IN_DRAFT: readonly CardSetId[] = ["jungle", "fossil"];
 
 export type DraftConfig = {
   maxPlayers: number; // 2-8
   packsPerPlayer: number; // default 3
   /** One entry per pack (round), always packsPerPlayer long; default all mixed */
   packSets: DraftPackSet[];
+  /**
+   * Sets whose Trainers go into the Trainers pack: a subset of the draft's sets
+   * (participatingSets), all of them by default.
+   */
+  trainerSets: CardSetId[];
   cardsPerPack: number; // default 11
   pickTimeSeconds: number; // default 45
   keepInCollection: boolean;
@@ -299,6 +309,7 @@ export const draftPool: readonly Card[] = ALL_CARDS.filter((card) => !isBasicEne
 
 function rarityPools(cards: readonly Card[]) {
   return {
+    all: cards,
     common: cards.filter((c) => c.rarity === "common"),
     uncommon: cards.filter((c) => c.rarity === "uncommon"),
     rare: cards.filter((c) => c.rarity === "rare"),
@@ -306,26 +317,79 @@ function rarityPools(cards: readonly Card[]) {
   };
 }
 
+const setNameOf = (setId: CardSetId): string | undefined => CARD_SETS.find((set) => set.id === setId)?.name;
+
+/** The cards a single-set draft pack is opened from (Jungle and Fossil without their Trainers). */
+export function setPackPool(setId: CardSetId): readonly Card[] {
+  const name = setNameOf(setId);
+  const withoutTrainers = SETS_WITHOUT_TRAINERS_IN_DRAFT.includes(setId);
+  return draftPool.filter((c) => c.set === name && !(withoutTrainers && c.kind === "trainer"));
+}
+
+/** The Trainers of `trainerSets` (the Trainers pack's cards). */
+export function trainerPackPool(trainerSets: readonly CardSetId[]): readonly Card[] {
+  const names = new Set(trainerSets.map(setNameOf));
+  return draftPool.filter((c) => c.kind === "trainer" && names.has(c.set));
+}
+
 const poolsByPackSet = new Map<DraftPackSet, ReturnType<typeof rarityPools>>([
   [MIXED_PACK, rarityPools(draftPool)],
-  [TRAINERS_PACK, rarityPools(draftPool.filter((c) => c.kind === "trainer"))],
-  ...CARD_SETS.map((set) => [set.id, rarityPools(draftPool.filter((c) => c.set === set.name))] as const),
+  ...CARD_SETS.map((set) => [set.id, rarityPools(setPackPool(set.id))] as const),
 ]);
+const trainerPoolsByKey = new Map<string, ReturnType<typeof rarityPools>>();
+
+function trainerPools(trainerSets: readonly CardSetId[]): ReturnType<typeof rarityPools> {
+  const key = [...trainerSets].sort().join(",");
+  let pools = trainerPoolsByKey.get(key);
+  if (!pools) {
+    pools = rarityPools(trainerPackPool(trainerSets));
+    trainerPoolsByKey.set(key, pools);
+  }
+  return pools;
+}
 
 /** Pack sets for every round: the admin's choice per pack, mixed where none was given. */
 export function normalizePackSets(packSets: readonly DraftPackSet[] | undefined, packsPerPlayer: number): DraftPackSet[] {
   return Array.from({ length: packsPerPlayer }, (_, i) => packSets?.[i] ?? MIXED_PACK);
 }
 
+/** The sets a draft is played with: every set when a pack is mixed (or only Trainers packs), else the chosen ones. */
+export function participatingSets(packSets: readonly DraftPackSet[]): CardSetId[] {
+  const chosen = CARD_SET_IDS.filter((id) => packSets.includes(id));
+  if (packSets.includes(MIXED_PACK) || chosen.length === 0) return [...CARD_SET_IDS];
+  return chosen;
+}
+
+/**
+ * The sets whose Trainers go into the Trainers pack: the admin's choice (validated: at least one,
+ * only sets the draft is played with) or, without one, every set of the draft. Throws a Spanish reason.
+ */
+export function normalizeTrainerSets(trainerSets: readonly CardSetId[] | undefined, packSets: readonly DraftPackSet[]): CardSetId[] {
+  const allowed = participatingSets(packSets);
+  if (trainerSets === undefined) return allowed;
+  if (trainerSets.length === 0) throw new Error("Elige al menos una expansión para el sobre de Entrenadores");
+  for (const id of trainerSets) {
+    if (!allowed.includes(id)) {
+      throw new Error(`${setNameOf(id) ?? id} no participa de este draft: no puede aportar Entrenadores`);
+    }
+  }
+  return CARD_SET_IDS.filter((id) => trainerSets.includes(id));
+}
+
 /**
  * Bonus picks come from what the draft was played with: every card if any pack was mixed,
- * else the cards of the chosen sets plus every Trainer if a Trainers pack was opened.
+ * else the cards of the chosen sets' packs plus the Trainers pack's cards if one was opened.
  */
-export function bonusPoolFor(packSets: readonly DraftPackSet[]): readonly Card[] {
+export function bonusPoolFor(packSets: readonly DraftPackSet[], trainerSets?: readonly CardSetId[]): readonly Card[] {
   if (packSets.length === 0 || packSets.includes(MIXED_PACK)) return draftPool;
-  const names = new Set(CARD_SETS.filter((set) => packSets.includes(set.id)).map((set) => set.name));
-  const withTrainers = packSets.includes(TRAINERS_PACK);
-  return draftPool.filter((card) => names.has(card.set) || (withTrainers && card.kind === "trainer"));
+  const cards = new Set<Card>();
+  for (const id of CARD_SET_IDS) {
+    if (packSets.includes(id)) for (const card of setPackPool(id)) cards.add(card);
+  }
+  if (packSets.includes(TRAINERS_PACK)) {
+    for (const card of trainerPackPool(trainerSets ?? participatingSets(packSets))) cards.add(card);
+  }
+  return draftPool.filter((card) => cards.has(card));
 }
 
 /** "Jungle", "todas las expansiones" or "Entrenadores" (round announcements). */
@@ -365,9 +429,19 @@ function pickUnique(
   return picked;
 }
 
-export function generatePack(cardsPerPack: number, packSet: DraftPackSet = MIXED_PACK): GameCard[] {
+/**
+ * A draft pack of exactly `cardsPerPack` cards. A Trainers pack holds the Trainers of
+ * `trainerSets` (every set by default); when they are fewer than the pack's size the pack is
+ * completed with repeats.
+ */
+export function generatePack(
+  cardsPerPack: number,
+  packSet: DraftPackSet = MIXED_PACK,
+  trainerSets: readonly CardSetId[] = CARD_SET_IDS,
+): GameCard[] {
   const usedIds = new Set<string>();
-  const pools = poolsByPackSet.get(packSet) ?? poolsByPackSet.get(MIXED_PACK)!;
+  const pools =
+    packSet === TRAINERS_PACK ? trainerPools(trainerSets) : (poolsByPackSet.get(packSet) ?? poolsByPackSet.get(MIXED_PACK)!);
 
   // Jungle, Fossil and Team Rocket only list holo rares: their one rare slot is a holo and
   // the second rare slot becomes an uncommon.
@@ -389,8 +463,16 @@ export function generatePack(cardsPerPack: number, packSet: DraftPackSet = MIXED
 
   const uncommons = pickUnique(pools.uncommon, uncommonCount, usedIds);
   const commons = pickUnique(pools.common, commonCount, usedIds);
+  const cards = [...commons, ...uncommons, ...rares];
 
-  return shuffle([...commons, ...uncommons, ...rares]).map(toGameCard);
+  // A small pool (a few sets' Trainers): other cards of the pool, then repeats. Every pack of a
+  // round must have the same size (the round ends when the packs are empty).
+  if (cards.length < cardsPerPack) cards.push(...pickUnique(pools.all, cardsPerPack - cards.length, usedIds));
+  while (cards.length < cardsPerPack && pools.all.length > 0) {
+    cards.push(pools.all[Math.floor(Math.random() * pools.all.length)]);
+  }
+
+  return shuffle(cards).map(toGameCard);
 }
 
 /**
@@ -485,10 +567,12 @@ export class DraftRoomManager {
   ): DraftRoom {
     const roomId = this.generateRoomId();
     const packsPerPlayer = config.packsPerPlayer ?? 3;
+    const packSets = normalizePackSets(config.packSets, packsPerPlayer);
     const fullConfig: DraftConfig = {
       maxPlayers: config.maxPlayers ?? 8,
       packsPerPlayer,
-      packSets: normalizePackSets(config.packSets, packsPerPlayer),
+      packSets,
+      trainerSets: normalizeTrainerSets(config.trainerSets, packSets),
       cardsPerPack: config.cardsPerPack ?? 11,
       pickTimeSeconds: config.pickTimeSeconds ?? 45,
       keepInCollection: config.keepInCollection ?? false,
@@ -939,6 +1023,26 @@ export class DraftRoomManager {
     return room;
   }
 
+  /**
+   * A player who already sent their deck goes back to editing it. Only while the room is still
+   * building: the tournament starts the moment every deck is in, and from then on decks are final.
+   * Their last deck stays (player.deck): it is used if the deadline comes before they send another.
+   */
+  unreadyDeck(roomId: string, socketId: string): DraftRoom {
+    const room = this.rooms.get(roomId);
+    if (!room) throw new Error("Sala no encontrada");
+    if (room.phase === "matching" || room.phase === "finished") throw new Error("El torneo ya comenzó: el mazo no se puede cambiar");
+    if (room.phase !== "building") throw new Error("No es fase de construcción");
+
+    const player = room.players.find((p) => p.socketId === socketId);
+    if (!player) throw new Error("Jugador no encontrado");
+    if (!player.isReady) throw new Error("Tu mazo todavía no estaba listo");
+
+    player.isReady = false;
+    room.events.push(this.createEvent("info", `${player.name} está editando su mazo`));
+    return room;
+  }
+
   // --------------------------------------------------------------------------
   // Progress: who is the room waiting on?
   // --------------------------------------------------------------------------
@@ -1187,7 +1291,7 @@ export class DraftRoomManager {
       if (room.currentRound > room.config.packsPerPlayer) {
         // All rounds done → bonus-pick phase (with its own deadline)
         room.phase = "bonus-pick";
-        room.bonusPickPool = bonusPoolFor(room.config.packSets).map(toGameCard);
+        room.bonusPickPool = bonusPoolFor(room.config.packSets, room.config.trainerSets).map(toGameCard);
         for (const p of room.players) p.isReady = false;
         room.events.push(
           this.createEvent(
@@ -1251,6 +1355,12 @@ export class DraftRoomManager {
     this.clearTimers(room);
     for (const player of [...room.players]) {
       if (player.isReady && player.deck) continue;
+      // Went back to editing (unreadyDeck) and didn't send it again: their last deck plays
+      if (player.deck) {
+        player.isReady = true;
+        room.events.push(this.createEvent("system", `Se usa el último mazo de ${player.name}`));
+        continue;
+      }
       const deck = buildAutoDeck(player.draftedCards, room.config.minDeckSize, (type) => this.createBasicEnergyCard(type));
       if (deck) {
         player.deck = deck;
@@ -1309,7 +1419,7 @@ export class DraftRoomManager {
   private generatePacksForRound(room: DraftRoom): void {
     const packSet = room.config.packSets[room.currentRound - 1] ?? MIXED_PACK;
     for (const player of room.players) {
-      player.currentPack = generatePack(room.config.cardsPerPack, packSet);
+      player.currentPack = generatePack(room.config.cardsPerPack, packSet, room.config.trainerSets);
     }
   }
 
