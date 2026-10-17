@@ -90,6 +90,7 @@ import {
   type RpsChoice,
 } from "@gonzaloaguila/game-core";
 import { parseGameAction } from "./schemas.js";
+import type { RoomChatMessage } from "./room-chat.js";
 
 interface RoomConfig {
   prizeCount: number;           // 4, 5, or 6
@@ -138,8 +139,10 @@ export interface GameRoom {
   turnStartedAt: number | null;       // Date.now() when current turn started
   turnTimerDuration: number;          // seconds, default 180
 
-  // Spectators
-  spectators: Set<string>;            // socket IDs watching the game
+  // Spectators: socket id -> user id (a user may watch from several tabs; counted once)
+  spectators: Map<string, string>;
+  /** The room chat's last messages (players and spectators), sent to whoever (re)joins. */
+  chat: RoomChatMessage[];
 
   // Room config
   config: RoomConfig;
@@ -166,6 +169,15 @@ export interface GameRoom {
 
 export type PlayerKey = "player1" | "player2";
 type Coin = "heads" | "tails";
+
+/** spectateRoom by a player of that room: they rejoin their seat instead (joinRoom). */
+export class SeatedSpectatorError extends Error {
+  readonly code = "SEATED_IN_ROOM";
+  constructor() {
+    super("Juegas en esta mesa: vuelve a tu partida");
+    this.name = "SeatedSpectatorError";
+  }
+}
 
 /** joinRoom on a room that doesn't exist (finished, deleted, or lost in an API restart). */
 export class RoomNotFoundError extends Error {
@@ -782,7 +794,8 @@ export class GameRoomManager {
       gameState: null,
       turnStartedAt: null,
       turnTimerDuration: 180,
-      spectators: new Set(),
+      spectators: new Map(),
+      chat: [],
       config: {
         prizeCount: prizeCount >= 4 && prizeCount <= 6 ? prizeCount : 6,
         betAmount: config?.betAmount ?? 0,
@@ -2008,12 +2021,8 @@ export class GameRoomManager {
    * Handle player disconnect
    */
   async handleDisconnect(socketId: string): Promise<string | null> {
-    // Remove from spectators if applicable
-    for (const [, r] of this.rooms.entries()) {
-      if (r.spectators.has(socketId)) {
-        r.spectators.delete(socketId);
-      }
-    }
+    // A spectator's socket: the handler calls removeSpectatorSocket first (it tells those rooms)
+    this.removeSpectatorSocket(socketId);
 
     const roomId = this.socketToRoom.get(socketId);
     if (!roomId) return null;
@@ -2447,31 +2456,44 @@ export class GameRoomManager {
   }
 
   /**
-   * Add a spectator to a room
+   * Watch a game in progress (status "playing"): the spectator gets the neutral masked state
+   * (no hands, decks or prizes) and the room chat, and may only chat. A player of the room
+   * can't watch it (SeatedSpectatorError: they rejoin their seat instead). Returns null when the
+   * room doesn't exist or isn't being played.
    */
-  addSpectator(roomId: string, socketId: string): GameRoom | null {
+  addSpectator(roomId: string, socketId: string, userId: string): GameRoom | null {
     const room = this.rooms.get(roomId);
     if (!room || room.status !== "playing") return null;
-    room.spectators.add(socketId);
+    if (this.seatOf(room, userId)) throw new SeatedSpectatorError();
+    room.spectators.set(socketId, userId);
     return room;
   }
 
-  /**
-   * Remove a spectator from a room
-   */
-  removeSpectator(roomId: string, socketId: string): void {
+  /** Stop watching a room. Returns the room when the socket was watching it. */
+  removeSpectator(roomId: string, socketId: string): GameRoom | null {
     const room = this.rooms.get(roomId);
-    if (room) {
-      room.spectators.delete(socketId);
-    }
+    if (!room?.spectators.delete(socketId)) return null;
+    return room;
   }
 
-  /**
-   * Check if a socket is a spectator in a room
-   */
+  /** A socket went away: drop it from every room it watched. Returns those rooms' ids. */
+  removeSpectatorSocket(socketId: string): string[] {
+    const roomIds: string[] = [];
+    for (const room of this.rooms.values()) {
+      if (room.spectators.delete(socketId)) roomIds.push(room.id);
+    }
+    return roomIds;
+  }
+
+  /** Whether a socket watches a room (spectators never act: they only chat). */
   isSpectator(roomId: string, socketId: string): boolean {
     const room = this.rooms.get(roomId);
     return room?.spectators.has(socketId) ?? false;
+  }
+
+  /** People watching a room (users, not tabs). */
+  spectatorCount(room: GameRoom): number {
+    return new Set(room.spectators.values()).size;
   }
 
   /** Whether the user holds a seat in a room that isn't over (waiting, ready or playing). */

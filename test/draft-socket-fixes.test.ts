@@ -95,7 +95,15 @@ describe("bug 5: entry fees come back when the draft closes before its tournamen
       s.emit("draft:join", { roomId });
       await joined;
     }
-    const started = nextEvent<any>(sa, "draft:state");
+    // B's join may still be on its way to A: wait for the state after the start
+    const started = new Promise<any>((resolve) => {
+      const onState = (s: any) => {
+        if (s.phase === "lobby") return;
+        sa.off("draft:state", onState);
+        resolve(s);
+      };
+      sa.on("draft:state", onState);
+    });
     adminSocket.emit("draft:start", { roomId });
     expect((await started).phase).toBe("drafting");
     expect((await getBalances(pa.id)).coins).toBe(700);

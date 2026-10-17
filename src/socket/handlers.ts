@@ -8,7 +8,7 @@ import {
   decks as themeDeckList,
 } from "@gonzaloaguila/game-core";
 import type { GameState } from "@gonzaloaguila/game-core";
-import { GameRoomManager, RoomNotFoundError, type ActionResult, type GameRoom, type PlayerKey } from "./rooms.js";
+import { GameRoomManager, RoomNotFoundError, SeatedSpectatorError, type ActionResult, type GameRoom, type PlayerKey } from "./rooms.js";
 import { maskRoomState } from "./room-state.js";
 import type { Viewer } from "./state-masking.js";
 import { maxBetForTitle, titleIdFromStats } from "../modules/users/titles.js";
@@ -26,6 +26,7 @@ import { socketSchemas, parsePayload } from "./schemas.js";
 import { setIo, userRoom } from "./io-registry.js";
 import { authenticateHandshake, checkSocketSession, kickBlockedUser, requireSocketUser } from "./session-guard.js";
 import * as chatService from "../modules/chat/chat.service.js";
+import { allowChatMessage, buildRoomChatMessage, rememberChatMessage } from "./room-chat.js";
 import { getChatPresence, joinChatPresence, leaveChatPresence, trackOnline, untrackOnline } from "./presence.js";
 import { prisma } from "../lib/prisma.js";
 import type { DeckCardEntry } from "../modules/decks/decks.service.js";
@@ -327,6 +328,7 @@ function serializeRoom(r: ReturnType<typeof roomManager.getRoom>) {
     joinerUsername: r.joiner.username,
     joinerAvatarId: r.joiner.avatarId,
     joinerTitleId: r.joiner.titleId,
+    spectatorCount: roomManager.spectatorCount(r),
   };
 }
 
@@ -334,6 +336,18 @@ function broadcastRoomList(io: Server) {
   io.emit("roomList", {
     rooms: roomManager.getActiveRooms().map(serializeRoom).filter(Boolean),
   });
+}
+
+/** What a spectator is told when it tries to act (play, ready, kick, coins). */
+const SPECTATOR_ONLY_ERROR = "Los espectadores solo pueden mirar y chatear";
+
+/**
+ * Everyone in the room (players and spectators) hears how many people watch it
+ * (`spectatorUpdate { roomId, count }`, users not tabs); the lobbies' table lists carry it too.
+ */
+function announceSpectators(io: Server, room: GameRoom): void {
+  io.to(room.id).emit("spectatorUpdate", { roomId: room.id, count: roomManager.spectatorCount(room) });
+  if (!room.isDraft) broadcastRoomList(io);
 }
 
 /**
@@ -419,22 +433,6 @@ function broadcastChatPresence(io: Server): void {
   io.to(GLOBAL_CHAT_ROOM).emit("chat:presence", getChatPresence());
 }
 
-// Chat flood control: at most CHAT_MAX_PER_WINDOW messages per user per window (room + global chat)
-const CHAT_WINDOW_MS = 10_000;
-const CHAT_MAX_PER_WINDOW = 8;
-const chatTimestamps = new Map<string, number[]>();
-
-function allowChatMessage(userId: string): boolean {
-  const now = Date.now();
-  const recent = (chatTimestamps.get(userId) ?? []).filter((t) => now - t < CHAT_WINDOW_MS);
-  if (recent.length >= CHAT_MAX_PER_WINDOW) {
-    chatTimestamps.set(userId, recent);
-    return false;
-  }
-  recent.push(now);
-  chatTimestamps.set(userId, recent);
-  return true;
-}
 
 /**
  * Tell the room what an action did: the opponent's animation hint, coins (showCoinFlip), the
@@ -511,7 +509,7 @@ function broadcastActionResult(io: Server, roomId: string, actionType: string, r
     // Send state to spectators (player1 perspective)
     if (room.spectators && room.spectators.size > 0) {
       const spectatorState = stateFor(room, result.gameState, "spectator");
-      for (const specSocketId of room.spectators) {
+      for (const specSocketId of room.spectators.keys()) {
         io.to(specSocketId).emit("gameState", {
           gameState: spectatorState,
           turnStartedAt: room.turnStartedAt,
@@ -755,7 +753,9 @@ export function setupSocketHandlers(io: Server): void {
             opponentVariantMap: isPlayer1 ? p2Variants : p1Variants,
             turnStartedAt: room.turnStartedAt,
             turnTimerDuration: room.turnTimerDuration,
+            spectatorCount: roomManager.spectatorCount(room),
           });
+          socket.emit("chatHistory", { roomId, messages: room.chat });
           return;
         }
 
@@ -815,6 +815,13 @@ export function setupSocketHandlers(io: Server): void {
         const parsed = parsePayload(socketSchemas.roomRef, payload);
         if (!parsed.ok) { socket.emit("error", { message: parsed.error }); return; }
         const { roomId } = parsed.data;
+        // A spectator leaving only stops watching (never a seat, never a forfeit)
+        const watched = roomManager.removeSpectator(roomId, socket.id);
+        if (watched) {
+          socket.leave(roomId);
+          announceSpectators(io, watched);
+          return;
+        }
         await roomManager.leaveRoom(roomId, socket.id);
 
         socket.leave(roomId);
@@ -836,6 +843,7 @@ export function setupSocketHandlers(io: Server): void {
         const parsed = parsePayload(socketSchemas.roomRef, payload);
         if (!parsed.ok) { socket.emit("error", { message: parsed.error }); return; }
         const { roomId } = parsed.data;
+        if (roomManager.isSpectator(roomId, socket.id)) { socket.emit("error", { message: SPECTATOR_ONLY_ERROR }); return; }
         // Legacy lobby "ready": only before the game starts (it would restart a running or
         // finished game otherwise)
         if (roomManager.getRoom(roomId)?.status !== "waiting") {
@@ -899,6 +907,7 @@ export function setupSocketHandlers(io: Server): void {
       }
       const parsed = parsePayload(socketSchemas.requestCoinFlip, payload);
       if (!parsed.ok) return ack({ success: false, error: parsed.error });
+      if (roomManager.isSpectator(parsed.data.roomId, socket.id)) return ack({ success: false, error: SPECTATOR_ONLY_ERROR });
       ack(roomManager.requestCoinFlip(parsed.data.roomId, socket.id, parsed.data));
     });
 
@@ -914,10 +923,10 @@ export function setupSocketHandlers(io: Server): void {
         if (!parsed.ok) { socket.emit("actionResult", { success: false, error: parsed.error }); return; }
         // The action body is validated by executeAction (parseGameAction)
         const { roomId, action } = parsed.data;
-
-        // Get room and state before action
-        const roomBefore = roomManager.getRoom(roomId);
-        const eventCountBefore = roomBefore?.gameState?.events?.length ?? 0;
+        if (roomManager.isSpectator(roomId, socket.id)) {
+          socket.emit("actionResult", { success: false, error: SPECTATOR_ONLY_ERROR });
+          return;
+        }
 
         const result = await roomManager.executeAction(roomId, socket.id, action);
 
@@ -952,23 +961,15 @@ export function setupSocketHandlers(io: Server): void {
 
       // Only game rooms this socket is actually in (as player or spectator); otherwise a client
       // could emit into any socket.io room, e.g. another user's private "user:<id>" room.
-      if (!socket.rooms.has(roomId) || !roomManager.getRoom(roomId)) return;
+      const room = roomManager.getRoom(roomId);
+      if (!socket.rooms.has(roomId) || !room) return;
       if (!allowChatMessage(tokenUser.userId)) return;
 
-      // Fetch username from DB (not in JWT)
-      const dbUser = await prisma.user.findUnique({
-        where: { id: tokenUser.userId },
-        select: { username: true, role: true },
-      });
-
-      io.to(roomId).emit("chatMessage", {
-        senderId: socket.id,
-        userId: tokenUser.userId,
-        username: dbUser?.username ?? "Anónimo",
-        role: dbUser?.role ?? "user",
-        content,
-        timestamp: Date.now(),
-      });
+      // Name and role from the DB (not in the JWT); spectators' messages say so ("Espectador")
+      const isSpectator = room.spectators.has(socket.id) || !roomManager.seatOf(room, tokenUser.userId);
+      const message = await buildRoomChatMessage(tokenUser.userId, socket.id, content, isSpectator);
+      rememberChatMessage(room.chat, message);
+      io.to(roomId).emit("chatMessage", message);
     });
 
     // ==========================================================================
@@ -1033,6 +1034,7 @@ export function setupSocketHandlers(io: Server): void {
         const parsed = parsePayload(socketSchemas.roomRef, payload);
         if (!parsed.ok) { socket.emit("error", { message: parsed.error }); return; }
         const { roomId } = parsed.data;
+        if (roomManager.isSpectator(roomId, socket.id)) { socket.emit("error", { message: SPECTATOR_ONLY_ERROR }); return; }
         const result = roomManager.requestKick(roomId, socket.id);
 
         if (!result.success || !result.winner) {
@@ -1054,41 +1056,72 @@ export function setupSocketHandlers(io: Server): void {
     // Spectator Mode
     // ==========================================================================
 
+    // spectateRoom { roomId }: any signed-in user watches a game in progress. They get the
+    // neutral masked state (player 1's side at the bottom, both hands/decks/prizes hidden) in
+    // `gameStart { isSpectator: true, creatorInfo, opponentInfo, draftRoomId? ... }`, the room
+    // chat (`chatHistory`), and every later `gameState`; they may only chat. A player of the
+    // room gets `error { code: "SEATED_IN_ROOM" }` (rejoin instead); a missing / not started
+    // room `error { code: "ROOM_NOT_FOUND" }`.
     socket.on("spectateRoom", async (payload: unknown) => {
       try {
+        const userId = await requireSocketUser(socket, "error");
+        if (!userId) return;
         const parsed = parsePayload(socketSchemas.roomRef, payload);
         if (!parsed.ok) { socket.emit("error", { message: parsed.error }); return; }
         const { roomId } = parsed.data;
-        const room = roomManager.addSpectator(roomId, socket.id);
+        const room = roomManager.addSpectator(roomId, socket.id, userId);
 
-        if (!room) {
-          socket.emit("error", { message: "Room not found or not playing" });
+        if (!room?.gameState) {
+          if (room) roomManager.removeSpectator(roomId, socket.id);
+          socket.emit("error", { code: "ROOM_NOT_FOUND", message: "La partida ya no está en curso" });
           return;
         }
 
         socket.join(roomId);
 
-        // Send current game state from player1 perspective (neutral view)
-        if (room.gameState) {
-          socket.emit("gameStart", {
-            roomId,
-            gameState: stateFor(room, room.gameState, "spectator"),
-            isPlayer1: true, // spectator sees from P1 perspective
-            isSpectator: true,
-            opponentInfo: room.joiner,
-            creatorInfo: room.creator,
-            turnStartedAt: room.turnStartedAt,
-            turnTimerDuration: room.turnTimerDuration,
-          });
-        }
+        const [p1Variants, p2Variants] = await Promise.all([
+          getVariantMapForDeck(room.player1DeckId),
+          getVariantMapForDeck(room.player2DeckId),
+        ]);
+        // It may have stopped watching (or the room closed) during the lookups
+        if (!room.spectators.has(socket.id) || !room.gameState) return;
 
-        // Notify room about spectator
-        io.to(roomId).emit("spectatorUpdate", { count: room.spectators.size });
+        // Player 1's side at the bottom (neutral view): creatorInfo = bottom, opponentInfo = top
+        socket.emit("gameStart", {
+          roomId,
+          gameState: stateFor(room, room.gameState, "spectator"),
+          isPlayer1: true,
+          isSpectator: true,
+          opponentInfo: room.joiner,
+          creatorInfo: room.creator,
+          playerVariantMap: p1Variants,
+          opponentVariantMap: p2Variants,
+          turnStartedAt: room.turnStartedAt,
+          turnTimerDuration: room.turnTimerDuration,
+          spectatorCount: roomManager.spectatorCount(room),
+          draftRoomId: draftRoomManager.getDraftInfoForGameRoom(roomId)?.draftRoomId ?? null,
+        });
+        socket.emit("chatHistory", { roomId, messages: room.chat });
 
-        console.log(`👁️ Spectator ${socket.id} joined room ${roomId} (total: ${room.spectators.size})`);
+        announceSpectators(io, room);
+        console.log(`👁️ Spectator ${userId} watches room ${roomId} (${roomManager.spectatorCount(room)} watching)`);
       } catch (error) {
+        if (error instanceof SeatedSpectatorError) {
+          socket.emit("error", { code: error.code, message: error.message });
+          return;
+        }
         socket.emit("error", { message: (error as Error).message });
       }
+    });
+
+    // stopSpectating { roomId }: back to the lobby (also on leaveRoom / disconnect)
+    socket.on("stopSpectating", (payload: unknown) => {
+      const parsed = parsePayload(socketSchemas.roomRef, payload);
+      if (!parsed.ok) return;
+      const room = roomManager.removeSpectator(parsed.data.roomId, socket.id);
+      if (!room) return;
+      socket.leave(room.id);
+      announceSpectators(io, room);
     });
 
     // ==========================================================================
@@ -1114,6 +1147,12 @@ export function setupSocketHandlers(io: Server): void {
       if (presenceUserId) {
         untrackOnline(presenceUserId, socket.id);
         if (leaveChatPresence(presenceUserId, socket.id)) broadcastChatPresence(io);
+      }
+
+      // Rooms it watched: one spectator less
+      for (const watchedId of roomManager.removeSpectatorSocket(socket.id)) {
+        const watched = roomManager.getRoom(watchedId);
+        if (watched) announceSpectators(io, watched);
       }
 
       // Find and handle room disconnect

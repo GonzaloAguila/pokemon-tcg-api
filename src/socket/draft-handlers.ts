@@ -7,7 +7,8 @@
 
 import type { Server, Socket } from "socket.io";
 import type { z } from "zod";
-import { DraftRoomManager, catalogIdOf, type DraftClosedInfo, type DraftPlayer, type DraftRoom } from "./draft-rooms.js";
+import { DraftMemberError, DraftRoomManager, catalogIdOf, type DraftClosedInfo, type DraftPlayer, type DraftRoom } from "./draft-rooms.js";
+import { allowChatMessage, buildRoomChatMessage, rememberChatMessage } from "./room-chat.js";
 import { GameRoomManager } from "./rooms.js";
 import { maskRoomState } from "./room-state.js";
 import { prisma } from "../lib/prisma.js";
@@ -32,13 +33,20 @@ const DRAFT_CHECKIN_MS = 5 * 60_000;
 // Singleton draft room manager (exported for game-over reporting)
 export const draftRoomManager = new DraftRoomManager();
 
+/** What a spectator is told when it tries to act in a draft (pick, build, start...). */
+const SPECTATOR_ONLY_ERROR = "Los espectadores solo pueden mirar y chatear";
+
 /**
- * Broadcast masked draft state to all connected players in a room,
- * and to the spectating admin if they are not in the players array.
+ * Broadcast masked draft state to all connected players in a room, to the admin when it
+ * doesn't play (not in the players array), and to every spectator (their own masking: no
+ * pack or pool while picking). Then the lobbies' "En curso" list, when it changed.
  */
 function broadcastDraftState(io: Server, roomId: string): void {
   const room = draftRoomManager.getRoom(roomId);
-  if (!room) return;
+  if (!room) {
+    broadcastLiveDrafts(io);
+    return;
+  }
 
   const sentSocketIds = new Set<string>();
 
@@ -54,7 +62,27 @@ function broadcastDraftState(io: Server, roomId: string): void {
   if (room.adminSocketId && !sentSocketIds.has(room.adminSocketId)) {
     const masked = draftRoomManager.getMaskedState(roomId, room.adminSocketId);
     io.to(room.adminSocketId).emit("draft:state", masked);
+    sentSocketIds.add(room.adminSocketId);
   }
+
+  for (const spectatorSocketId of room.spectators.keys()) {
+    if (sentSocketIds.has(spectatorSocketId)) continue;
+    io.to(spectatorSocketId).emit("draft:state", draftRoomManager.getMaskedState(roomId, spectatorSocketId));
+  }
+
+  broadcastLiveDrafts(io);
+}
+
+/** The last "En curso" draft list sent to the lobbies (only re-sent when it changes). */
+let lastLiveDrafts = "";
+
+/** draft:liveRooms: the drafts being played, to every client, when the list changed. */
+function broadcastLiveDrafts(io: Server): void {
+  const live = draftRoomManager.getLiveRooms();
+  const signature = JSON.stringify(live);
+  if (signature === lastLiveDrafts) return;
+  lastLiveDrafts = signature;
+  io.emit("draft:liveRooms", live);
 }
 
 /**
@@ -92,6 +120,8 @@ export async function createMatchGames(
       console.error(`[draft] Could not create the game R${roundNumber}-M${pairing.matchNumber} of room ${draftRoomId}:`, err),
     );
   }
+  // The round's games can be watched now (state.liveGames)
+  broadcastDraftState(io, draftRoomId);
 }
 
 /** One draft match: a game room with both drafted decks, and each player told. */
@@ -207,6 +237,8 @@ export function announceDraftResult(
       });
     }
   }
+  // Results and the games still being played (spectators follow the bracket from the state)
+  broadcastDraftState(io, draftRoomId);
   if (progress.newRoundStarted && draftRoom.tournament) {
     createMatchGames(io, draftRoomId, draftRoom.tournament.currentRoundNumber, gameRoomManager).catch((err) => {
       console.error("Error creating next round games:", err);
@@ -332,6 +364,7 @@ async function onDraftRoomClosed(
   }
   io.in(room.id).socketsLeave(room.id);
   broadcastRoomList(io);
+  broadcastLiveDrafts(io);
 
   // Games of a cancelled tournament end without a result
   for (const gameRoomId of info.gameRoomIds) {
@@ -407,12 +440,80 @@ export function registerDraftEvents(
     },
   });
 
+  /** A spectator can't act in the draft it watches: draft:error and true. */
+  const rejectSpectator = (roomId: string): boolean => {
+    if (!draftRoomManager.isSpectator(roomId, socket.id)) return false;
+    socket.emit("draft:error", { message: SPECTATOR_ONLY_ERROR });
+    return true;
+  };
+
   // --------------------------------------------------------------------------
   // Lobby
   // --------------------------------------------------------------------------
 
   socket.on("draft:getRooms", () => {
     socket.emit("draft:roomList", draftRoomManager.getAvailableRooms());
+  });
+
+  // draft:getLiveRooms -> draft:liveRooms LiveDraftInfo[]: drafts being played, to watch them
+  socket.on("draft:getLiveRooms", () => {
+    socket.emit("draft:liveRooms", draftRoomManager.getLiveRooms());
+  });
+
+  // --------------------------------------------------------------------------
+  // Spectators and chat
+  // --------------------------------------------------------------------------
+
+  // draft:spectate { roomId }: any signed-in user watches a draft already started. They get
+  // draft:state (isSpectator: true; no card of anyone's pack or pool while picking) and
+  // draft:chatHistory, and may only chat. A player or the admin of that draft gets
+  // draft:error { code: "DRAFT_MEMBER" } (they draft:join).
+  socket.on("draft:spectate", async (payload: unknown) => {
+    try {
+      const userId = await requireDraftUser(socket);
+      if (!userId) return;
+      const data = parseDraft(socket, draftSchemas.roomRef, payload);
+      if (!data) return;
+      const account = await prisma.user.findUnique({ where: { id: userId }, select: { username: true } });
+      if (!account) {
+        socket.emit("draft:error", { message: "Solicitud inválida" });
+        return;
+      }
+      const room = draftRoomManager.addSpectator(data.roomId, socket.id, userId, account.username);
+      socket.join(room.id);
+      socket.emit("draft:chatHistory", { roomId: room.id, messages: room.chat });
+      broadcastDraftState(io, room.id);
+      console.log(`👁️ ${account.username} watches draft ${room.id}`);
+    } catch (error) {
+      const code = error instanceof DraftMemberError ? error.code : undefined;
+      socket.emit("draft:error", { message: (error as Error).message, ...(code ? { code } : {}) });
+    }
+  });
+
+  // draft:stopSpectating { roomId }: back to the lobby (also on draft:leave / disconnect)
+  socket.on("draft:stopSpectating", (payload: unknown) => {
+    const parsed = parsePayload(draftSchemas.roomRef, payload);
+    if (!parsed.ok) return;
+    const room = draftRoomManager.removeSpectator(parsed.data.roomId, socket.id);
+    if (!room) return;
+    socket.leave(room.id);
+    broadcastDraftState(io, room.id);
+  });
+
+  // draft:chat { roomId, content }: players, the admin and spectators of that draft write in
+  // its chat -> draft:chatMessage RoomChatMessage (isSpectator: "Espectador") to the whole room
+  socket.on("draft:chat", async (payload: unknown) => {
+    const userId = await requireDraftUser(socket);
+    if (!userId) return;
+    const data = parseDraft(socket, draftSchemas.chat, payload);
+    if (!data) return;
+    const room = draftRoomManager.getRoom(data.roomId);
+    if (!room || !draftRoomManager.canChat(room, socket.id)) return;
+    if (!allowChatMessage(userId)) return;
+    const message = await buildRoomChatMessage(userId, socket.id, data.content, room.spectators.has(socket.id));
+    if (draftRoomManager.getRoom(room.id) !== room) return;
+    rememberChatMessage(room.chat, message);
+    io.to(room.id).emit("draft:chatMessage", { roomId: room.id, ...message });
   });
 
   // draft:getMyRoom: the draft this player is in the middle of → draft:myRoom { roomId, phase } | null
@@ -521,6 +622,7 @@ export function registerDraftEvents(
         }
 
         socket.join(room.id);
+        socket.emit("draft:chatHistory", { roomId: room.id, messages: room.chat });
         broadcastDraftState(io, roomId);
         broadcastRoomList(io);
 
@@ -560,6 +662,12 @@ export function registerDraftEvents(
       const data = parseDraft(socket, draftSchemas.roomRef, payload);
       if (!data) return;
       const { roomId } = data;
+      // A spectator leaving only stops watching
+      if (draftRoomManager.removeSpectator(roomId, socket.id)) {
+        socket.leave(roomId);
+        broadcastDraftState(io, roomId);
+        return;
+      }
       const room = draftRoomManager.leaveRoom(roomId, socket.id);
 
       socket.leave(roomId);
@@ -609,6 +717,7 @@ export function registerDraftEvents(
     const data = parseDraft(socket, draftSchemas.roomRef, payload);
     if (!data) return;
     const roomId = data.roomId;
+    if (rejectSpectator(roomId)) return;
     if (startingRooms.has(roomId)) return; // a start (and its charging) is already in progress
     const charged: string[] = [];
     let entryFee = 0;
@@ -681,6 +790,7 @@ export function registerDraftEvents(
       const data = parseDraft(socket, draftSchemas.pick, payload);
       if (!data) return;
       const { roomId, cardId } = data;
+      if (rejectSpectator(roomId)) return;
       draftRoomManager.pickCard(roomId, socket.id, cardId);
       broadcastDraftState(io, roomId);
     } catch (error) {
@@ -696,6 +806,7 @@ export function registerDraftEvents(
         const data = parseDraft(socket, draftSchemas.bonusPick, payload);
         if (!data) return;
         const { roomId, cardDefIds } = data;
+        if (rejectSpectator(roomId)) return;
         draftRoomManager.bonusPick(roomId, socket.id, cardDefIds);
         broadcastDraftState(io, roomId);
       } catch (error) {
@@ -712,6 +823,7 @@ export function registerDraftEvents(
         const data = parseDraft(socket, draftSchemas.submitDeck, payload);
         if (!data) return;
         const { roomId, deckCardIds, energyCards } = data;
+        if (rejectSpectator(roomId)) return;
         // When this was the last deck, the tournament starts (onTournamentStart creates the games)
         draftRoomManager.submitDeck(roomId, socket.id, deckCardIds, energyCards);
         broadcastDraftState(io, roomId);
@@ -729,6 +841,7 @@ export function registerDraftEvents(
       if (!(await requireDraftUser(socket))) return;
       const data = parseDraft(socket, draftSchemas.roomRef, payload);
       if (!data) return;
+      if (rejectSpectator(data.roomId)) return;
       draftRoomManager.unreadyDeck(data.roomId, socket.id);
       broadcastDraftState(io, data.roomId);
     } catch (error) {
@@ -749,6 +862,7 @@ export function registerDraftEvents(
         const data = parseDraft(socket, draftSchemas.forfeit, payload);
         if (!data) return;
         const { draftRoomId, gameRoomId } = data;
+        if (rejectSpectator(draftRoomId)) return;
         const draftInfo = draftRoomManager.getDraftInfoForGameRoom(gameRoomId);
         if (!draftInfo || draftInfo.draftRoomId !== draftRoomId) {
           socket.emit("draft:error", { message: "Partida de draft no encontrada" });
@@ -815,6 +929,7 @@ export function registerDraftEvents(
       const data = parseDraft(socket, draftSchemas.roomRef, payload);
       if (!data) return;
       const { roomId } = data;
+      if (rejectSpectator(roomId)) return;
       if (withdrawingUsers.has(userId)) return;
       withdrawingUsers.add(userId);
       try {
@@ -863,6 +978,8 @@ export function registerDraftEvents(
   // --------------------------------------------------------------------------
 
   socket.on("disconnect", () => {
+    // Drafts it watched: one spectator less
+    for (const watched of draftRoomManager.removeSpectatorSocket(socket.id)) broadcastDraftState(io, watched.id);
     const room = draftRoomManager.handleDisconnect(socket.id);
     if (room) {
       broadcastDraftState(io, room.id);

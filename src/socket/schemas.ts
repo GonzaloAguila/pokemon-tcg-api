@@ -103,7 +103,7 @@ export const socketSchemas = {
     deckId: optional(deckId),
   }),
 
-  /** deleteRoom, leaveRoom, ready, requestKick, spectateRoom */
+  /** deleteRoom, leaveRoom, ready, requestKick, spectateRoom, stopSpectating */
   roomRef: z.object({ roomId }),
 
   /** Coins a Trainer (by card id in hand) or activated power (by Pokémon id) flips before its steps. */
@@ -150,7 +150,7 @@ const draftConfig = z.object({
 
 export const draftSchemas = {
   create: z.object({ config: optional(draftConfig) }),
-  /** draft:join, draft:leave, draft:delete, draft:start, draft:editDeck */
+  /** draft:join, draft:leave, draft:delete, draft:start, draft:editDeck, draft:spectate, draft:stopSpectating */
   roomRef: z.object({ roomId }),
   pick: z.object({ roomId, cardId: instanceId }),
   bonusPick: z.object({ roomId, cardDefIds: idList(10) }),
@@ -163,6 +163,8 @@ export const draftSchemas = {
       .max(BASIC_ENERGY_TYPES.length),
   }),
   forfeit: z.object({ draftRoomId: roomId, gameRoomId: roomId }),
+  /** draft:chat: a message in the draft's chat (players, admin, spectators). */
+  chat: z.object({ roomId, content: z.string().trim().min(1).max(500) }),
 };
 
 // ---------------------------------------------------------------------------

@@ -20,6 +20,7 @@ import {
 } from "@gonzaloaguila/game-core";
 import type { Card, CardSetId, GameCard } from "@gonzaloaguila/game-core";
 import { ECONOMY } from "../modules/economy/config.js";
+import type { RoomChatMessage } from "./room-chat.js";
 
 // ============================================================================
 // Types
@@ -133,6 +134,14 @@ export type DraftRoom = {
   expiryTimer: ReturnType<typeof setTimeout> | null;
   /** draft:start is charging the entry fees: nobody new may sit down meanwhile. */
   starting: boolean;
+  /**
+   * People watching the draft without playing it (draft:spectate): socket id -> who. They see
+   * the table but no card of anyone's pack or pool while picking (see getMaskedState) and may
+   * only chat.
+   */
+  spectators: Map<string, { userId: string; name: string }>;
+  /** The draft chat's last messages (players, admin and spectators). */
+  chat: RoomChatMessage[];
 };
 
 /** A player's final position and the coins it won. */
@@ -232,7 +241,47 @@ export type ClientDraftState = {
   prizePool: number;
   /** Final positions and prizes, once the tournament is over. */
   prizes: DraftPrize[] | null;
+  /** The viewer watches the draft (draft:spectate): it can't pick, build or play, only chat. */
+  isSpectator: boolean;
+  /** People watching (users, not tabs). */
+  spectatorCount: number;
+  /** Games of the tournament being played right now (anyone may watch them: spectateRoom). */
+  liveGames: LiveDraftGame[];
 };
+
+/** A draft game in progress. */
+export type LiveDraftGame = {
+  gameRoomId: string;
+  roundNumber: number;
+  matchNumber: number;
+  player1Name: string;
+  player2Name: string;
+};
+
+/** A draft being played (not in its lobby, not over), for the lobby's "En curso" list. */
+export type LiveDraftInfo = {
+  id: string;
+  phase: DraftPhase;
+  adminName: string;
+  players: { id: string; name: string; withdrawn: boolean }[];
+  /** Pack being drafted (1..packsPerPlayer) while picking. */
+  currentRound: number;
+  packsPerPlayer: number;
+  /** Tournament round while matching. */
+  tournamentRound: number | null;
+  totalRounds: number | null;
+  spectatorCount: number;
+  liveGameCount: number;
+};
+
+/** draft:spectate by someone who plays (or runs) that draft: they join it instead. */
+export class DraftMemberError extends Error {
+  readonly code = "DRAFT_MEMBER";
+  constructor() {
+    super("Participas en este draft: entra como jugador");
+    this.name = "DraftMemberError";
+  }
+}
 
 /** Room info for the lobby list */
 export type DraftRoomInfo = {
@@ -630,6 +679,8 @@ export class DraftRoomManager {
       prizesPaid: false,
       expiryTimer: null,
       starting: false,
+      spectators: new Map(),
+      chat: [],
     };
 
     this.rooms.set(roomId, room);
@@ -1093,12 +1144,22 @@ export class DraftRoomManager {
   // State Queries
   // --------------------------------------------------------------------------
 
+  /**
+   * The state one socket may see. A player sees their own pack, pool and deck; nobody else's.
+   * A spectator never sees a card of anyone's pack or pool while the draft is picking (they can
+   * chat with the players: they could pass on what is coming). Once the picking is over
+   * (building, matching, finished) they see every player's pool, and every deck once the
+   * tournament started (the decks are final then). They don't get the bonus-pick pool.
+   */
   getMaskedState(roomId: string, forSocketId: string): ClientDraftState | null {
     const room = this.rooms.get(roomId);
     if (!room) return null;
 
+    const isSpectator = room.spectators.has(forSocketId);
+    const picking = room.phase === "lobby" || room.phase === "drafting" || room.phase === "bonus-pick";
+    const tournamentStarted = room.phase === "matching" || room.phase === "finished";
     const players: ClientDraftPlayer[] = room.players.map((p) => {
-      const isYou = p.socketId === forSocketId;
+      const isYou = !isSpectator && p.socketId === forSocketId;
       return {
         id: p.id,
         name: p.name,
@@ -1108,8 +1169,8 @@ export class DraftRoomManager {
         isYou,
         withdrawn: p.withdrawn,
         currentPack: isYou ? p.currentPack : null,
-        draftedCards: isYou ? p.draftedCards : null,
-        deck: isYou && room.phase === "building" ? p.deck : null,
+        draftedCards: isYou || (isSpectator && !picking) ? p.draftedCards : null,
+        deck: (isYou && room.phase === "building") || (isSpectator && tournamentStarted) ? p.deck : null,
         currentPackSize: p.currentPack.length,
         draftedCardsCount: p.draftedCards.length,
       };
@@ -1131,11 +1192,102 @@ export class DraftRoomManager {
       events: room.events,
       matchPairings: room.matchPairings,
       tournament: room.tournament,
-      bonusPickPool: room.phase === "bonus-pick" ? room.bonusPickPool : [],
-      isAdminViewer: viewerId !== null && this.isRoomAdmin(room, viewerId),
+      bonusPickPool: room.phase === "bonus-pick" && !isSpectator ? room.bonusPickPool : [],
+      isAdminViewer: !isSpectator && viewerId !== null && this.isRoomAdmin(room, viewerId),
       prizePool: room.prizePool,
       prizes: room.prizes,
+      isSpectator,
+      spectatorCount: this.spectatorCount(room),
+      liveGames: this.liveGamesOf(room),
     };
+  }
+
+  // --------------------------------------------------------------------------
+  // Spectators
+  // --------------------------------------------------------------------------
+
+  /**
+   * Watch a draft already started (any phase but the lobby, where it is joined instead). A
+   * player of it (not withdrawn) or its admin can't: DraftMemberError (they draft:join).
+   */
+  addSpectator(roomId: string, socketId: string, userId: string, name: string): DraftRoom {
+    const room = this.rooms.get(roomId);
+    if (!room) throw new Error("Sala no encontrada");
+    if (room.phase === "lobby") throw new Error("El draft todavía no empezó: puedes unirte desde el lobby");
+    if (room.adminId === userId || room.players.some((p) => p.id === userId && !p.withdrawn)) {
+      throw new DraftMemberError();
+    }
+    room.spectators.set(socketId, { userId, name });
+    return room;
+  }
+
+  /** Stop watching. Returns the room when the socket was watching it. */
+  removeSpectator(roomId: string, socketId: string): DraftRoom | null {
+    const room = this.rooms.get(roomId);
+    if (!room?.spectators.delete(socketId)) return null;
+    return room;
+  }
+
+  /** A socket went away: drop it from every draft it watched. Returns those rooms. */
+  removeSpectatorSocket(socketId: string): DraftRoom[] {
+    const rooms: DraftRoom[] = [];
+    for (const room of this.rooms.values()) {
+      if (room.spectators.delete(socketId)) rooms.push(room);
+    }
+    return rooms;
+  }
+
+  isSpectator(roomId: string, socketId: string): boolean {
+    return this.rooms.get(roomId)?.spectators.has(socketId) ?? false;
+  }
+
+  /** People watching (users, not tabs). */
+  spectatorCount(room: DraftRoom): number {
+    return new Set([...room.spectators.values()].map((s) => s.userId)).size;
+  }
+
+  /** Whether a socket may write in the draft chat: a player's, the admin's or a spectator's. */
+  canChat(room: DraftRoom, socketId: string): boolean {
+    return room.spectators.has(socketId) || room.adminSocketId === socketId || room.players.some((p) => p.socketId === socketId);
+  }
+
+  /** The tournament games being played now. */
+  private liveGamesOf(room: DraftRoom): LiveDraftGame[] {
+    const games: LiveDraftGame[] = [];
+    if (room.phase !== "matching") return games;
+    const nameOf = (id: string) => room.players.find((p) => p.id === id)?.name ?? "?";
+    for (const [gameRoomId, info] of this.gameRoomToDraft) {
+      if (info.draftRoomId !== room.id) continue;
+      games.push({
+        gameRoomId,
+        roundNumber: info.roundNumber,
+        matchNumber: info.matchNumber,
+        player1Name: nameOf(info.player1Id),
+        player2Name: nameOf(info.player2Id),
+      });
+    }
+    return games.sort((a, b) => a.roundNumber - b.roundNumber || a.matchNumber - b.matchNumber);
+  }
+
+  /** Drafts being played (picking, building or in their tournament), for the lobby. */
+  getLiveRooms(): LiveDraftInfo[] {
+    const live: LiveDraftInfo[] = [];
+    for (const room of this.rooms.values()) {
+      if (room.phase === "lobby" || room.phase === "finished") continue;
+      live.push({
+        id: room.id,
+        phase: room.phase,
+        adminName: room.adminName,
+        players: room.players.map((p) => ({ id: p.id, name: p.name, withdrawn: p.withdrawn })),
+        currentRound: room.currentRound,
+        packsPerPlayer: room.config.packsPerPlayer,
+        tournamentRound: room.tournament?.currentRoundNumber ?? null,
+        totalRounds: room.tournament?.totalRounds ?? null,
+        spectatorCount: this.spectatorCount(room),
+        liveGameCount: this.liveGamesOf(room).length,
+      });
+    }
+    return live;
   }
 
   /** Rooms players can join (lobby phase). */
