@@ -136,8 +136,8 @@ export type DraftRoom = {
   starting: boolean;
   /**
    * People watching the draft without playing it (draft:spectate): socket id -> who. They see
-   * the table but no card of anyone's pack or pool while picking (see getMaskedState) and may
-   * only chat.
+   * the table but no card of anyone's pack, pool or deck until the tournament has finished (see
+   * getMaskedState) and may only chat.
    */
   spectators: Map<string, { userId: string; name: string }>;
   /** The draft chat's last messages (players, admin and spectators). */
@@ -1146,18 +1146,17 @@ export class DraftRoomManager {
 
   /**
    * The state one socket may see. A player sees their own pack, pool and deck; nobody else's.
-   * A spectator never sees a card of anyone's pack or pool while the draft is picking (they can
-   * chat with the players: they could pass on what is coming). Once the picking is over
-   * (building, matching, finished) they see every player's pool, and every deck once the
-   * tournament started (the decks are final then). They don't get the bonus-pick pool.
+   * A spectator never sees a card of anyone's pack, pool or deck while the draft is being played
+   * (they chat with the players: they could tell one what another drafted or plays). Every pool
+   * and deck is shown to them once the tournament has finished. They never get the bonus-pick
+   * pool. While the tournament runs they watch its games like any table (spectateRoom).
    */
   getMaskedState(roomId: string, forSocketId: string): ClientDraftState | null {
     const room = this.rooms.get(roomId);
     if (!room) return null;
 
     const isSpectator = room.spectators.has(forSocketId);
-    const picking = room.phase === "lobby" || room.phase === "drafting" || room.phase === "bonus-pick";
-    const tournamentStarted = room.phase === "matching" || room.phase === "finished";
+    const showsAllCards = isSpectator && room.phase === "finished";
     const players: ClientDraftPlayer[] = room.players.map((p) => {
       const isYou = !isSpectator && p.socketId === forSocketId;
       return {
@@ -1169,8 +1168,8 @@ export class DraftRoomManager {
         isYou,
         withdrawn: p.withdrawn,
         currentPack: isYou ? p.currentPack : null,
-        draftedCards: isYou || (isSpectator && !picking) ? p.draftedCards : null,
-        deck: (isYou && room.phase === "building") || (isSpectator && tournamentStarted) ? p.deck : null,
+        draftedCards: isYou || showsAllCards ? p.draftedCards : null,
+        deck: (isYou && room.phase === "building") || showsAllCards ? p.deck : null,
         currentPackSize: p.currentPack.length,
         draftedCardsCount: p.draftedCards.length,
       };

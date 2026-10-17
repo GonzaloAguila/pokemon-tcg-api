@@ -412,7 +412,7 @@ describe("watching a draft", () => {
     await closeDraft(d);
   });
 
-  it("shows the pools once the picking is over and the decks once the tournament started; lists its games", async () => {
+  it("shows no pool or deck while building or during the tournament, every one once it finished; lists its games", async () => {
     const d = await startDraft();
     const sv = await server.connect(tokenFor(await createUser()));
     await spectateDraft(sv, d.roomId);
@@ -430,8 +430,8 @@ describe("watching a draft", () => {
     room.phase = "building";
     room.players[0].deck = [card("Pikachu", "deck-a1")];
     view = draftRoomManager.getMaskedState(d.roomId, sv.id)!;
-    expect(view.players.map((p) => p.draftedCards?.map((c) => c.id))).toEqual([["pool-a1"], ["pool-b1"]]);
-    expect(view.players.every((p) => p.deck === null)).toBe(true);
+    expect(view.players.every((p) => p.draftedCards === null && p.deck === null)).toBe(true);
+    expect(JSON.stringify(view)).not.toMatch(/pool-a1|pool-b1|deck-a1/);
     // A player still sees only their own pool
     const aView = draftRoomManager.getMaskedState(d.roomId, d.sa.id)!;
     expect(aView.players.find((p) => !p.isYou)!.draftedCards).toBeNull();
@@ -453,7 +453,8 @@ describe("watching a draft", () => {
     draftRoomManager.registerGameRoom(game.id, d.roomId, 1, 1, d.a.id, d.b.id);
 
     view = draftRoomManager.getMaskedState(d.roomId, sv.id)!;
-    expect(view.players[0].deck?.map((c) => c.id)).toEqual(["deck-a1"]);
+    expect(view.players.every((p) => p.draftedCards === null && p.deck === null)).toBe(true);
+    expect(JSON.stringify(view)).not.toMatch(/pool-a1|pool-b1|deck-a1/);
     expect(view.liveGames).toEqual([
       { gameRoomId: game.id, roundNumber: 1, matchNumber: 1, player1Name: d.a.username, player2Name: d.b.username },
     ]);
@@ -462,6 +463,14 @@ describe("watching a draft", () => {
     expect(isHidden(start.gameState.playerHand)).toBe(true);
     // Draft games aren't in the lobby's table list
     expect(roomManager.getActiveRooms().some((r) => r.id === game.id)).toBe(false);
+
+    // The tournament is over: every pool and deck
+    room.phase = "finished";
+    view = draftRoomManager.getMaskedState(d.roomId, sv.id)!;
+    expect(view.players.map((p) => p.draftedCards?.map((c) => c.id))).toEqual([["pool-a1"], ["pool-b1"]]);
+    expect(view.players[0].deck?.map((c) => c.id)).toEqual(["deck-a1"]);
+    // Players still see only their own
+    expect(draftRoomManager.getMaskedState(d.roomId, d.sa.id)!.players.find((p) => !p.isYou)!.deck).toBeNull();
     await sleep(50);
     await closeDraft(d);
   });
