@@ -18,6 +18,7 @@ import { roomManager } from "../src/socket/handlers.js";
 import * as matches from "../src/modules/matches/matches.service.js";
 import { matchesRouter } from "../src/modules/matches/index.js";
 import { ECONOMY } from "../src/modules/economy/config.js";
+import { startOfEconomyDay } from "../src/modules/economy/economy-time.js";
 import { checkAndUpdateProgress, claimAchievement, listAchievements } from "../src/modules/achievements/achievements.service.js";
 import { createUser, getBalances, race } from "./helpers.js";
 import { startHttpApp } from "./http-helpers.js";
@@ -88,7 +89,7 @@ describe("vs AI Lucky Duel: the stake", () => {
     const token = tokenFor(u);
     const res = await app.request("POST", "/api/matches/ai", { token, body: { mode: "lucky-duel" } });
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ matchId: expect.any(String), luckyDuel: { stake: CFG.stake, streak: 0 } });
+    expect(res.body).toEqual({ matchId: expect.any(String), luckyDuel: { stake: CFG.stake, streak: 0, stakedGamesLeft: CFG.dailyStakedGames - 1 } });
     expect(await coins(u.id)).toBe(100 - CFG.stake);
     const match = await prisma.match.findUniqueOrThrow({ where: { id: res.body.matchId } });
     expect(match).toMatchObject({ mode: "ai", gameMode: "lucky-duel", betAmount: CFG.stake, settledAt: null });
@@ -180,7 +181,7 @@ describe("vs AI Lucky Duel: the stake", () => {
   it("an account without a verified email plays for nothing (stake 0, no bonus) but keeps its streak", async () => {
     const u = await createUser({ coins: 100 }, { stats: true, emailVerified: false });
     const start = await app.request("POST", "/api/matches/ai", { token: tokenFor(u), body: { mode: "lucky-duel" } });
-    expect(start.body.luckyDuel).toEqual({ stake: 0, streak: 0 });
+    expect(start.body.luckyDuel).toEqual({ stake: 0, streak: 0, stakedGamesLeft: 0 });
     await prisma.match.delete({ where: { id: start.body.matchId } });
     for (let i = 0; i < CFG.streakBonusEvery; i++) {
       const res = await playAi(u, "victory");
@@ -197,12 +198,82 @@ describe("vs AI Lucky Duel: the stake", () => {
     const res = await app.request("GET", "/api/matches/ai/lucky-duel", { token: tokenFor(u) });
     expect(res.body).toEqual({
       stake: CFG.stake,
+      stakedGamesLeft: CFG.dailyStakedGames - 2,
       streakBonusEvery: CFG.streakBonusEvery,
       streakBonus: CFG.streakBonus,
       streak: 2,
       luckyDuelStreak: 2,
       luckyDuelBestStreak: 2,
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Daily staked games (ECONOMY.luckyDuelAi.dailyStakedGames)
+// ---------------------------------------------------------------------------
+
+/** `count` settled, staked vs-AI Lucky Duels of `userId` started at `startedAt`. */
+async function seedStakedGames(userId: string, count: number, startedAt = new Date()) {
+  await prisma.match.createMany({
+    data: Array.from({ length: count }, () => ({
+      mode: "ai",
+      gameMode: "lucky-duel",
+      status: "finished",
+      player1Id: userId,
+      betAmount: CFG.stake,
+      startedAt,
+      settledAt: startedAt,
+      winReason: "lucky-duel: defeat",
+    })),
+  });
+}
+
+describe("vs AI Lucky Duel: the daily staked games", () => {
+  it(`the first ${CFG.dailyStakedGames} starts of the day are staked, the next ones take nothing (even without coins)`, async () => {
+    const u = await createUser({ coins: CFG.stake * CFG.dailyStakedGames }, { stats: true });
+    for (let i = 1; i <= CFG.dailyStakedGames; i++) {
+      const start = await matches.startAiMatch(u.id, "lucky-duel");
+      expect(start.luckyDuel).toMatchObject({ stake: CFG.stake, stakedGamesLeft: CFG.dailyStakedGames - i });
+    }
+    expect(await coins(u.id)).toBe(0);
+    const res = await app.request("GET", "/api/matches/ai/lucky-duel", { token: tokenFor(u) });
+    expect(res.body).toMatchObject({ stake: 0, stakedGamesLeft: 0 });
+
+    // No 400 with 0 coins: the game wouldn't be staked
+    const unstaked = await app.request("POST", "/api/matches/ai", { token: tokenFor(u), body: { mode: "lucky-duel" } });
+    expect(unstaked.status).toBe(200);
+    expect(unstaked.body.luckyDuel).toEqual({ stake: 0, streak: 0, stakedGamesLeft: 0 });
+    expect(await prisma.match.findUniqueOrThrow({ where: { id: unstaked.body.matchId } })).toMatchObject({ gameMode: "lucky-duel", betAmount: 0 });
+    await prisma.match.update({ where: { id: unstaked.body.matchId }, data: { startedAt: startedLongAgo() } });
+    const won = await matches.finishAiMatch(u.id, unstaked.body.matchId, "victory", 2);
+    expect(won.luckyDuel).toMatchObject({ stake: 0, payout: 0, streak: 1, streakBonus: 0 });
+    expect(await coins(u.id)).toBe(0);
+    expect(await prisma.transaction.count({ where: { userId: u.id, type: "lucky_duel_stake" } })).toBe(CFG.dailyStakedGames);
+  });
+
+  it("an unstaked game moves the streak but never pays the streak bonus; the next staked bonus still comes", async () => {
+    const u = await createUser({ coins: 1000 }, { stats: true });
+    await prisma.userStats.update({ where: { userId: u.id }, data: { luckyDuelAiStreak: CFG.streakBonusEvery - 1 } });
+    await seedStakedGames(u.id, CFG.dailyStakedGames);
+    const res = await playAi(u, "victory");
+    expect(res.luckyDuel).toEqual({ stake: 0, payout: 0, streak: CFG.streakBonusEvery, streakBonus: 0, quickVictory: false });
+    expect(await coins(u.id)).toBe(1000);
+    expect(await prisma.transaction.count({ where: { userId: u.id } })).toBe(0);
+    // An unstaked defeat still resets it
+    expect((await playAi(u, "defeat")).luckyDuel).toMatchObject({ stake: 0, streak: 0 });
+  });
+
+  it("games of the previous economy day don't count; the day's last staked game is taken once under concurrency", async () => {
+    const u = await createUser({ coins: 1000 }, { stats: true });
+    await seedStakedGames(u.id, CFG.dailyStakedGames, new Date(startOfEconomyDay(new Date()).getTime() - 1));
+    const first = await matches.startAiMatch(u.id, "lucky-duel");
+    expect(first.luckyDuel).toMatchObject({ stake: CFG.stake, stakedGamesLeft: CFG.dailyStakedGames - 1 });
+
+    const v = await createUser({ coins: 1000 }, { stats: true });
+    await seedStakedGames(v.id, CFG.dailyStakedGames - 1);
+    const { fulfilled } = await race(3, () => matches.startAiMatch(v.id, "lucky-duel"));
+    expect(fulfilled.map((r) => r.value.luckyDuel!.stake).sort((a, b) => a - b)).toEqual([0, 0, CFG.stake]);
+    expect(await coins(v.id)).toBe(1000 - CFG.stake);
   });
 });
 
@@ -218,7 +289,7 @@ describe("vs AI Lucky Duel: abandon on a new start", () => {
     const { matchId: left } = await matches.startAiMatch(u.id, "lucky-duel");
     expect(await coins(u.id)).toBe(120); // 100 + 2 × 20 - 20 escrowed
     const next = await matches.startAiMatch(u.id, "lucky-duel");
-    expect(next.luckyDuel).toEqual({ stake: 20, streak: 0 });
+    expect(next.luckyDuel).toEqual({ stake: 20, streak: 0, stakedGamesLeft: CFG.dailyStakedGames - 4 });
     expect(await coins(u.id)).toBe(100);
     expect(await prisma.match.findUniqueOrThrow({ where: { id: left } })).toMatchObject({
       status: "finished",

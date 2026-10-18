@@ -387,7 +387,8 @@ async function settleMatchTx(tx: Db, matchId: string, input: SettleInput, now: D
       if (!luckyAi) continue;
       luckyAi.streak = streaks.aiStreak;
       const bonusDue = outcome === "win" && cfg.streakBonusEvery > 0 && streaks.aiStreak % cfg.streakBonusEvery === 0;
-      if (bonusDue && cfg.streakBonus > 0 && verified.get(p)) {
+      // Only a staked game pays it (unverified accounts and games past the daily staked ones don't)
+      if (bonusDue && cfg.streakBonus > 0 && bet > 0 && verified.get(p)) {
         await creditBalance(
           p,
           "coins",
@@ -552,13 +553,27 @@ export interface AiLuckyDuelReport {
 
 export interface StartAiMatchResult {
   matchId: string;
-  /** Lucky Duel only: the stake escrowed for this game and the current vs-AI Lucky Duel streak. */
-  luckyDuel?: { stake: number; streak: number };
+  /**
+   * Lucky Duel only: the stake escrowed for this game (0 = unstaked: no verified email or the
+   * day's staked games are used up), the current vs-AI Lucky Duel streak and the staked games
+   * left today after this one.
+   */
+  luckyDuel?: { stake: number; streak: number; stakedGamesLeft: number };
 }
 
-/** The Lucky Duel stake `userId` plays for vs the AI: 0 for an account without a verified email. */
-async function luckyDuelAiStake(db: Db, userId: string): Promise<number> {
-  return (await hasVerifiedEmail(userId, db)) ? ECONOMY.luckyDuelAi.stake : 0;
+/**
+ * The stake `userId`'s next vs-AI Lucky Duel takes and the staked games left today before it.
+ * Only the first ECONOMY.luckyDuelAi.dailyStakedGames Lucky Duel starts of the economy day (the
+ * day the AI's counted-games cap uses) are staked; accounts without a verified email never are.
+ */
+async function luckyDuelAiStake(db: Db, userId: string, now: Date): Promise<{ stake: number; stakedGamesLeft: number }> {
+  const cfg = ECONOMY.luckyDuelAi;
+  if (!(await hasVerifiedEmail(userId, db))) return { stake: 0, stakedGamesLeft: 0 };
+  const stakedToday = await db.match.count({
+    where: { player1Id: userId, mode: "ai", gameMode: "lucky-duel", betAmount: { gt: 0 }, startedAt: { gte: startOfEconomyDay(now) } },
+  });
+  const stakedGamesLeft = Math.max(0, cfg.dailyStakedGames - stakedToday);
+  return { stake: stakedGamesLeft > 0 ? cfg.stake : 0, stakedGamesLeft };
 }
 
 /**
@@ -567,7 +582,8 @@ async function luckyDuelAiStake(db: Db, userId: string): Promise<number> {
  * reset), so leaving or reloading can't dodge a loss. `mode: "lucky-duel"` escrows
  * ECONOMY.luckyDuelAi.stake (400 "Necesitas N monedas para jugar Lucky Duel" when the user lacks
  * them; nothing is charged, the abandoned games are still settled). Accounts without a verified
- * email play Lucky Duel for nothing (stake 0, no streak bonus).
+ * email, and every start after the day's dailyStakedGames staked ones, play Lucky Duel for
+ * nothing (stake 0, no payout, no streak bonus; the streak still moves).
  */
 export async function startAiMatch(userId: string, mode: GameModeMarker = "standard", now = new Date()): Promise<StartAiMatchResult> {
   const result = await prisma.$transaction(async (tx) => {
@@ -591,7 +607,8 @@ export async function startAiMatch(userId: string, mode: GameModeMarker = "stand
       return { matchId: match.id };
     }
 
-    const stake = await luckyDuelAiStake(tx, userId);
+    // Under the user's lock: concurrent starts can't both take the day's last staked game
+    const { stake, stakedGamesLeft } = await luckyDuelAiStake(tx, userId, now);
     if (stake > 0) {
       const user = await tx.user.findUnique({ where: { id: userId }, select: { coins: true } });
       // Returned, not thrown: the abandoned games above stay settled
@@ -605,7 +622,10 @@ export async function startAiMatch(userId: string, mode: GameModeMarker = "stand
       await debitBalance(userId, "coins", stake, "lucky_duel_stake", `Lucky Duel: ${stake} monedas en juego`, tx);
     }
     const stats = await tx.userStats.findUnique({ where: { userId }, select: { luckyDuelAiStreak: true } });
-    return { matchId: match.id, luckyDuel: { stake, streak: stats?.luckyDuelAiStreak ?? 0 } };
+    return {
+      matchId: match.id,
+      luckyDuel: { stake, streak: stats?.luckyDuelAiStreak ?? 0, stakedGamesLeft: stake > 0 ? stakedGamesLeft - 1 : stakedGamesLeft },
+    };
   }, TX_OPTIONS);
 
   if ("insufficient" in result) throw Errors.BadRequest(`Necesitas ${result.insufficient} monedas para jugar Lucky Duel`);
@@ -613,18 +633,20 @@ export async function startAiMatch(userId: string, mode: GameModeMarker = "stand
 }
 
 /**
- * The vs-AI Lucky Duel numbers for the play page: the stake this user plays for (0 without a
- * verified email), the bonus rule, the current vs-AI streak and the best Lucky Duel streak
- * (both modes, "Suerte imparable").
+ * The vs-AI Lucky Duel numbers for the play page: the stake the next game takes (0 without a
+ * verified email or once the day's staked games are used up), the staked games left today, the
+ * bonus rule, the current vs-AI streak and the best Lucky Duel streak (both modes, "Suerte
+ * imparable").
  */
-export async function getLuckyDuelAiStatus(userId: string) {
-  const [stake, stats] = await Promise.all([
-    luckyDuelAiStake(prisma, userId),
+export async function getLuckyDuelAiStatus(userId: string, now = new Date()) {
+  const [{ stake, stakedGamesLeft }, stats] = await Promise.all([
+    luckyDuelAiStake(prisma, userId, now),
     prisma.userStats.findUnique({ where: { userId }, select: { luckyDuelAiStreak: true, luckyDuelStreak: true, luckyDuelBestStreak: true } }),
   ]);
   const cfg = ECONOMY.luckyDuelAi;
   return {
     stake,
+    stakedGamesLeft,
     streakBonusEvery: cfg.streakBonusEvery,
     streakBonus: cfg.streakBonus,
     streak: stats?.luckyDuelAiStreak ?? 0,

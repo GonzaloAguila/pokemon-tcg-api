@@ -4,7 +4,7 @@ Branch `feat/lucky-duel-coins` (API). Numbers live in `src/modules/economy/confi
 (`ECONOMY.luckyDuelAi`); the values below are the defaults.
 
 ```ts
-ECONOMY.luckyDuelAi = { stake: 20, streakBonusEvery: 5, streakBonus: 200, minVictoryMs: 30_000 }
+ECONOMY.luckyDuelAi = { stake: 20, streakBonusEvery: 5, streakBonus: 200, minVictoryMs: 30_000, dailyStakedGames: 20 }
 ```
 
 ## 1. Lucky Duel vs the AI
@@ -26,8 +26,15 @@ taken when the game starts (escrow) and settled once when it is reported.
 - **Streak bonus:** the vs-AI streak is the number of consecutive vs-AI Lucky Duel victories. A
   defeat, a draw (quick victories included) or an abandon resets it to 0. Multiplayer games never
   change it. When a victory brings it to 5, 10, 15…, the player gets +200 coins.
+- **Daily staked games:** only a user's first 20 Lucky Duel vs-AI starts of the economy day
+  (00:00 Argentina = 03:00 UTC, the same day as the AI's counted-games cap) are staked. Abandoned
+  games count, because they were starts. From the 21st start on, the game takes no stake: stake
+  0, payout 0 and no streak bonus. If such a game reaches a multiple of 5, the bonus is simply not
+  paid. The vs-AI streak and the achievements still move. The "Necesitas 20 monedas…" 400 only
+  applies to a game that would be staked.
 - **Accounts without a verified email** (local accounts only) play Lucky Duel vs the AI for
-  nothing: stake 0, payout 0, no streak bonus. Their streak and achievements still progress.
+  nothing: stake 0, payout 0, no streak bonus, `stakedGamesLeft` 0. Their streak and
+  achievements still progress.
 
 ### `POST /api/matches/ai`
 
@@ -48,9 +55,10 @@ Responses:
 ```jsonc
 // 200, standard
 { "matchId": "uuid" }
-// 200, lucky-duel (stake already taken; streak = current vs-AI streak, before this game)
-{ "matchId": "uuid", "luckyDuel": { "stake": 20, "streak": 3 } }
-// 400, fewer coins than the stake
+// 200, lucky-duel. stake: already taken, 0 when unstaked (daily staked games used up / unverified);
+// streak: current vs-AI streak, before this game; stakedGamesLeft: staked starts left today after this one
+{ "matchId": "uuid", "luckyDuel": { "stake": 20, "streak": 3, "stakedGamesLeft": 12 } }
+// 400, fewer coins than the stake (only when the game would be staked)
 { "error": { "message": "Necesitas 20 monedas para jugar Lucky Duel", "code": "BAD_REQUEST" } }
 // 422, unknown mode
 { "error": { "message": "Modo de juego inválido", "code": "VALIDATION_ERROR" } }
@@ -96,10 +104,10 @@ Response: the same fields as before, plus `mode`, plus `luckyDuel` for a Lucky D
   "missionsCompleted": [],
   "emailVerified": true,
   "luckyDuel": {
-    "stake": 20,                     // escrowed at the start (0 = unverified account)
+    "stake": 20,                     // escrowed at the start (0 = unstaked: daily staked games used up or unverified account)
     "payout": 40,                    // 40 victory / 20 draw / 0 defeat
     "streak": 5,                     // vs-AI streak after this game
-    "streakBonus": 200,              // 200 when this victory reached a multiple of 5, else 0
+    "streakBonus": 200,              // 200 when this staked victory reached a multiple of 5, else 0
     "quickVictory": false            // true: a victory reported < 30 s after the start, settled as a draw (outcome "draw")
   }
 }
@@ -115,7 +123,8 @@ Cheap status for the play page. Requires auth.
 
 ```jsonc
 {
-  "stake": 20,                 // what this user plays for (0 without a verified email)
+  "stake": 20,                 // what the next game takes (0: no staked games left today, or no verified email)
+  "stakedGamesLeft": 12,       // staked Lucky Duel starts left this economy day (0 for unverified accounts)
   "streakBonusEvery": 5,
   "streakBonus": 200,
   "streak": 3,                 // current vs-AI Lucky Duel streak
@@ -124,7 +133,7 @@ Cheap status for the play page. Requires auth.
 }
 ```
 
-`GET /api/economy/config` also carries `luckyDuelAi: { stake, streakBonusEvery, streakBonus }`.
+`GET /api/economy/config` also carries `luckyDuelAi: { stake, streakBonusEvery, streakBonus, dailyStakedGames }`.
 
 ### Wallet (`transactions.type`, all `currency: "coins"`)
 
@@ -196,8 +205,9 @@ Its target is the number of active achievements other than itself, so it grows b
 ## 4. Frontend checklist
 
 1. Lucky Duel vs AI start: `POST /api/matches/ai { mode: "lucky-duel" }`. Handle the 400
-   (`error.message`), and show the stake and current streak (from the response or
-   `GET /api/matches/ai/lucky-duel`).
+   (`error.message`), and show the stake, current streak and `stakedGamesLeft` (from the
+   response or `GET /api/matches/ai/lucky-duel`). When `stake` is 0, say the game is played
+   for no coins.
 2. Keep both `drawLuckyDuel` results. At the end, send
    `luckyDuel { playerStarterId, opponentStarterId, startingPlayer }` together with `turnNumber`.
 3. Result screen: `luckyDuel.payout`, `streak` and `streakBonus`. If `quickVictory` is true,

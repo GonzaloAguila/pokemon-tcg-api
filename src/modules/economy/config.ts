@@ -262,6 +262,12 @@ export const ECONOMY = {
     streakBonus: 200,
     /** A victory reported sooner than this after the start is settled as a draw (anti-script). */
     minVictoryMs: 30_000,
+    /**
+     * Lucky Duel starts per economy day that are staked; later ones take no stake and pay
+     * nothing (no payout, no streak bonus), though the streak still moves. Caps a scripted
+     * client's earnings (the result is client-reported).
+     */
+    dailyStakedGames: 20,
   },
 
   /** Table bets are off. The settlement code stays; flip `enabled` to bring them back. */

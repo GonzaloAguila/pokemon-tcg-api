@@ -79,6 +79,7 @@ function publicConfig() {
       stake: cfg.luckyDuelAi.stake,
       streakBonusEvery: cfg.luckyDuelAi.streakBonusEvery,
       streakBonus: cfg.luckyDuelAi.streakBonus,
+      dailyStakedGames: cfg.luckyDuelAi.dailyStakedGames,
     },
   };
 }
