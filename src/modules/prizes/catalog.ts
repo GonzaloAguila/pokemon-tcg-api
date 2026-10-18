@@ -26,6 +26,9 @@ export const AVAILABLE_COINS: CosmeticItem[] = [
   { itemId: "lucario", name: "Lucario", imageUrl: "/coins/TCGP_Coin_Lucario.png" },
   { itemId: "venusaur", name: "Venusaur", imageUrl: "/coins/TCGP_Coin_Venusaur.png" },
   { itemId: "vulpix-alola", name: "Vulpix Alola", imageUrl: "/coins/vulpix-alola-coin.png" },
+  { itemId: "mankey", name: "Mankey", imageUrl: "/coins/mankey-coin.png" },
+  { itemId: "charmeleon", name: "Charmeleon", imageUrl: "/coins/charmeleon-coin.png" },
+  { itemId: "red", name: "Red", imageUrl: "/coins/red-coin.png" },
 ];
 
 /**
@@ -47,6 +50,7 @@ export const AVAILABLE_CARD_BACKS: CosmeticItem[] = [
   { itemId: "haymaker", name: "Haymaker", imageUrl: "/card-backs/haymakerBKC.jpeg" },
   { itemId: "draw", name: "Draw", imageUrl: "/card-backs/card-back-draw.jpg" },
   { itemId: "pikachu", name: "Pikachu", imageUrl: "/card-backs/card-back-pikachu.jpg" },
+  { itemId: "pokeball", name: "Poké Ball", imageUrl: "/card-backs/card-back-pokeball.jpg" },
 ];
 
 export const AVAILABLE_AVATARS: CosmeticItem[] = [
