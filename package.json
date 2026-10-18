@@ -16,7 +16,7 @@
     "test": "vitest"
   },
   "dependencies": {
-    "@gonzaloaguila/game-core": "0.8.0",
+    "@gonzaloaguila/game-core": "0.8.1",
     "@prisma/client": "^5.22.0",
     "@sentry/node": "11.1.0",
     "bcrypt": "^6.0.0",
