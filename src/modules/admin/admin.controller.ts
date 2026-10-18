@@ -85,6 +85,12 @@ function preventSelfAction(req: Request, _res: Response, next: NextFunction) {
   next();
 }
 
+/** Cosmetics only: the superadmin may grant them to their own account (no economy effect). */
+function preventSelfActionUnlessSuperadmin(req: Request, res: Response, next: NextFunction) {
+  if (req.user?.role === "superadmin") return next();
+  preventSelfAction(req, res, next);
+}
+
 // =============================================================================
 // Dashboard
 // =============================================================================
@@ -377,7 +383,7 @@ router.post(
   "/admin/users/:userId/grant-cosmetic",
   requireAuth,
   requirePermission("users:economy"),
-  preventSelfAction,
+  preventSelfActionUnlessSuperadmin,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { type, itemId } = parseBody(adminBodies.grantCosmetic, req.body);

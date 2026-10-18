@@ -354,6 +354,24 @@ describe("cosmetic grants", () => {
     expect(again.status).toBe(400);
     expect(await prisma.systemMessage.count({ where: { recipientId: user.id } })).toBe(1);
   });
+
+  it("the superadmin grants a cosmetic to their own account (no notice)", async () => {
+    const res = await req(superToken).post(`/api/admin/users/${superadmin.id}/grant-cosmetic`, { type: "coin", itemId: "red" });
+    expect(res.status).toBe(200);
+    expect(await prisma.userCoin.count({ where: { userId: superadmin.id, coinId: "red" } })).toBe(1);
+    expect(await prisma.systemMessage.count({ where: { recipientId: superadmin.id, title: "Nuevo cosmético concedido" } })).toBe(0);
+  });
+
+  it("an admin still can't grant cosmetics to themselves", async () => {
+    const res = await req(modToken).post(`/api/admin/users/${moderator.id}/grant-cosmetic`, { type: "coin", itemId: "red" });
+    expect(res.status).toBe(403);
+    expect(await prisma.userCoin.count({ where: { userId: moderator.id } })).toBe(0);
+  });
+
+  it("the superadmin still can't adjust their own coins", async () => {
+    const res = await req(superToken).post(`/api/admin/users/${superadmin.id}/adjust-coins`, { amount: 5, reason: "x" });
+    expect(res.status).toBe(403);
+  });
 });
 
 describe("trade revert", () => {

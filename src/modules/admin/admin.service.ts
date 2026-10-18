@@ -618,7 +618,14 @@ export async function grantCosmetic(
 
   try {
     await prisma.$transaction(async (tx) => {
-      await assertCanActOn(tx, adminId, userId);
+      // The superadmin may grant cosmetics to their own account; nobody else acts on themselves
+      const isSelf = adminId === userId;
+      if (isSelf) {
+        const actor = await tx.user.findUnique({ where: { id: adminId }, select: { role: true } });
+        if (actor?.role !== "superadmin") throw Errors.Forbidden("No puedes realizar esta acción sobre tu propia cuenta");
+      } else {
+        await assertCanActOn(tx, adminId, userId);
+      }
       switch (type) {
         case "coin":
           await tx.userCoin.create({ data: { userId, coinId: itemId } });
@@ -640,8 +647,8 @@ export async function grantCosmetic(
           break;
       }
 
-      // The grant and the player's notice go together
-      await tx.systemMessage.create({
+      // The grant and the player's notice go together (none for a self-grant)
+      if (!isSelf) await tx.systemMessage.create({
         data: {
           type: "personal",
           title: "Nuevo cosmético concedido",
