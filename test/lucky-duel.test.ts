@@ -440,21 +440,22 @@ describe("POST /api/matches/ai/:matchId/finish: a Lucky Duel vs the AI", () => {
   const LONG = matches.AI_MIN_DURATION_MS + 1000;
 
   it("accepts result draw (the loser's rewards) and records the mode", async () => {
-    const u = await createUser({}, { stats: true });
+    const u = await createUser({ coins: 100 }, { stats: true });
     await prisma.userStats.update({ where: { userId: u.id }, data: { currentStreak: 3, bestStreak: 3 } });
     const token = tokenFor(u);
     const app = await startHttpApp((a) => a.use("/api", matchesRouter));
     try {
-      const { matchId } = (await app.request("POST", "/api/matches/ai", { token })).body;
+      // The mode is the one the game started with (lucky-duel-coins.test.ts: the stake)
+      const { matchId } = (await app.request("POST", "/api/matches/ai", { token, body: { mode: "lucky-duel" } })).body;
       await prisma.match.update({ where: { id: matchId }, data: { startedAt: new Date(Date.now() - LONG) } });
       expect((await app.request("POST", `/api/matches/ai/${matchId}/finish`, { token, body: { result: "draw", turnNumber: 6, mode: "chaos" } })).status).toBe(422);
       const done = await app.request("POST", `/api/matches/ai/${matchId}/finish`, { token, body: { result: "draw", turnNumber: 6, mode: "lucky-duel" } });
       expect(done.status).toBe(200);
-      expect(done.body).toMatchObject({ outcome: "draw", counted: true, xpGained: XP_REWARDS.ai.loss, rewardCoins: ECONOMY.matchCoins.ai.loss });
+      expect(done.body).toMatchObject({ outcome: "draw", counted: true, xpGained: XP_REWARDS.ai.loss, rewardCoins: ECONOMY.matchCoins.ai.loss, mode: "lucky-duel" });
       expect(await prisma.match.findUniqueOrThrow({ where: { id: matchId } })).toMatchObject({ status: "finished", winnerId: null, winReason: "lucky-duel: draw" });
       expect(await prisma.userStats.findUniqueOrThrow({ where: { userId: u.id } })).toMatchObject({ currentStreak: 3, bestStreak: 3 });
 
-      // Old clients (no mode) keep working; a Lucky Duel win is recorded as such
+      // Old clients (no mode) keep working
       const second = (await app.request("POST", "/api/matches/ai", { token })).body.matchId;
       await prisma.match.update({ where: { id: second }, data: { startedAt: new Date(Date.now() - LONG) } });
       const won = await app.request("POST", `/api/matches/ai/${second}/finish`, { token, body: { result: "victory", turnNumber: 6 } });

@@ -1,3 +1,4 @@
+import { LUCKY_DUEL_BASICS } from "@gonzaloaguila/game-core";
 import { prisma } from "../../lib/prisma.js";
 import { hasVerifiedEmail } from "../../lib/email-verification.js";
 import { AppError, Errors } from "../../middleware/error-handler.js";
@@ -27,6 +28,14 @@ import { recordMissionEvent, type MissionCompletion } from "../economy/missions.
 // first 10 games of the day), and the winner has fewer than 3 counted wins against that
 // opponent this economy day. A surrender in the mulligan/setup (turn 0) therefore counts for
 // nobody. Friendly tables never count.
+//
+// Lucky Duel (`matches.gameMode`): vs the AI the stake (ECONOMY.luckyDuelAi) is escrowed at the
+// start and settled with the result whatever the anti-farming rules say (a Lucky Duel can end on
+// turn 1), except that a victory reported too soon is settled as a draw; an unfinished one is
+// settled as an abandoned defeat when the player starts another vs-AI game. Every decided Lucky
+// Duel (vs AI and multiplayer, counted or not, friendly tables excluded) updates the Lucky Duel
+// streaks in UserStats and records each side's drawn Basic, who started and the last turn
+// (Lucky Duel achievements).
 // ---------------------------------------------------------------------------
 
 export type MultiplayerMode = "normal" | "friendly" | "draft";
@@ -123,6 +132,8 @@ export interface OpenMatchInput {
   mode: MultiplayerMode;
   betAmount: number;
   roomId: string;
+  /** The table's rules (default standard). */
+  gameMode?: GameModeMarker;
 }
 
 /**
@@ -141,6 +152,7 @@ export async function openMultiplayerMatch(input: OpenMatchInput, now = new Date
     const match = await tx.match.create({
       data: {
         mode: input.mode,
+        gameMode: input.gameMode ?? "standard",
         status: "playing",
         roomId: input.roomId,
         player1Id: input.player1Id,
@@ -166,6 +178,18 @@ export async function openMultiplayerMatch(input: OpenMatchInput, now = new Date
   }, TX_OPTIONS);
 }
 
+/**
+ * A Lucky Duel's facts for the achievements: the Basic each side drew (game-core catalog ids from
+ * LUCKY_DUEL_BASICS) and who took turn 1 (null: the game ended before the reveal).
+ */
+export interface LuckyDuelStarters {
+  /** Player 1's drawn Basic (vs AI: the player's). */
+  player1StarterId: string;
+  /** Player 2's drawn Basic (vs AI: the AI's). */
+  player2StarterId: string;
+  startingSide: "player1" | "player2" | null;
+}
+
 export type SettleInput =
   /**
    * winnerId null = no result (cancelled / abandoned): bets are refunded, nothing counts.
@@ -173,15 +197,31 @@ export type SettleInput =
    * Out at once): no winner and no loser. It counts like any game (anti-farming rules minus the
    * per-opponent win cap) but changes no win/loss stats or streaks (the stats model has no draws);
    * both players get the loser's participation rewards (XP, match coins, "game_played" mission).
+   * `luckyDuel`: the drawn Basics and the starting side (Lucky Duel tables only).
    */
-  | { kind: "multiplayer"; winnerId: string | null; draw?: boolean; reason: string; turnNumber: number }
-  /** turnNumber: last turn reached, reported by the client (the AI game runs in the browser). */
+  | { kind: "multiplayer"; winnerId: string | null; draw?: boolean; reason: string; turnNumber: number; luckyDuel?: LuckyDuelStarters }
   /**
+   * turnNumber: last turn reached, reported by the client (the AI game runs in the browser).
    * `draw`: the game ended in a draw (Lucky Duel: both Actives Knocked Out at once): no winner,
-   * the loser's rewards (same ruling as multiplayer). `mode` is only recorded on the match row
-   * (winReason "lucky-duel: <result>").
+   * the loser's rewards (same ruling as multiplayer). `abandoned`: a Lucky Duel left unfinished
+   * (the player started another vs-AI game): a defeat. The game's mode is the match row's
+   * `gameMode` (set at the start); `luckyDuel` is only stored for a Lucky Duel.
    */
-  | { kind: "ai"; victory: boolean; draw?: boolean; mode?: GameModeMarker; turnNumber: number };
+  | { kind: "ai"; victory: boolean; draw?: boolean; abandoned?: boolean; turnNumber: number; luckyDuel?: LuckyDuelStarters };
+
+/** What a vs-AI Lucky Duel's stake did (finish response `luckyDuel`). */
+export interface LuckyDuelAiSettlement {
+  /** Coins escrowed at the start (0 for an account without a verified email). */
+  stake: number;
+  /** Coins credited back: 2 × stake (victory), the stake (draw) or 0 (defeat / abandon). */
+  payout: number;
+  /** Consecutive vs-AI Lucky Duel victories after this game. */
+  streak: number;
+  /** Bonus credited by this game: ECONOMY.luckyDuelAi.streakBonus when the streak just reached a multiple of streakBonusEvery, else 0. */
+  streakBonus: number;
+  /** A victory reported sooner than ECONOMY.luckyDuelAi.minVictoryMs after the start, settled as a draw. */
+  quickVictory: boolean;
+}
 
 export interface PlayerSettlement {
   userId: string;
@@ -205,6 +245,8 @@ export interface PlayerSettlement {
    * XP, but no match coins and no mission progress (rewardCoins 0, missionsCompleted []).
    */
   emailVerified: boolean;
+  /** vs-AI Lucky Duel only. */
+  luckyDuel?: LuckyDuelAiSettlement;
 }
 
 export interface SettlementResult {
@@ -216,139 +258,231 @@ export interface SettlementResult {
   players: PlayerSettlement[];
 }
 
+type AiRecordedResult = "victory" | "defeat" | "draw" | "abandoned";
+
 /** A vs-AI match row's winReason: "victory" | "defeat" | "draw", prefixed "lucky-duel: " for that mode. */
-function aiWinReason(input: { victory: boolean; draw?: boolean; mode?: GameModeMarker }): string {
-  const result = input.victory ? "victory" : input.draw ? "draw" : "defeat";
-  return input.mode === "lucky-duel" ? `lucky-duel: ${result}` : result;
+function aiWinReason(result: AiRecordedResult, luckyDuel: boolean, quickVictory: boolean): string {
+  if (!luckyDuel) return result;
+  return `lucky-duel: ${result}${quickVictory ? " (quick victory)" : ""}`;
 }
 
 /**
  * Settle a match exactly once: pay the pot to the winner (or refund both stakes when there is
  * no result or the game ended before turn 3), and — only for a counted game — record win/loss
- * stats (normal and draft), grant XP, match coins and mission progress. Returns null when the
- * match doesn't exist or was already settled, so callers can fire it from every end path.
+ * stats (normal and draft), grant XP, match coins and mission progress. A vs-AI Lucky Duel also
+ * settles its stake and streak bonus (whether it counted or not). Returns null when the match
+ * doesn't exist or was already settled, so callers can fire it from every end path.
  */
 export async function settleMatch(matchId: string, input: SettleInput, now = new Date()): Promise<SettlementResult | null> {
-  return prisma.$transaction(async (tx) => {
-    const match = await tx.match.findUnique({
-      where: { id: matchId },
-      select: { id: true, mode: true, player1Id: true, player2Id: true, betAmount: true, startedAt: true, settledAt: true },
-    });
-    if (!match || match.settledAt) return null;
-    const mode = match.mode as MatchMode;
-    const isAi = mode === "ai";
-    if ((input.kind === "ai") !== isAi) throw new Error(`settleMatch: ${input.kind} result for a ${mode} match`);
+  return prisma.$transaction((tx) => settleMatchTx(tx, matchId, input, now), TX_OPTIONS);
+}
 
-    const players = [match.player1Id, match.player2Id].filter((id): id is string => !!id);
-    let winnerId: string | null;
-    if (input.kind === "ai") winnerId = input.victory ? match.player1Id : null;
-    else winnerId = input.winnerId && players.includes(input.winnerId) ? input.winnerId : null;
-    // A draw is a played game without a winner (never together with a winner)
-    const draw = input.kind === "multiplayer" ? input.draw === true && winnerId === null : input.draw === true && !input.victory;
-    const decided = input.kind === "ai" || winnerId !== null || draw;
+/** settleMatch inside the caller's transaction (startAiMatch settles an abandoned Lucky Duel). */
+async function settleMatchTx(tx: Db, matchId: string, input: SettleInput, now: Date): Promise<SettlementResult | null> {
+  const match = await tx.match.findUnique({
+    where: { id: matchId },
+    select: { id: true, mode: true, gameMode: true, player1Id: true, player2Id: true, betAmount: true, startedAt: true, settledAt: true },
+  });
+  if (!match || match.settledAt) return null;
+  const mode = match.mode as MatchMode;
+  const isAi = mode === "ai";
+  if ((input.kind === "ai") !== isAi) throw new Error(`settleMatch: ${input.kind} result for a ${mode} match`);
+  const luckyDuel = match.gameMode === "lucky-duel";
 
-    // Lock the players' rows (id order) BEFORE anything else: the claim below writes winnerId, a
-    // foreign key to users (a key-share lock on the winner's row), so locking afterwards takes
-    // the users out of order and deadlocks with any other ordered locker of the same pair (the
-    // drafted-cards credit at the end of a draft tournament, another settlement)
-    await lockUsers(tx, players);
+  // vs-AI Lucky Duel: a victory reported too soon after the start is a draw (anti-script)
+  const quickVictory =
+    input.kind === "ai" &&
+    luckyDuel &&
+    input.victory &&
+    (!match.startedAt || now.getTime() - match.startedAt.getTime() < ECONOMY.luckyDuelAi.minVictoryMs);
+  const aiVictory = input.kind === "ai" && input.victory && !quickVictory;
 
-    // Claim the settlement: a concurrent call blocks on this row, then matches nothing
-    const { count } = await tx.match.updateMany({
-      where: { id: matchId, settledAt: null },
-      data: {
-        settledAt: now,
-        finishedAt: now,
-        status: decided ? "finished" : "abandoned",
-        winnerId,
-        winReason: input.kind === "ai" ? aiWinReason(input) : input.reason.slice(0, 200),
-      },
-    });
-    if (count === 0) return null;
+  const players = [match.player1Id, match.player2Id].filter((id): id is string => !!id);
+  let winnerId: string | null;
+  if (input.kind === "ai") winnerId = aiVictory ? match.player1Id : null;
+  else winnerId = input.winnerId && players.includes(input.winnerId) ? input.winnerId : null;
+  // A draw is a played game without a winner (never together with a winner)
+  const draw =
+    input.kind === "multiplayer"
+      ? input.draw === true && winnerId === null
+      : quickVictory || (input.draw === true && !input.victory && !input.abandoned);
+  const decided = input.kind === "ai" || winnerId !== null || draw;
+  const aiResult: AiRecordedResult = aiVictory ? "victory" : draw ? "draw" : input.kind === "ai" && input.abandoned ? "abandoned" : "defeat";
 
-    const counted = decided && (await isCounted(tx, match, mode, input, winnerId, now));
+  // Lock the players' rows (id order) BEFORE anything else: the claim below writes winnerId, a
+  // foreign key to users (a key-share lock on the winner's row), so locking afterwards takes
+  // the users out of order and deadlocks with any other ordered locker of the same pair (the
+  // drafted-cards credit at the end of a draft tournament, another settlement)
+  await lockUsers(tx, players);
 
-    // Table bet: pot to the winner (only if the game reached the payout turn), else stakes back
-    const bet = match.betAmount;
-    const coinsDelta = new Map<string, number>(players.map((p) => [p, 0]));
-    if (bet > 0) {
-      const reachedPayoutTurn = input.kind === "multiplayer" && input.turnNumber >= ECONOMY.tableBets.minTurnForPayout;
-      if (winnerId && reachedPayoutTurn) {
-        await creditBalance(winnerId, "coins", bet * 2, "bet_win", `Apuesta ganada: ${bet * 2} monedas del pozo`, tx);
-        for (const p of players) coinsDelta.set(p, p === winnerId ? bet : -bet);
-      } else {
-        const why = winnerId
-          ? `la partida no llegó al turno ${ECONOMY.tableBets.minTurnForPayout}`
-          : draw ? "empate" : "partida sin resultado";
-        for (const p of players) {
-          await creditBalance(p, "coins", bet, "bet_refund", `Apuesta devuelta: ${bet} monedas (${why})`, tx);
-        }
+  // Claim the settlement: a concurrent call blocks on this row, then matches nothing
+  const { count } = await tx.match.updateMany({
+    where: { id: matchId, settledAt: null },
+    data: {
+      settledAt: now,
+      finishedAt: now,
+      status: decided ? "finished" : "abandoned",
+      winnerId,
+      winReason: input.kind === "ai" ? aiWinReason(aiResult, luckyDuel, quickVictory) : input.reason.slice(0, 200),
+      // Lucky Duel achievements read these (first turn, drawn Basics)
+      ...(luckyDuel
+        ? {
+            finalTurn: input.turnNumber,
+            ...(input.luckyDuel
+              ? {
+                  player1StarterId: input.luckyDuel.player1StarterId,
+                  player2StarterId: input.luckyDuel.player2StarterId,
+                  startingSide: input.luckyDuel.startingSide,
+                }
+              : {}),
+          }
+        : {}),
+    },
+  });
+  if (count === 0) return null;
+
+  const counted = decided && (await isCounted(tx, match, mode, input, winnerId, now));
+  const verified = new Map<string, boolean>();
+  for (const p of players) verified.set(p, (await hasVerifiedEmail(p, tx)) ?? false);
+
+  // Table bet: pot to the winner (only if the game reached the payout turn), else stakes back
+  const bet = match.betAmount;
+  const coinsDelta = new Map<string, number>(players.map((p) => [p, 0]));
+  if (bet > 0 && !isAi) {
+    const reachedPayoutTurn = input.kind === "multiplayer" && input.turnNumber >= ECONOMY.tableBets.minTurnForPayout;
+    if (winnerId && reachedPayoutTurn) {
+      await creditBalance(winnerId, "coins", bet * 2, "bet_win", `Apuesta ganada: ${bet * 2} monedas del pozo`, tx);
+      for (const p of players) coinsDelta.set(p, p === winnerId ? bet : -bet);
+    } else {
+      const why = winnerId
+        ? `la partida no llegó al turno ${ECONOMY.tableBets.minTurnForPayout}`
+        : draw ? "empate" : "partida sin resultado";
+      for (const p of players) {
+        await creditBalance(p, "coins", bet, "bet_refund", `Apuesta devuelta: ${bet} monedas (${why})`, tx);
       }
     }
+  }
 
-    // Stats (multiplayer normal/draft, counted only). A draw changes no stats: there is no draw
-    // column, and neither streak breaks nor grows
-    if (counted && winnerId && (mode === "normal" || mode === "draft")) {
-      for (const p of players) await recordMatchResult(p, mode, p === winnerId, tx);
+  // vs-AI Lucky Duel stake (escrowed at the start): settled whatever the anti-farming rules say
+  let luckyAi: LuckyDuelAiSettlement | undefined;
+  if (isAi && luckyDuel && match.player1Id) {
+    const payout = aiVictory ? bet * 2 : draw ? bet : 0;
+    if (payout > 0) {
+      if (aiVictory) {
+        await creditBalance(match.player1Id, "coins", payout, "lucky_duel_win", `Lucky Duel ganado: ${payout} monedas`, tx);
+      } else {
+        await creditBalance(match.player1Id, "coins", payout, "lucky_duel_refund", `Lucky Duel empatado: ${payout} monedas devueltas`, tx);
+      }
     }
+    luckyAi = { stake: bet, payout, streak: 0, streakBonus: 0, quickVictory };
+  }
 
-    // XP, match coins and missions (counted only; coins and missions need a verified email)
-    const grants = new Map<string, ExperienceGrant>();
-    const coinGrants = new Map<string, MatchCoinGrant>();
-    const missions = new Map<string, MissionCompletion[]>();
-    const verified = new Map<string, boolean>();
-    for (const p of players) verified.set(p, (await hasVerifiedEmail(p, tx)) ?? false);
+  // Lucky Duel streaks: every decided game (counted or not; a Lucky Duel can end on turn 1),
+  // friendly tables excluded. Under the players' row locks, so concurrent settlements serialize
+  if (luckyDuel && decided && mode !== "friendly") {
+    const cfg = ECONOMY.luckyDuelAi;
     for (const p of players) {
-      // A draw pays both players what a loser gets (participation): XP, match coins, game_played
-      const outcome = p === winnerId ? "win" : "loss";
-      const grant = await grantExperience(tx, p, counted ? XP_REWARDS[mode][outcome] : 0, now);
-      if (grant) grants.set(p, grant);
-      if (!counted || !verified.get(p)) continue;
-      coinGrants.set(p, await grantMatchCoins(tx, p, isAi ? "ai" : "online", outcome, matchId, now));
-      const completed = await recordMissionEvent(tx, p, "game_played", now);
-      if (outcome === "win") completed.push(...(await recordMissionEvent(tx, p, "game_won", now)));
-      missions.set(p, completed);
+      const outcome = draw ? "draw" : p === winnerId ? "win" : "loss";
+      const streaks = await recordLuckyDuelResult(tx, p, outcome, isAi);
+      if (!luckyAi) continue;
+      luckyAi.streak = streaks.aiStreak;
+      const bonusDue = outcome === "win" && cfg.streakBonusEvery > 0 && streaks.aiStreak % cfg.streakBonusEvery === 0;
+      if (bonusDue && cfg.streakBonus > 0 && verified.get(p)) {
+        await creditBalance(
+          p,
+          "coins",
+          cfg.streakBonus,
+          "lucky_duel_streak_bonus",
+          `Racha de Lucky Duel: ${streaks.aiStreak} victorias seguidas (+${cfg.streakBonus} monedas)`,
+          tx,
+        );
+        luckyAi.streakBonus = cfg.streakBonus;
+      }
     }
-    const coinsOf = (id: string | null) => (id && coinGrants.get(id)?.amount) || 0;
-    await tx.match.update({
-      where: { id: matchId },
-      data: {
-        counted,
-        player1Xp: (match.player1Id && grants.get(match.player1Id)?.gained) || 0,
-        player2Xp: (match.player2Id && grants.get(match.player2Id)?.gained) || 0,
-        player1Coins: coinsOf(match.player1Id),
-        player2Coins: coinsOf(match.player2Id),
-      },
-    });
+  }
 
-    const balances = await tx.user.findMany({ where: { id: { in: players } }, select: { id: true, coins: true } });
-    return {
-      matchId,
-      mode,
-      betAmount: bet,
-      winnerId,
+  // Stats (multiplayer normal/draft, counted only). A draw changes no stats: there is no draw
+  // column, and neither streak breaks nor grows
+  if (counted && winnerId && (mode === "normal" || mode === "draft")) {
+    for (const p of players) await recordMatchResult(p, mode, p === winnerId, tx);
+  }
+
+  // XP, match coins and missions (counted only; coins and missions need a verified email)
+  const grants = new Map<string, ExperienceGrant>();
+  const coinGrants = new Map<string, MatchCoinGrant>();
+  const missions = new Map<string, MissionCompletion[]>();
+  for (const p of players) {
+    // A draw pays both players what a loser gets (participation): XP, match coins, game_played
+    const outcome = p === winnerId ? "win" : "loss";
+    const grant = await grantExperience(tx, p, counted ? XP_REWARDS[mode][outcome] : 0, now);
+    if (grant) grants.set(p, grant);
+    if (!counted || !verified.get(p)) continue;
+    coinGrants.set(p, await grantMatchCoins(tx, p, isAi ? "ai" : "online", outcome, matchId, now));
+    const completed = await recordMissionEvent(tx, p, "game_played", now);
+    if (outcome === "win") completed.push(...(await recordMissionEvent(tx, p, "game_won", now)));
+    missions.set(p, completed);
+  }
+  const coinsOf = (id: string | null) => (id && coinGrants.get(id)?.amount) || 0;
+  await tx.match.update({
+    where: { id: matchId },
+    data: {
       counted,
-      players: players.map((p): PlayerSettlement => {
-        const grant = grants.get(p);
-        return {
-          userId: p,
-          outcome: !decided ? "none" : draw ? "draw" : p === winnerId ? "win" : "loss",
-          counted,
-          coinsDelta: coinsDelta.get(p) ?? 0,
-          rewardCoins: coinGrants.get(p)?.amount ?? 0,
-          rewardCoinsCapped: coinGrants.get(p)?.capped ?? false,
-          xpGained: grant?.gained ?? 0,
-          xpCapped: grant?.capped ?? false,
-          levelsGained: grant?.levelsGained ?? 0,
-          level: grant?.level ?? 1,
-          experience: grant?.experience ?? 0,
-          coins: balances.find((b) => b.id === p)?.coins ?? 0,
-          missionsCompleted: missions.get(p) ?? [],
-          emailVerified: verified.get(p) ?? false,
-        };
-      }),
-    };
-  }, TX_OPTIONS);
+      player1Xp: (match.player1Id && grants.get(match.player1Id)?.gained) || 0,
+      player2Xp: (match.player2Id && grants.get(match.player2Id)?.gained) || 0,
+      player1Coins: coinsOf(match.player1Id),
+      player2Coins: coinsOf(match.player2Id),
+    },
+  });
+
+  const balances = await tx.user.findMany({ where: { id: { in: players } }, select: { id: true, coins: true } });
+  return {
+    matchId,
+    mode,
+    betAmount: bet,
+    winnerId,
+    counted,
+    players: players.map((p): PlayerSettlement => {
+      const grant = grants.get(p);
+      return {
+        userId: p,
+        outcome: !decided ? "none" : draw ? "draw" : p === winnerId ? "win" : "loss",
+        counted,
+        coinsDelta: coinsDelta.get(p) ?? 0,
+        rewardCoins: coinGrants.get(p)?.amount ?? 0,
+        rewardCoinsCapped: coinGrants.get(p)?.capped ?? false,
+        xpGained: grant?.gained ?? 0,
+        xpCapped: grant?.capped ?? false,
+        levelsGained: grant?.levelsGained ?? 0,
+        level: grant?.level ?? 1,
+        experience: grant?.experience ?? 0,
+        coins: balances.find((b) => b.id === p)?.coins ?? 0,
+        missionsCompleted: missions.get(p) ?? [],
+        emailVerified: verified.get(p) ?? false,
+        ...(luckyAi && p === match.player1Id ? { luckyDuel: luckyAi } : {}),
+      };
+    }),
+  };
+}
+
+/**
+ * One decided Lucky Duel for `userId`: the Lucky Duel streak (both modes) grows on a win and
+ * resets on a loss or draw; `vsAi` also moves the vs-AI streak. Needs the user's row lock.
+ */
+async function recordLuckyDuelResult(tx: Db, userId: string, outcome: "win" | "loss" | "draw", vsAi: boolean) {
+  // Accounts get their stats row at signup; create it if it's missing (older accounts)
+  const s = await tx.userStats.upsert({
+    where: { userId },
+    create: { userId },
+    update: {},
+    select: { luckyDuelStreak: true, luckyDuelBestStreak: true, luckyDuelAiStreak: true },
+  });
+  const streak = outcome === "win" ? s.luckyDuelStreak + 1 : 0;
+  const aiStreak = vsAi ? (outcome === "win" ? s.luckyDuelAiStreak + 1 : 0) : s.luckyDuelAiStreak;
+  await tx.userStats.update({
+    where: { userId },
+    data: { luckyDuelStreak: streak, luckyDuelBestStreak: Math.max(s.luckyDuelBestStreak, streak), luckyDuelAiStreak: aiStreak },
+  });
+  return { streak, aiStreak };
 }
 
 /** The anti-farming rules (see the header). Needs the players' row locks. */
@@ -406,22 +540,105 @@ export async function refundUnsettledMatches(reason = "Partida interrumpida por 
 // Single player vs AI (client-reported)
 // ---------------------------------------------------------------------------
 
-/** Start a single-player game; drops the user's previous unfinished one (one at a time). */
-export async function startAiMatch(userId: string, now = new Date()): Promise<{ matchId: string }> {
-  return prisma.$transaction(async (tx) => {
-    await tx.match.deleteMany({ where: { player1Id: userId, mode: "ai", settledAt: null } });
+/** Every Basic a Lucky Duel can deal (game-core): the only valid starter ids. */
+const LUCKY_DUEL_BASIC_IDS: ReadonlySet<string> = new Set(LUCKY_DUEL_BASICS.map((c) => c.id));
+
+/** The drawn Basics a vs-AI Lucky Duel reports at /finish (player's view). */
+export interface AiLuckyDuelReport {
+  playerStarterId: string;
+  opponentStarterId: string;
+  startingPlayer: "player" | "opponent";
+}
+
+export interface StartAiMatchResult {
+  matchId: string;
+  /** Lucky Duel only: the stake escrowed for this game and the current vs-AI Lucky Duel streak. */
+  luckyDuel?: { stake: number; streak: number };
+}
+
+/** The Lucky Duel stake `userId` plays for vs the AI: 0 for an account without a verified email. */
+async function luckyDuelAiStake(db: Db, userId: string): Promise<number> {
+  return (await hasVerifiedEmail(userId, db)) ? ECONOMY.luckyDuelAi.stake : 0;
+}
+
+/**
+ * Start a single-player game (one at a time). The user's previous unfinished games go first: a
+ * standard one is dropped; a Lucky Duel is settled as an abandoned defeat (stake kept, streak
+ * reset), so leaving or reloading can't dodge a loss. `mode: "lucky-duel"` escrows
+ * ECONOMY.luckyDuelAi.stake (400 "Necesitas N monedas para jugar Lucky Duel" when the user lacks
+ * them; nothing is charged, the abandoned games are still settled). Accounts without a verified
+ * email play Lucky Duel for nothing (stake 0, no streak bonus).
+ */
+export async function startAiMatch(userId: string, mode: GameModeMarker = "standard", now = new Date()): Promise<StartAiMatchResult> {
+  const result = await prisma.$transaction(async (tx) => {
+    // Serialize the user's starts and finishes (one unfinished game at a time)
+    await lockUsers(tx, [userId]);
+    const open = await tx.match.findMany({
+      where: { player1Id: userId, mode: "ai", settledAt: null },
+      select: { id: true, gameMode: true },
+    });
+    const dropped = open.filter((m) => m.gameMode !== "lucky-duel").map((m) => m.id);
+    if (dropped.length > 0) await tx.match.deleteMany({ where: { id: { in: dropped } } });
+    for (const m of open.filter((o) => o.gameMode === "lucky-duel")) {
+      await settleMatchTx(tx, m.id, { kind: "ai", victory: false, abandoned: true, turnNumber: 0 }, now);
+    }
+
+    if (mode !== "lucky-duel") {
+      const match = await tx.match.create({
+        data: { mode: "ai", status: "playing", player1Id: userId, startedAt: now },
+        select: { id: true },
+      });
+      return { matchId: match.id };
+    }
+
+    const stake = await luckyDuelAiStake(tx, userId);
+    if (stake > 0) {
+      const user = await tx.user.findUnique({ where: { id: userId }, select: { coins: true } });
+      // Returned, not thrown: the abandoned games above stay settled
+      if (!user || user.coins < stake) return { insufficient: stake };
+    }
     const match = await tx.match.create({
-      data: { mode: "ai", status: "playing", player1Id: userId, startedAt: now },
+      data: { mode: "ai", gameMode: "lucky-duel", status: "playing", player1Id: userId, betAmount: stake, startedAt: now },
       select: { id: true },
     });
-    return { matchId: match.id };
-  });
+    if (stake > 0) {
+      await debitBalance(userId, "coins", stake, "lucky_duel_stake", `Lucky Duel: ${stake} monedas en juego`, tx);
+    }
+    const stats = await tx.userStats.findUnique({ where: { userId }, select: { luckyDuelAiStreak: true } });
+    return { matchId: match.id, luckyDuel: { stake, streak: stats?.luckyDuelAiStreak ?? 0 } };
+  }, TX_OPTIONS);
+
+  if ("insufficient" in result) throw Errors.BadRequest(`Necesitas ${result.insufficient} monedas para jugar Lucky Duel`);
+  return result;
+}
+
+/**
+ * The vs-AI Lucky Duel numbers for the play page: the stake this user plays for (0 without a
+ * verified email), the bonus rule, the current vs-AI streak and the best Lucky Duel streak
+ * (both modes, "Suerte imparable").
+ */
+export async function getLuckyDuelAiStatus(userId: string) {
+  const [stake, stats] = await Promise.all([
+    luckyDuelAiStake(prisma, userId),
+    prisma.userStats.findUnique({ where: { userId }, select: { luckyDuelAiStreak: true, luckyDuelStreak: true, luckyDuelBestStreak: true } }),
+  ]);
+  const cfg = ECONOMY.luckyDuelAi;
+  return {
+    stake,
+    streakBonusEvery: cfg.streakBonusEvery,
+    streakBonus: cfg.streakBonus,
+    streak: stats?.luckyDuelAiStreak ?? 0,
+    luckyDuelStreak: stats?.luckyDuelStreak ?? 0,
+    luckyDuelBestStreak: stats?.luckyDuelBestStreak ?? 0,
+  };
 }
 
 /**
  * Report the end of a single-player game started with startAiMatch. `result`: "victory" | "defeat" | "draw" (a boolean is read as victory / defeat). A draw
  * (Lucky Duel) has no winner: the loser's XP / match coins / game_played, no streak change.
- * `mode` (optional) is recorded on the match row.
+ * The game's mode is the one it was started with. A Lucky Duel settles its stake (and streak
+ * bonus) and, when `luckyDuel` is given, stores the drawn Basics for the achievements (400 if an
+ * id isn't a Lucky Duel Basic).
  */
 export async function finishAiMatch(
   userId: string,
@@ -429,25 +646,43 @@ export async function finishAiMatch(
   result: AiResult | boolean,
   turnNumber: number,
   now = new Date(),
-  mode?: GameModeMarker,
+  luckyDuel?: AiLuckyDuelReport,
 ) {
   const outcome: AiResult = typeof result === "boolean" ? (result ? "victory" : "defeat") : result;
+  if (luckyDuel && (!LUCKY_DUEL_BASIC_IDS.has(luckyDuel.playerStarterId) || !LUCKY_DUEL_BASIC_IDS.has(luckyDuel.opponentStarterId))) {
+    throw Errors.BadRequest("Pokémon de Lucky Duel inválido");
+  }
   const match = await prisma.match.findFirst({
     where: { id: matchId, player1Id: userId, mode: "ai" },
-    select: { settledAt: true },
+    select: { settledAt: true, gameMode: true },
   });
   if (!match) throw Errors.NotFound("Partida");
   if (match.settledAt) throw Errors.Conflict("Esta partida ya fue registrada");
 
   const settled = await settleMatch(
     matchId,
-    { kind: "ai", victory: outcome === "victory", draw: outcome === "draw", ...(mode ? { mode } : {}), turnNumber },
+    {
+      kind: "ai",
+      victory: outcome === "victory",
+      draw: outcome === "draw",
+      turnNumber,
+      ...(luckyDuel
+        ? {
+            luckyDuel: {
+              player1StarterId: luckyDuel.playerStarterId,
+              player2StarterId: luckyDuel.opponentStarterId,
+              startingSide: luckyDuel.startingPlayer === "player" ? "player1" : "player2",
+            },
+          }
+        : {}),
+    },
     now,
   );
   if (!settled) throw Errors.Conflict("Esta partida ya fue registrada");
   const me = settled.players[0];
   return {
     matchId,
+    mode: match.gameMode as GameModeMarker,
     outcome: me.outcome,
     counted: me.counted,
     xpGained: me.xpGained,
@@ -460,5 +695,6 @@ export async function finishAiMatch(
     coins: me.coins,
     missionsCompleted: me.missionsCompleted,
     emailVerified: me.emailVerified,
+    ...(me.luckyDuel ? { luckyDuel: me.luckyDuel } : {}),
   };
 }

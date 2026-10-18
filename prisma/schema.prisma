@@ -280,6 +280,15 @@ model Match {
   // Set exactly once, when stakes, XP and stats were settled (guards against double settlement)
   settledAt    DateTime?
 
+  // Game rules: "standard" | "lucky-duel" (multiplayer: the table's mode; vs AI: POST /matches/ai)
+  gameMode         String  @default("standard")
+  // Lucky Duel: the Basic each side drew (game-core catalog id; vs AI, player 2 = the AI), who took
+  // turn 1 ("player1" | "player2") and the turn the game ended on. Null for standard games
+  player1StarterId String?
+  player2StarterId String?
+  startingSide     String?
+  finalTurn        Int?
+
   // Game data (for reconnection & replay)
   gameState  Json? // Full GameState JSON
   replayData Json? // Array of GameEvents for replay
@@ -295,6 +304,7 @@ model Match {
   @@index([player1Id, settledAt])
   @@index([player2Id, settledAt])
   @@index([status, settledAt])
+  @@index([winnerId, gameMode])
   @@map("matches")
 }
 
@@ -617,6 +627,12 @@ model UserStats {
   draftLosses   Int    @default(0)
   currentStreak Int    @default(0)
   bestStreak    Int    @default(0)
+  // Lucky Duel, vs AI and multiplayer (every decided game, counted or not; friendly tables
+  // excluded): consecutive wins and the best run. A loss, draw or abandon resets it
+  luckyDuelStreak     Int @default(0)
+  luckyDuelBestStreak Int @default(0)
+  // Lucky Duel vs the AI only: consecutive wins (streak bonus, ECONOMY.luckyDuelAi)
+  luckyDuelAiStreak   Int @default(0)
 
   @@map("user_stats")
 }

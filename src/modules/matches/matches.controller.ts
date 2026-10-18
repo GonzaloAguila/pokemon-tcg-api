@@ -2,22 +2,36 @@ import { Router, type Request, type Response, type NextFunction } from "express"
 import { z } from "zod";
 import { requireAuth } from "../../middleware/auth.js";
 import { Errors } from "../../middleware/error-handler.js";
+import { checkAndUpdateProgress } from "../achievements/achievements.service.js";
 import * as matchesService from "./matches.service.js";
 
 const router = Router();
 
 const matchIdSchema = z.string().uuid();
+const gameModeSchema = z.enum(["standard", "lucky-duel"]);
+// mode (default standard): a Lucky Duel escrows ECONOMY.luckyDuelAi.stake
+const startAiSchema = z.object({ mode: gameModeSchema.optional() }).optional();
 // turnNumber: last turn the game reached (a game counts from turn 3, like multiplayer)
 // result "draw": a Lucky Duel that ended with both Actives Knocked Out (no winner, the loser's
-// rewards). mode (optional, default standard) is recorded on the match row.
+// rewards). mode: accepted from older clients and ignored (the mode is the one the game started
+// with). luckyDuel: the Basics both sides drew and who started (Lucky Duel achievements); the ids
+// are checked against game-core's LUCKY_DUEL_BASICS in the service (400).
 const finishAiSchema = z.object({
   result: z.enum(["victory", "defeat", "draw"]),
   turnNumber: z.number().int().min(0).max(10_000),
-  mode: z.enum(["standard", "lucky-duel"]).optional(),
+  mode: gameModeSchema.optional(),
+  luckyDuel: z
+    .object({
+      playerStarterId: z.string().min(1).max(100),
+      opponentStarterId: z.string().min(1).max(100),
+      startingPlayer: z.enum(["player", "opponent"]),
+    })
+    .optional(),
 });
 
 // ---------------------------------------------------------------------------
-// POST /matches/ai — A single-player game vs the AI starts. Returns { matchId }.
+// POST /matches/ai — A single-player game vs the AI starts. Body (optional):
+// { mode?: "standard" | "lucky-duel" }. Returns { matchId } (+ luckyDuel: { stake, streak }).
 // ---------------------------------------------------------------------------
 
 router.post(
@@ -25,7 +39,9 @@ router.post(
   requireAuth,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      res.json(await matchesService.startAiMatch(req.user!.userId));
+      const body = startAiSchema.safeParse(req.body ?? undefined);
+      if (!body.success) throw Errors.ValidationError("Modo de juego inválido");
+      res.json(await matchesService.startAiMatch(req.user!.userId, body.data?.mode ?? "standard"));
     } catch (err) {
       next(err);
     }
@@ -33,9 +49,26 @@ router.post(
 );
 
 // ---------------------------------------------------------------------------
-// POST /matches/ai/:matchId/finish — { result: "victory" | "defeat" | "draw", turnNumber, mode? }.
+// GET /matches/ai/lucky-duel — Stake, streak bonus rule and the user's Lucky Duel streaks.
+// ---------------------------------------------------------------------------
+
+router.get(
+  "/matches/ai/lucky-duel",
+  requireAuth,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      res.json(await matchesService.getLuckyDuelAiStatus(req.user!.userId));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// POST /matches/ai/:matchId/finish — { result: "victory" | "defeat" | "draw", turnNumber, mode?, luckyDuel? }.
 // XP, coins and missions are decided here (never sent by the client); the game must have
-// reached turn 3, lasted a few minutes, and only the first games of the day count.
+// reached turn 3, lasted a few minutes, and only the first games of the day count. A Lucky Duel
+// also settles its stake and streak bonus (response `luckyDuel`).
 // ---------------------------------------------------------------------------
 
 router.post(
@@ -47,9 +80,18 @@ router.post(
       if (!matchId.success) throw Errors.NotFound("Partida");
       const body = finishAiSchema.safeParse(req.body);
       if (!body.success) throw Errors.ValidationError("Resultado inválido");
-      res.json(
-        await matchesService.finishAiMatch(req.user!.userId, matchId.data, body.data.result, body.data.turnNumber, new Date(), body.data.mode),
+      const userId = req.user!.userId;
+      const result = await matchesService.finishAiMatch(
+        userId,
+        matchId.data,
+        body.data.result,
+        body.data.turnNumber,
+        new Date(),
+        body.data.luckyDuel,
       );
+      // Lucky Duel achievements (and level ones) progress from this result
+      checkAndUpdateProgress(userId).catch(console.error);
+      res.json(result);
     } catch (err) {
       next(err);
     }

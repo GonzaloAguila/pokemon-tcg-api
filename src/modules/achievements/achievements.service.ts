@@ -1,3 +1,5 @@
+import { LUCKY_DUEL_BASICS } from "@gonzaloaguila/game-core";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "../../lib/prisma.js";
 import * as usersService from "../users/users.service.js";
 import { Errors } from "../../middleware/error-handler.js";
@@ -28,9 +30,29 @@ const TIER_REWARDS: Record<string, { coins: number; coupons: number }> = {
 // Win / game / streak achievements read UserStats, which only counts online games (normal,
 // ranked, draft; not friendly or vs AI) that passed the anti-farming rules (turn 3, 2 minutes,
 // max 3 counted wins per day against the same opponent; see modules/matches).
+//
+// Lucky Duel achievements read every decided Lucky Duel, vs the AI and multiplayer (counted or
+// not: a Lucky Duel can end on turn 1; friendly tables excluded; a draw is not a win):
+//   "lucky-streak"     — UserStats.luckyDuelBestStreak (both modes; a loss, draw or abandon resets
+//                        the current run).
+//   "lucky-first-turn" — a won Lucky Duel whose last turn was the winner's first turn (turn 1 if
+//                        they started, turn 2 if the rival did).
+//   "lucky-win-with"   — a won Lucky Duel whose drawn Basic's name contains `starter` (and, with
+//                        `against`, whose rival's drawn Basic's name contains it).
 // ---------------------------------------------------------------------------
 
-type CheckerType = "stats-wins" | "stats-games" | "stats-streak" | "collection" | "coins" | "level" | "meta" | "manual";
+type CheckerType =
+  | "stats-wins"
+  | "stats-games"
+  | "stats-streak"
+  | "collection"
+  | "coins"
+  | "level"
+  | "meta"
+  | "manual"
+  | "lucky-streak"
+  | "lucky-first-turn"
+  | "lucky-win-with";
 export type AchievementStatus = "active" | "retired" | "unavailable";
 
 interface AchievementDef {
@@ -41,6 +63,9 @@ interface AchievementDef {
   progressTarget: number;
   checker: CheckerType;
   status: AchievementStatus;
+  /** "lucky-win-with": part of the name of the player's drawn Basic, and of the rival's. */
+  starter?: string;
+  against?: string;
 }
 
 const RAW_DEFS: Omit<AchievementDef, "status">[] = [
@@ -103,6 +128,12 @@ const RAW_DEFS: Omit<AchievementDef, "status">[] = [
   { id: "legend-48", name: "Colección Completa",   description: "Retirado: ahora son los hitos de colección por set", tier: "legend", progressTarget: 102, checker: "collection" },
   { id: "legend-49", name: "Invencible",           description: "Gana 100 partidas sin perder", tier: "legend", progressTarget: 100, checker: "manual" },
   { id: "legend-50", name: "Leyenda Viviente",     description: "Reclama todos los demás logros disponibles", tier: "legend", progressTarget: 0, checker: "meta" },
+
+  // Lucky Duel (vs AI and multiplayer)
+  { id: "lucky-first-turn",         name: "Primer golpe",       description: "Gana un Lucky Duel en tu primer turno", tier: "silver", progressTarget: 1, checker: "lucky-first-turn" },
+  { id: "lucky-streak-10",          name: "Suerte imparable",   description: "Gana 10 Lucky Duel seguidos", tier: "gold", progressTarget: 10, checker: "lucky-streak" },
+  { id: "lucky-magikarp",           name: "Magikarp campeón",   description: "Gana un Lucky Duel con Magikarp", tier: "silver", progressTarget: 1, checker: "lucky-win-with", starter: "Magikarp" },
+  { id: "lucky-scyther-electabuzz", name: "Filo contra trueno", description: "Gana un Lucky Duel con Scyther contra Electabuzz", tier: "silver", progressTarget: 1, checker: "lucky-win-with", starter: "Scyther", against: "Electabuzz" },
 ];
 
 /** Replaced by the per-set milestones (economy v2). */
@@ -155,7 +186,9 @@ export async function listAchievements(userId: string) {
       tier: d.tier,
       status: d.status,
       progressTarget: d.progressTarget,
-      progress: Math.min(row?.progress ?? 0, d.progressTarget),
+      // Claimed = complete, even if the target grew afterwards ("Leyenda Viviente" when
+      // achievements are added): the stored progress is frozen at the claim
+      progress: row?.unlockedAt ? d.progressTarget : Math.min(row?.progress ?? 0, d.progressTarget),
       claimed: !!row?.unlockedAt,
       claimedAt: row?.unlockedAt ?? null,
       claimable: d.status === "active" && !row?.unlockedAt && (row?.progress ?? 0) >= d.progressTarget,
@@ -220,6 +253,7 @@ export async function checkAndUpdateProgress(userId: string): Promise<ClaimableA
         draftLosses: true,
         currentStreak: true,
         bestStreak: true,
+        luckyDuelBestStreak: true,
       },
     }),
     // Distinct cards of any set: the two collection achievements still active (Coleccionista
@@ -249,6 +283,8 @@ export async function checkAndUpdateProgress(userId: string): Promise<ClaimableA
   for (const def of ACHIEVEMENT_DEFS) {
     // Retired achievements no longer progress; manual ones need in-game tracking (not built)
     if (def.status !== "active") continue;
+    // Claimed ones never change (skip their queries)
+    if (existingMap.get(def.id)?.unlockedAt) continue;
 
     // Calculate current progress
     let currentProgress = 0;
@@ -270,6 +306,13 @@ export async function checkAndUpdateProgress(userId: string): Promise<ClaimableA
         break;
       case "meta":
         currentProgress = claimedCount;
+        break;
+      case "lucky-streak":
+        currentProgress = stats.luckyDuelBestStreak;
+        break;
+      case "lucky-first-turn":
+      case "lucky-win-with":
+        currentProgress = await prisma.match.count({ where: luckyDuelWinWhere(userId, def) });
         break;
     }
 
@@ -307,6 +350,41 @@ export async function checkAndUpdateProgress(userId: string): Promise<ClaimableA
   }
 
   return newlyClaimable;
+}
+
+// ---------------------------------------------------------------------------
+// Lucky Duel wins (matches rows; see the header)
+// ---------------------------------------------------------------------------
+
+/** Catalog ids of the Lucky Duel Basics whose name contains `name` (Misty's, Lt. Surge's, Dark… included). */
+function luckyBasicIds(name: string): string[] {
+  return LUCKY_DUEL_BASICS.filter((c) => c.name.includes(name)).map((c) => c.id);
+}
+
+/** The user's won Lucky Duels that meet a "lucky-first-turn" / "lucky-win-with" achievement. */
+function luckyDuelWinWhere(userId: string, def: AchievementDef): Prisma.MatchWhereInput {
+  const base: Prisma.MatchWhereInput = { winnerId: userId, gameMode: "lucky-duel", mode: { not: "friendly" } };
+  if (def.checker === "lucky-first-turn") {
+    // The winner's first turn: turn 1 if they started, turn 2 if the rival did
+    return {
+      ...base,
+      OR: [
+        { player1Id: userId, startingSide: "player1", finalTurn: 1 },
+        { player1Id: userId, startingSide: "player2", finalTurn: 2 },
+        { player2Id: userId, startingSide: "player2", finalTurn: 1 },
+        { player2Id: userId, startingSide: "player1", finalTurn: 2 },
+      ],
+    };
+  }
+  const mine = { in: luckyBasicIds(def.starter ?? "") };
+  const theirs = def.against ? { in: luckyBasicIds(def.against) } : undefined;
+  return {
+    ...base,
+    OR: [
+      { player1Id: userId, player1StarterId: mine, ...(theirs ? { player2StarterId: theirs } : {}) },
+      { player2Id: userId, player2StarterId: mine, ...(theirs ? { player1StarterId: theirs } : {}) },
+    ],
+  };
 }
 
 // ---------------------------------------------------------------------------

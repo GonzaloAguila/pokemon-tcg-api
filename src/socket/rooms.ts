@@ -127,6 +127,11 @@ export interface GameRoom {
   matchId?: string;
   startPending?: boolean;
   resultSettled?: boolean;
+  /**
+   * Lucky Duel: the catalog id of the Basic each seat drew (startLuckyDuelGame), stored on the
+   * match row at settlement for the Lucky Duel achievements (the in-game card ids are random).
+   */
+  luckyDuelStarters?: { player1: string; player2: string };
   /** Started for players who may be absent (draft round): if neither shows up, nobody wins. */
   checkIn?: boolean;
   /** A draft tournament game: not listed in the lobby. */
@@ -1104,7 +1109,10 @@ export class GameRoomManager {
     }
 
     room.status = "playing";
-    let gameState = initializeLuckyDuelGame(drawLuckyDuel(this.random), drawLuckyDuel(this.random), this.random);
+    const draw1 = drawLuckyDuel(this.random);
+    const draw2 = drawLuckyDuel(this.random);
+    room.luckyDuelStarters = { player1: draw1.active.id, player2: draw2.active.id };
+    let gameState = initializeLuckyDuelGame(draw1, draw2, this.random);
     gameState = { ...gameState, events: neutralizeEvents(gameState.events, 0, "Jugador 1", "Jugador 2") };
 
     room.gameState = gameState;

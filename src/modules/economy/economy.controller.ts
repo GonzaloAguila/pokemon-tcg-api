@@ -75,6 +75,11 @@ function publicConfig() {
     rareCandy: cfg.rareCandy,
     tableBets: cfg.tableBets,
     progress: cfg.progress,
+    luckyDuelAi: {
+      stake: cfg.luckyDuelAi.stake,
+      streakBonusEvery: cfg.luckyDuelAi.streakBonusEvery,
+      streakBonus: cfg.luckyDuelAi.streakBonus,
+    },
   };
 }
 

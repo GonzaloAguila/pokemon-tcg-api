@@ -250,6 +250,20 @@ export const ECONOMY = {
     puzzleCoins: { easy: 50, medium: 100, hard: 200 },
   },
 
+  /**
+   * Lucky Duel vs the AI (modules/matches): the game's result is client-reported, so the stake is
+   * escrowed at POST /matches/ai and settled once at /finish — victory 2 × stake back, draw the
+   * stake back, defeat (or an unfinished game abandoned by starting another) nothing. Every
+   * `streakBonusEvery`-th consecutive victory pays `streakBonus` more.
+   */
+  luckyDuelAi: {
+    stake: 20,
+    streakBonusEvery: 5,
+    streakBonus: 200,
+    /** A victory reported sooner than this after the start is settled as a draw (anti-script). */
+    minVictoryMs: 30_000,
+  },
+
   /** Table bets are off. The settlement code stays; flip `enabled` to bring them back. */
   tableBets: {
     enabled: false,

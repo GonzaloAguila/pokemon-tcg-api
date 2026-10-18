@@ -8,6 +8,7 @@ import type { GameRoom } from "./rooms.js";
 import {
   openMultiplayerMatch,
   settleMatch,
+  type LuckyDuelStarters,
   type MultiplayerMode,
   type SettlementResult,
 } from "../modules/matches/matches.service.js";
@@ -34,6 +35,7 @@ export async function openRoomMatch(room: GameRoom, mode: MultiplayerMode): Prom
     mode,
     betAmount: mode === "friendly" ? 0 : room.config.betAmount,
     roomId: room.id,
+    gameMode: room.config.mode,
   });
   room.matchId = match.id;
   // Bets off / pair not eligible: the table is played without a bet
@@ -74,14 +76,25 @@ export function settleRoomResult(
     kind: "multiplayer",
     winnerId,
     ...(winner === "draw" ? { draw: true } : {}),
-    // The match row has no table-mode column: a Lucky Duel says so in its reason
+    // A Lucky Duel also says so in its reason (the row's gameMode was set when it opened)
     reason: room.config.mode === "lucky-duel" ? `Lucky Duel: ${reason}` : reason,
     turnNumber: room.gameState?.turnNumber ?? 0,
+    ...(room.config.mode === "lucky-duel" && room.luckyDuelStarters ? { luckyDuel: luckyDuelStarters(room) } : {}),
   })
     .then((result) => {
       if (result) notifySettlement(io, room.id, result);
     })
     .catch((err) => console.error(`[settlement] room ${room.id} match ${matchId} failed:`, err));
+}
+
+/** The Basics both seats drew and who took turn 1 (server state, player 1's view), for the Lucky Duel achievements. */
+function luckyDuelStarters(room: GameRoom): LuckyDuelStarters {
+  const starting = room.gameState?.startingPlayer;
+  return {
+    player1StarterId: room.luckyDuelStarters!.player1,
+    player2StarterId: room.luckyDuelStarters!.player2,
+    startingSide: starting === "player" ? "player1" : starting === "opponent" ? "player2" : null,
+  };
 }
 
 function notifySettlement(io: Server | null, roomId: string, result: SettlementResult): void {

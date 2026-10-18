@@ -263,7 +263,7 @@ describe("counted games (anti-farming) and match rewards", () => {
     expect((await profile(a.id)).stats).toMatchObject({ normalWins: 1 });
 
     // Same for a single-player game
-    const { matchId } = await matches.startAiMatch(a.id, new Date(Date.now() - 10 * 60_000));
+    const { matchId } = await matches.startAiMatch(a.id, "standard", new Date(Date.now() - 10 * 60_000));
     const ai = await matches.finishAiMatch(a.id, matchId, true, 5);
     expect(ai).toMatchObject({ counted: true, rewardCoins: 0, missionsCompleted: [], emailVerified: false });
     expect(ai.xpGained).toBeGreaterThan(0);
