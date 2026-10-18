@@ -121,6 +121,9 @@ async function resolveAndStartGame(roomManager: GameRoomManager, roomId: string)
   const room = roomManager.getRoom(roomId);
   if (!room) throw new Error("Room not found");
 
+  // Lucky Duel: no decks to resolve, the server draws both (random Basic + deck around it)
+  if (room.config.mode === "lucky-duel") return roomManager.startLuckyDuelGame(roomId);
+
   const p1Cards = await resolveDeckCards(room.player1DeckId);
   const p2Cards = await resolveDeckCards(room.player2DeckId);
 
@@ -239,12 +242,14 @@ function stateFor(room: GameRoom, state: GameState, viewer: Viewer) {
  * tell the room, settle the result once (match-settlement.ts: stats, XP, match coins, missions,
  * the table bet; `winner` null refunds it) and, for a draft match, report it to the draft (once:
  * the draft forgets the game room when its result is reported) and start the next round.
+ * `"draw"` (Lucky Duel: both Actives Knocked Out at once): `gameOver { winner: null, reason }`
+ * and a settled draw (no winner, no loser).
  * `settlementReason` is what the match row stores (defaults to the reason shown to players).
  */
 function finishRoomGame(
   io: Server,
   roomId: string,
-  winner: PlayerKey | null,
+  winner: PlayerKey | "draw" | null,
   reason: string,
   forfeit: boolean,
   settlementReason: string = reason,
@@ -252,11 +257,12 @@ function finishRoomGame(
   const room = roomManager.getRoom(roomId);
   if (!room || room.resultSettled) return;
 
-  io.to(roomId).emit("gameOver", { winner, reason });
+  const winnerSide = winner === "draw" ? null : winner;
+  io.to(roomId).emit("gameOver", { winner: winnerSide, reason });
 
   const draftInfo = draftRoomManager.getDraftInfoForGameRoom(roomId);
   settleRoomResult(io, room, winner, settlementReason, { isDraft: !!draftInfo });
-  reportDraftGame(io, roomId, winner, forfeit);
+  reportDraftGame(io, roomId, winnerSide, forfeit);
 }
 
 /**
@@ -287,6 +293,8 @@ function serializeRoom(r: ReturnType<typeof roomManager.getRoom>) {
   return {
     id: r.id,
     status: r.status,
+    /** Table type: "standard" or "lucky-duel" (no deck, no Prizes: prizeCount 0). */
+    mode: r.config.mode,
     createdAt: r.createdAt,
     playerCount: r.players.length,
     prizeCount: r.config.prizeCount,
@@ -514,7 +522,8 @@ function broadcastActionResult(io: Server, roomId: string, actionType: string, r
   // Game over: executeAction reports it once (a finished room takes no more actions);
   // finishRoomGame settles the result (stats, XP, bet) and the draft standing once
   if (result.gameOver) {
-    finishRoomGame(io, roomId, result.winner ?? null, result.winReason ?? "Fin de la partida", false, describeGameEnd(result.gameState));
+    if (result.draw) finishRoomGame(io, roomId, "draw", result.winReason ?? "Empate", false, "Empate");
+    else finishRoomGame(io, roomId, result.winner ?? null, result.winReason ?? "Fin de la partida", false, describeGameEnd(result.gameState));
   }
 }
 
@@ -556,16 +565,21 @@ export function setupSocketHandlers(io: Server): void {
         if (!userId) return;
         const parsed = parsePayload(socketSchemas.createRoom, payload);
         if (!parsed.ok) { socket.emit("error", { message: parsed.error }); return; }
-        const { deckId, prizeCount, reservedUserId, friendly } = parsed.data;
+        const { mode, prizeCount, reservedUserId, friendly } = parsed.data;
+        const luckyDuel = mode === "lucky-duel";
+        // Lucky Duel: the server builds both decks, so a deck sent anyway is ignored
+        const deckId = luckyDuel ? undefined : parsed.data.deckId;
         const identity = await getPlayableIdentity(userId);
         if ("error" in identity) { socket.emit("error", { message: identity.error }); return; }
-        // A seat requires a deck (checkDeckPlayable rejects a missing one)
-        const deckError = await checkDeckPlayable(userId, deckId);
-        if (deckError) { socket.emit("error", { message: deckError }); return; }
+        // A seat requires a deck (checkDeckPlayable rejects a missing one), except at Lucky Duel
+        if (!luckyDuel) {
+          const deckError = await checkDeckPlayable(userId, deckId);
+          if (deckError) { socket.emit("error", { message: deckError }); return; }
+        }
         // Table bets are off unless ECONOMY.tableBets.enabled (the bet is forced to 0). When on:
         // friendly tables carry no bet; otherwise the bet is capped by the creator's title (lobby
         // slider), the creator must be eligible and cover it now (it's charged to both players
-        // when the game starts)
+        // when the game starts). Lucky Duel tables bet the same way (a draw refunds both stakes).
         const betAmount = friendly || !ECONOMY.tableBets.enabled ? 0 : (parsed.data.betAmount ?? 0);
         if (betAmount > 0) {
           const notEligible = await betIneligibilityReason(userId);
@@ -585,7 +599,7 @@ export function setupSocketHandlers(io: Server): void {
         }
         const room = roomManager.createRoom(
           undefined,
-          { prizeCount, betAmount, reservedUserId: reservedUserId || null, friendly: friendly ?? false },
+          { mode, prizeCount, betAmount, reservedUserId: reservedUserId || null, friendly: friendly ?? false },
           identity,
         );
         await roomManager.joinRoom(room.id, userId, socket.id);
@@ -601,11 +615,12 @@ export function setupSocketHandlers(io: Server): void {
           roomId: room.id,
           playerId: userId,
           isPlayer1: true,
+          mode: room.config.mode,
         });
 
         broadcastRoomList(io);
 
-        console.log(`🏠 Room ${room.id} created by ${userId} (prizes:${room.config.prizeCount}, bet:${room.config.betAmount})`);
+        console.log(`🏠 Room ${room.id} created by ${userId} (mode:${room.config.mode}, prizes:${room.config.prizeCount}, bet:${room.config.betAmount})`);
       } catch (error) {
         socket.emit("error", { message: (error as Error).message });
       }
@@ -653,7 +668,7 @@ export function setupSocketHandlers(io: Server): void {
         if (!userId) return;
         const parsed = parsePayload(socketSchemas.joinRoom, payload);
         if (!parsed.ok) { socket.emit("error", { message: parsed.error }); return; }
-        const { roomId, deckId } = parsed.data;
+        const { roomId } = parsed.data;
         // Never create a room here: the client is rejoining a game that is gone (finished,
         // deleted, or lost in an API restart). The frontend goes back to the lobby.
         const target = roomManager.getRoom(roomId);
@@ -661,11 +676,14 @@ export function setupSocketHandlers(io: Server): void {
           socket.emit("error", { code: "ROOM_NOT_FOUND", message: new RoomNotFoundError().message });
           return;
         }
+        // Lucky Duel: no deck (the server builds both), a deck sent anyway is ignored
+        const luckyDuel = target.config.mode === "lucky-duel";
+        const deckId = luckyDuel ? undefined : parsed.data.deckId;
         const identity = await getPlayableIdentity(userId);
         if ("error" in identity) { socket.emit("error", { message: identity.error }); return; }
-        // Taking a seat requires a playable deck; reconnecting to your own seat doesn't
+        // Taking a seat requires a playable deck (not at Lucky Duel); reconnecting to your own seat doesn't
         const seated = roomManager.seatOf(target, userId) !== null;
-        if (!seated || deckId) {
+        if (!luckyDuel && (!seated || deckId)) {
           const deckError = await checkDeckPlayable(userId, deckId);
           if (deckError) { socket.emit("error", { message: deckError }); return; }
         }
@@ -715,6 +733,7 @@ export function setupSocketHandlers(io: Server): void {
           playerId: userId,
           players: room.players,
           isPlayer1,
+          mode: room.config.mode,
         });
 
         // Notify other player
@@ -735,6 +754,7 @@ export function setupSocketHandlers(io: Server): void {
           // Send current game state to the reconnecting player
           socket.emit("gameStart", {
             roomId,
+            mode: room.config.mode,
             gameState: stateFor(room, room.gameState, isPlayer1 ? "player1" : "player2"),
             isPlayer1,
             opponentInfo: isPlayer1 ? room.joiner : room.creator,
@@ -764,6 +784,7 @@ export function setupSocketHandlers(io: Server): void {
           // Send masked state to each player
           io.to(room.player1SocketId!).emit("gameStart", {
             roomId,
+            mode: room.config.mode,
             gameState: stateFor(room, gameState, "player1"),
             isPlayer1: true,
             opponentInfo: room.joiner,
@@ -773,6 +794,7 @@ export function setupSocketHandlers(io: Server): void {
           });
           io.to(room.player2SocketId!).emit("gameStart", {
             roomId,
+            mode: room.config.mode,
             gameState: stateFor(room, gameState, "player2"),
             isPlayer1: false,
             opponentInfo: room.creator,
@@ -847,6 +869,8 @@ export function setupSocketHandlers(io: Server): void {
 
           // Send masked state to each player
           io.to(room.player1SocketId!).emit("gameStart", {
+            roomId,
+            mode: room.config.mode,
             gameState: stateFor(room, gameState, "player1"),
             opponentInfo: room.joiner,
             ...cosmeticsPayload(cosmetics, "player1"),
@@ -854,6 +878,8 @@ export function setupSocketHandlers(io: Server): void {
             turnTimerDuration: room.turnTimerDuration,
           });
           io.to(room.player2SocketId!).emit("gameStart", {
+            roomId,
+            mode: room.config.mode,
             gameState: stateFor(room, gameState, "player2"),
             opponentInfo: room.creator,
             ...cosmeticsPayload(cosmetics, "player2"),
@@ -1105,6 +1131,7 @@ export function setupSocketHandlers(io: Server): void {
         // Player 1's side at the bottom (neutral view): creatorInfo = bottom, opponentInfo = top
         socket.emit("gameStart", {
           roomId,
+          mode: room.config.mode,
           gameState: stateFor(room, room.gameState, "spectator"),
           isPlayer1: true,
           isSpectator: true,

@@ -29,7 +29,8 @@ describe("lobby / room event schemas", () => {
       avatarId: null,
       titleId: "novato",
     }));
-    expect(data).toEqual({ deckId: DECK_UUID, prizeCount: 6, betAmount: 0, friendly: false });
+    // No mode sent: a standard table
+    expect(data).toEqual({ mode: "standard", deckId: DECK_UUID, prizeCount: 6, betAmount: 0, friendly: false });
     expect(data).not.toHaveProperty("username");
     // Theme decks and a reserved opponent
     expect(parsePayload(socketSchemas.createRoom, { deckId: "brushfire", prizeCount: 4, betAmount: 50, friendly: false, reservedUserId: "misty" }).ok).toBe(true);

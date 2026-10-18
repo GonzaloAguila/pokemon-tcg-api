@@ -15,6 +15,10 @@ import {
   GamePhase,
   IllegalActionError,
   initializeMultiplayerGame,
+  // Lucky Duel: random Basic + server-built deck, both Actives face down until both are ready
+  drawLuckyDuel,
+  initializeLuckyDuelGame,
+  isLuckyDuel,
   startGame,
   shuffle,
   // Attacks and turn flow
@@ -89,13 +93,18 @@ import {
   aiDuelPick,
   type RpsChoice,
 } from "@gonzaloaguila/game-core";
-import { parseGameAction } from "./schemas.js";
+import { parseGameAction, type TABLE_MODES } from "./schemas.js";
+import { isLuckyDuelFaceDown } from "./state-masking.js";
 import type { RoomChatMessage } from "./room-chat.js";
 import type { RoomCosmetics } from "./room-cosmetics.js";
 import type { RoomEmoteLoadouts } from "./room-emotes.js";
 
+/** Table type: a normal table, or Lucky Duel (random Basic and deck, no Bench, no Prizes). */
+export type TableMode = (typeof TABLE_MODES)[number];
+
 interface RoomConfig {
-  prizeCount: number;           // 4, 5, or 6
+  mode: TableMode;
+  prizeCount: number;           // 4, 5, or 6 (0 for Lucky Duel: no Prizes)
   betAmount: number;            // 0 = no bet
   reservedUserId: string | null; // null = open to all
   friendly: boolean;            // true = no stats recorded
@@ -547,6 +556,8 @@ export interface ActionResult {
   gameState?: GameState;
   gameOver?: boolean;
   winner?: "player1" | "player2";
+  /** The game ended in a draw (Lucky Duel: both Actives Knocked Out at once): no winner. */
+  draw?: boolean;
   /** Coins every client animates (attacks, confusion): showCoinFlip to the room */
   coinFlipInfo?: CoinFlipInfo;
   /** Trainer/power coins: showCoinFlip to everyone but the player who already showed them (requestCoinFlip) */
@@ -677,6 +688,9 @@ function neutralizeEvents(
 
   return newEvents;
 }
+
+/** What a Lucky Duel player is told when acting before both Actives are revealed. */
+export const LUCKY_DUEL_FACE_DOWN_ERROR = "Pulsa Listo: los Pokémon activos se revelan cuando ambos jugadores estén listos";
 
 const FORFEIT_TIMEOUT_MS = 120_000; // 2 minutes
 const SETUP_TIMEOUT_MS = 90_000; // 90 seconds for opponent to finish setup
@@ -809,6 +823,8 @@ export class GameRoomManager {
    */
   createRoom(roomId?: string, config?: Partial<RoomConfig>, creator?: Partial<CreatorInfo>): GameRoom {
     const id = roomId || this.generateRoomId();
+    const mode: TableMode = config?.mode ?? "standard";
+    const luckyDuel = mode === "lucky-duel";
     const prizeCount = config?.prizeCount ?? 6;
     const room: GameRoom = {
       id,
@@ -827,7 +843,9 @@ export class GameRoomManager {
       spectators: new Map(),
       chat: [],
       config: {
-        prizeCount: prizeCount >= 4 && prizeCount <= 6 ? prizeCount : 6,
+        mode,
+        // Lucky Duel: no Prizes (whatever the caller asked)
+        prizeCount: luckyDuel ? 0 : prizeCount >= 4 && prizeCount <= 6 ? prizeCount : 6,
         betAmount: config?.betAmount ?? 0,
         reservedUserId: config?.reservedUserId ?? null,
         friendly: config?.friendly ?? false,
@@ -1073,6 +1091,28 @@ export class GameRoomManager {
   }
 
   /**
+   * Start a Lucky Duel table: each seat gets a random Basic Pokémon and a deck built around it
+   * (game-core drawLuckyDuel, server RNG), dealt by initializeLuckyDuelGame — both Actives placed
+   * face down, 7-card hands, no Prizes. No startGame and no Prize trimming (the engine already
+   * dealt); then the usual playerReady ×2 → startPlayingPhase, which reveals the Actives.
+   */
+  async startLuckyDuelGame(roomId: string): Promise<GameState> {
+    const room = this.rooms.get(roomId);
+    if (!room) throw new Error("Room not found");
+    if (!room.player1Id || !room.player2Id) {
+      throw new Error("Need two players to start");
+    }
+
+    room.status = "playing";
+    let gameState = initializeLuckyDuelGame(drawLuckyDuel(this.random), drawLuckyDuel(this.random), this.random);
+    gameState = { ...gameState, events: neutralizeEvents(gameState.events, 0, "Jugador 1", "Jugador 2") };
+
+    room.gameState = gameState;
+    room.turnStartedAt = Date.now();
+    return room.gameState;
+  }
+
+  /**
    * Start a game using raw card arrays (for draft matches).
    * Creates a GameState directly from pre-built decks instead of DeckEntry definitions.
    */
@@ -1152,6 +1192,7 @@ export class GameRoomManager {
     }
     const key = room.player1SocketId === socketId ? "player1" : room.player2SocketId === socketId ? "player2" : null;
     if (!key) return { success: false, error: "Not a player in this room" };
+    if (isLuckyDuelFaceDown(room.gameState)) return { success: false, error: LUCKY_DUEL_FACE_DOWN_ERROR };
     const isMyTurn = key === "player1" ? room.gameState.isPlayerTurn : !room.gameState.isPlayerTurn;
     if (!isMyTurn) return { success: false, error: "Not your turn" };
     if (pendingTrainerChoiceOf(room.gameState)) return { success: false, error: "Primero hay que resolver la carta de Entrenador" };
@@ -1262,6 +1303,12 @@ export class GameRoomManager {
 
     if (!isPlayer1 && !isPlayer2) {
       return { success: false, error: "Not a player in this room" };
+    }
+
+    // Lucky Duel: while both Actives are face down only getting ready (or surrendering) is
+    // accepted, so no engine reason or result can name a face-down card before the reveal
+    if (isLuckyDuelFaceDown(room.gameState) && action.type !== "playerReady" && action.type !== "surrender") {
+      return { success: false, error: LUCKY_DUEL_FACE_DOWN_ERROR };
     }
 
     // Validate turn - player1 plays when isPlayerTurn is true
@@ -1887,15 +1934,21 @@ export class GameRoomManager {
       const gameOver = newState.gamePhase === "GAME_OVER";
       let winner: "player1" | "player2" | undefined;
       let winReason: string | undefined;
+      const draw = gameOver && newState.gameResult === "draw";
 
       if (gameOver) {
         room.status = "finished";
         this.cancelAnswerTimer(roomId);
-        // From player1's perspective: victory = player1 wins
-        winner = newState.gameResult === "victory" ? "player1" : "player2";
-        winReason = newState.gameResult === "victory"
-          ? "Player 1 wins!"
-          : "Player 2 wins!";
+        if (draw) {
+          // Lucky Duel: both Actives Knocked Out at once (game-core settleLuckyDuelDraw)
+          winReason = "Empate";
+        } else {
+          // From player1's perspective: victory = player1 wins
+          winner = newState.gameResult === "victory" ? "player1" : "player2";
+          winReason = newState.gameResult === "victory"
+            ? "Player 1 wins!"
+            : "Player 2 wins!";
+        }
       }
 
       // Include setup timer info if timer is active
@@ -1906,6 +1959,7 @@ export class GameRoomManager {
         gameState: room.gameState,
         gameOver,
         winner,
+        ...(draw ? { draw } : {}),
         winReason,
         ...(actionCoinFlipInfo ? { coinFlipInfo: actionCoinFlipInfo } : {}),
         ...(opponentCoinFlipInfo ? { opponentCoinFlipInfo, coinsShownTo: coinsShownTo ?? actorKey } : {}),

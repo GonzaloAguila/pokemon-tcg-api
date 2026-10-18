@@ -25,6 +25,9 @@ const idList = (max: number) => z.array(instanceId).max(max);
 const BASIC_ENERGY_TYPES = ["grass", "fire", "water", "lightning", "psychic", "fighting"] as const;
 const coinSide = z.enum(["heads", "tails"]);
 
+/** Table types (rooms.ts TableMode): a normal table, or Lucky Duel (random Basic, server-built deck). */
+export const TABLE_MODES = ["standard", "lucky-duel"] as const;
+
 const BENCH_SIZE = 5;
 const MAX_PRIZES = 6;
 /** Generous upper bound for anything that lists cards from one zone (a deck is 60 cards). */
@@ -92,10 +95,15 @@ const globalChatMessage = z.preprocess(
 
 export const socketSchemas = {
   createRoom: z.object({
+    /** Table type: "lucky-duel" = random Basic + deck built by the server (no deck, no Prizes). */
+    mode: z.enum(TABLE_MODES).nullish().transform((v) => v ?? "standard"),
+    // Ignored for a Lucky Duel table (the server builds both decks)
     deckId: optional(deckId),
+    // Ignored for a Lucky Duel table (no Prizes)
     prizeCount: optional(z.number().int().min(4).max(MAX_PRIZES)),
     // Lobby slider max is 1000 (legend tier); createRoom also caps it by the creator's title
     // (maxBetForTitle). Charged to both players when the game starts (match-settlement.ts).
+    // Lucky Duel tables take bets like any table (a draw refunds both stakes).
     betAmount: optional(z.number().int().min(0).max(1000)),
     reservedUserId: optional(z.string().max(64)),
     friendly: optional(z.boolean()),

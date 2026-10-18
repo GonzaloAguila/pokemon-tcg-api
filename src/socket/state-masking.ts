@@ -25,6 +25,9 @@
  * question (`pendingAttackChoice.reaction`) never carries its `resume` (the paused attack's
  * coins and options, server-side only).
  *
+ * Lucky Duel: until both players are ready (`luckyDuelRevealed`), both Actives are
+ * `{ id, hidden: true }` for every viewer, owners included, and so is the owner's own deck.
+ *
  * Still visible to the owner: their own deck order and prizes (the client needs the
  * deck contents for search effects); hiding those needs search UIs to get a sorted
  * copy instead — tracked as a follow-up.
@@ -220,6 +223,41 @@ function maskDuel(state: GameState, viewer: Viewer): GameState {
   return { ...masked, pendingDuel: { ...(masked.pendingDuel as object), playerPick: null, opponentPick: null } };
 }
 
+/**
+ * Lucky Duel before the reveal (game-core: `gameMode: "lucky-duel"` and `luckyDuelRevealed` not
+ * true yet): both Actives are face down.
+ */
+export function isLuckyDuelFaceDown(state: GameState | EngineState | null | undefined): boolean {
+  const s = state as GameState | null | undefined;
+  return s?.gameMode === "lucky-duel" && s.luckyDuelRevealed !== true;
+}
+
+/**
+ * Lucky Duel: until both players are ready, both Actives go out as `{ id, hidden: true }` to
+ * EVERY viewer, their owners included ("¿Quién es ese Pokémon?"): no name, HP, attacks, attached
+ * cards or anything else of the Pokémon. `id` is the card's real id (opaque in a Lucky Duel:
+ * `ld1-…` / `ld2-…`), so the client can match it after the reveal.
+ *
+ * The owner's own deck is hidden too until the reveal (same-length placeholders): its evolution
+ * cards name the Basic they evolve from (`evolvesFrom`) and no action can use the deck before
+ * the reveal anyway. The hand stays visible to its owner (owner decision).
+ */
+function hideFaceDownLuckyDuel(state: GameState): GameState {
+  if (!isLuckyDuelFaceDown(state)) return state;
+  const faceDown = (active: unknown) => {
+    if (!active || typeof active !== "object") return null;
+    const id = (active as { pokemon?: { id?: unknown } }).pokemon?.id;
+    return { id: typeof id === "string" ? id : "hidden-active", hidden: true };
+  };
+  const ownDeck = state.playerDeck;
+  return {
+    ...state,
+    playerActivePokemon: faceDown(state.playerActivePokemon),
+    opponentActivePokemon: faceDown(state.opponentActivePokemon),
+    ...(Array.isArray(ownDeck) ? { playerDeck: ownDeck.map((_, i) => ({ id: `hidden-player-deck-${i}`, hidden: true })) } : {}),
+  };
+}
+
 /** Drop pending choices the viewer doesn't own (not their turn, or a spectator). */
 function stripForeignPending(state: GameState, viewer: Viewer): GameState {
   const owns = viewer !== "spectator" && state.isPlayerTurn === true;
@@ -330,6 +368,7 @@ export function maskGameStateForPlayer(
   const view = forPlayer === "spectator" ? state : getGameStateForPlayer(state, forPlayer);
   const sides: HiddenZoneSide[] = forPlayer === "spectator" ? ["player", "opponent"] : ["opponent"];
   let masked = stripForeignPending(maskDuel(hideSetAsideHands(hideZones(view, sides, revealedZones(view, forPlayer))), forPlayer), forPlayer);
+  masked = hideFaceDownLuckyDuel(masked);
   masked = maskAttackChoice(masked, forPlayer);
   masked = maskPowerChoice(masked, forPlayer);
   return maskTrainerChoice(masked, forPlayer);

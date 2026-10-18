@@ -30,6 +30,10 @@ import { recordMissionEvent, type MissionCompletion } from "../economy/missions.
 // ---------------------------------------------------------------------------
 
 export type MultiplayerMode = "normal" | "friendly" | "draft";
+/** The kind of game played (a table's / vs-AI game's rules): standard or Lucky Duel. */
+export type GameModeMarker = "standard" | "lucky-duel";
+/** The result a vs-AI game reports (player's view). */
+export type AiResult = "victory" | "defeat" | "draw";
 export type MatchMode = MultiplayerMode | "ai";
 
 /** Highest bet any table can carry (legend tier). Lower tiers are capped by title, see users/titles.ts. */
@@ -163,14 +167,25 @@ export async function openMultiplayerMatch(input: OpenMatchInput, now = new Date
 }
 
 export type SettleInput =
-  /** winnerId null = no result (cancelled / abandoned / draw): bets are refunded, nothing counts. */
-  | { kind: "multiplayer"; winnerId: string | null; reason: string; turnNumber: number }
+  /**
+   * winnerId null = no result (cancelled / abandoned): bets are refunded, nothing counts.
+   * `draw: true` (with winnerId null) = a game played to a draw (Lucky Duel: both Actives Knocked
+   * Out at once): no winner and no loser. It counts like any game (anti-farming rules minus the
+   * per-opponent win cap) but changes no win/loss stats or streaks (the stats model has no draws);
+   * both players get the loser's participation rewards (XP, match coins, "game_played" mission).
+   */
+  | { kind: "multiplayer"; winnerId: string | null; draw?: boolean; reason: string; turnNumber: number }
   /** turnNumber: last turn reached, reported by the client (the AI game runs in the browser). */
-  | { kind: "ai"; victory: boolean; turnNumber: number };
+  /**
+   * `draw`: the game ended in a draw (Lucky Duel: both Actives Knocked Out at once): no winner,
+   * the loser's rewards (same ruling as multiplayer). `mode` is only recorded on the match row
+   * (winReason "lucky-duel: <result>").
+   */
+  | { kind: "ai"; victory: boolean; draw?: boolean; mode?: GameModeMarker; turnNumber: number };
 
 export interface PlayerSettlement {
   userId: string;
-  outcome: "win" | "loss" | "none";
+  outcome: "win" | "loss" | "draw" | "none";
   /** The game passed the anti-farming rules (stats, XP, coins and missions were applied). */
   counted: boolean;
   /** Net coins the table bet moved for the player: +bet (won the pot), -bet (lost the stake) or 0. */
@@ -201,6 +216,12 @@ export interface SettlementResult {
   players: PlayerSettlement[];
 }
 
+/** A vs-AI match row's winReason: "victory" | "defeat" | "draw", prefixed "lucky-duel: " for that mode. */
+function aiWinReason(input: { victory: boolean; draw?: boolean; mode?: GameModeMarker }): string {
+  const result = input.victory ? "victory" : input.draw ? "draw" : "defeat";
+  return input.mode === "lucky-duel" ? `lucky-duel: ${result}` : result;
+}
+
 /**
  * Settle a match exactly once: pay the pot to the winner (or refund both stakes when there is
  * no result or the game ended before turn 3), and — only for a counted game — record win/loss
@@ -222,7 +243,9 @@ export async function settleMatch(matchId: string, input: SettleInput, now = new
     let winnerId: string | null;
     if (input.kind === "ai") winnerId = input.victory ? match.player1Id : null;
     else winnerId = input.winnerId && players.includes(input.winnerId) ? input.winnerId : null;
-    const decided = input.kind === "ai" || winnerId !== null;
+    // A draw is a played game without a winner (never together with a winner)
+    const draw = input.kind === "multiplayer" ? input.draw === true && winnerId === null : input.draw === true && !input.victory;
+    const decided = input.kind === "ai" || winnerId !== null || draw;
 
     // Lock the players' rows (id order) BEFORE anything else: the claim below writes winnerId, a
     // foreign key to users (a key-share lock on the winner's row), so locking afterwards takes
@@ -238,7 +261,7 @@ export async function settleMatch(matchId: string, input: SettleInput, now = new
         finishedAt: now,
         status: decided ? "finished" : "abandoned",
         winnerId,
-        winReason: input.kind === "ai" ? (input.victory ? "victory" : "defeat") : input.reason.slice(0, 200),
+        winReason: input.kind === "ai" ? aiWinReason(input) : input.reason.slice(0, 200),
       },
     });
     if (count === 0) return null;
@@ -254,14 +277,17 @@ export async function settleMatch(matchId: string, input: SettleInput, now = new
         await creditBalance(winnerId, "coins", bet * 2, "bet_win", `Apuesta ganada: ${bet * 2} monedas del pozo`, tx);
         for (const p of players) coinsDelta.set(p, p === winnerId ? bet : -bet);
       } else {
-        const why = winnerId ? `la partida no llegó al turno ${ECONOMY.tableBets.minTurnForPayout}` : "partida sin resultado";
+        const why = winnerId
+          ? `la partida no llegó al turno ${ECONOMY.tableBets.minTurnForPayout}`
+          : draw ? "empate" : "partida sin resultado";
         for (const p of players) {
           await creditBalance(p, "coins", bet, "bet_refund", `Apuesta devuelta: ${bet} monedas (${why})`, tx);
         }
       }
     }
 
-    // Stats (multiplayer normal/draft, counted only)
+    // Stats (multiplayer normal/draft, counted only). A draw changes no stats: there is no draw
+    // column, and neither streak breaks nor grows
     if (counted && winnerId && (mode === "normal" || mode === "draft")) {
       for (const p of players) await recordMatchResult(p, mode, p === winnerId, tx);
     }
@@ -273,6 +299,7 @@ export async function settleMatch(matchId: string, input: SettleInput, now = new
     const verified = new Map<string, boolean>();
     for (const p of players) verified.set(p, (await hasVerifiedEmail(p, tx)) ?? false);
     for (const p of players) {
+      // A draw pays both players what a loser gets (participation): XP, match coins, game_played
       const outcome = p === winnerId ? "win" : "loss";
       const grant = await grantExperience(tx, p, counted ? XP_REWARDS[mode][outcome] : 0, now);
       if (grant) grants.set(p, grant);
@@ -305,7 +332,7 @@ export async function settleMatch(matchId: string, input: SettleInput, now = new
         const grant = grants.get(p);
         return {
           userId: p,
-          outcome: !decided ? "none" : p === winnerId ? "win" : "loss",
+          outcome: !decided ? "none" : draw ? "draw" : p === winnerId ? "win" : "loss",
           counted,
           coinsDelta: coinsDelta.get(p) ?? 0,
           rewardCoins: coinGrants.get(p)?.amount ?? 0,
@@ -351,7 +378,9 @@ async function isCounted(
     return countedToday < rules.aiDailyCountedGames;
   }
 
-  if (elapsed < rules.minDurationMs || !winnerId || !match.player1Id || !match.player2Id) return false;
+  if (elapsed < rules.minDurationMs || !match.player1Id || !match.player2Id) return false;
+  // A draw has no winner to cap (the per-opponent cap counts wins); no result counts for nobody
+  if (!winnerId) return input.draw === true;
   const loserId = winnerId === match.player1Id ? match.player2Id : match.player1Id;
   return (await countedWinsAgainstToday(tx, winnerId, loserId, match.id, now)) < rules.maxCountedWinsPerOpponentPerDay;
 }
@@ -389,8 +418,20 @@ export async function startAiMatch(userId: string, now = new Date()): Promise<{ 
   });
 }
 
-/** Report the end of a single-player game started with startAiMatch. */
-export async function finishAiMatch(userId: string, matchId: string, victory: boolean, turnNumber: number, now = new Date()) {
+/**
+ * Report the end of a single-player game started with startAiMatch. `result`: "victory" | "defeat" | "draw" (a boolean is read as victory / defeat). A draw
+ * (Lucky Duel) has no winner: the loser's XP / match coins / game_played, no streak change.
+ * `mode` (optional) is recorded on the match row.
+ */
+export async function finishAiMatch(
+  userId: string,
+  matchId: string,
+  result: AiResult | boolean,
+  turnNumber: number,
+  now = new Date(),
+  mode?: GameModeMarker,
+) {
+  const outcome: AiResult = typeof result === "boolean" ? (result ? "victory" : "defeat") : result;
   const match = await prisma.match.findFirst({
     where: { id: matchId, player1Id: userId, mode: "ai" },
     select: { settledAt: true },
@@ -398,11 +439,16 @@ export async function finishAiMatch(userId: string, matchId: string, victory: bo
   if (!match) throw Errors.NotFound("Partida");
   if (match.settledAt) throw Errors.Conflict("Esta partida ya fue registrada");
 
-  const result = await settleMatch(matchId, { kind: "ai", victory, turnNumber }, now);
-  if (!result) throw Errors.Conflict("Esta partida ya fue registrada");
-  const me = result.players[0];
+  const settled = await settleMatch(
+    matchId,
+    { kind: "ai", victory: outcome === "victory", draw: outcome === "draw", ...(mode ? { mode } : {}), turnNumber },
+    now,
+  );
+  if (!settled) throw Errors.Conflict("Esta partida ya fue registrada");
+  const me = settled.players[0];
   return {
     matchId,
+    outcome: me.outcome,
     counted: me.counted,
     xpGained: me.xpGained,
     xpCapped: me.xpCapped,

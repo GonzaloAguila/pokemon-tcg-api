@@ -465,6 +465,7 @@ router.get(
           player2: room.player2Id
             ? { id: room.player2Id, username: room.joiner.username }
             : null,
+          mode: room.config.mode,
           betAmount: room.config.betAmount,
           friendly: room.config.friendly,
           createdAt: room.createdAt,

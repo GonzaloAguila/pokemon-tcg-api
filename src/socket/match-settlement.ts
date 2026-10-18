@@ -42,13 +42,15 @@ export async function openRoomMatch(room: GameRoom, mode: MultiplayerMode): Prom
 
 /**
  * Settle the room's result once (later calls are no-ops): stats, XP and the bet pot, or a
- * refund when `winner` is null. Runs in the background; each player gets `matchSettled`.
+ * refund when `winner` is null. `"draw"` (Lucky Duel: both Actives Knocked Out at once) is a
+ * played game without a winner: no stats or streak change, the loser's XP / match coins for
+ * both (settleMatch). Runs in the background; each player gets `matchSettled`.
  * Must be called while the room still knows both players (before leaveRoom clears a seat).
  */
 export function settleRoomResult(
   io: Server | null,
   room: GameRoom | undefined,
-  winner: PlayerKey | null,
+  winner: PlayerKey | "draw" | null,
   reason: string,
   // The mode (draft or not) comes from the match row; kept for the existing callers
   _options: { isDraft?: boolean } = {},
@@ -71,7 +73,9 @@ export function settleRoomResult(
   settleMatch(matchId, {
     kind: "multiplayer",
     winnerId,
-    reason,
+    ...(winner === "draw" ? { draw: true } : {}),
+    // The match row has no table-mode column: a Lucky Duel says so in its reason
+    reason: room.config.mode === "lucky-duel" ? `Lucky Duel: ${reason}` : reason,
     turnNumber: room.gameState?.turnNumber ?? 0,
   })
     .then((result) => {
