@@ -205,7 +205,7 @@ async function playableDeck(userId: string) {
   });
 }
 
-type RoomListing = { id: string; mode: string; prizeCount: number; betAmount: number };
+type RoomListing = { id: string; mode: string; prizeCount: number; betAmount: number; creatorUsername?: string | null };
 
 type User = Awaited<ReturnType<typeof createUser>>;
 
@@ -273,7 +273,10 @@ describe("Lucky Duel over sockets", () => {
     // getRooms (the playing table) carries it too
     const rooms = nextEvent<{ rooms: RoomListing[] }>(t.s1, "roomList");
     t.s1.emit("getRooms");
-    expect((await rooms).rooms.find((r) => r.id === t.roomId)?.mode).toBe("lucky-duel");
+    const playing = (await rooms).rooms.find((r) => r.id === t.roomId);
+    expect(playing?.mode).toBe("lucky-duel");
+    // Once it is being played the seats are public again (spectators see who plays)
+    expect(playing?.creatorUsername).toBeTruthy();
   });
 
   it("a deck sent anyway is ignored (no ownership check, no deck stored)", async () => {
@@ -381,7 +384,14 @@ describe("Lucky Duel over sockets", () => {
     s1.emit("createRoom", { deckId: deck1.id, prizeCount: 4 });
     const created = await nextEvent<{ roomId: string; mode: string }>(s1, "roomCreated");
     expect(created.mode).toBe("standard");
-    expect((await listed).rooms.find((r) => r.id === created.roomId)).toMatchObject({ mode: "standard", prizeCount: 4 });
+    // A waiting table is anonymous: who created it is not sent
+    expect((await listed).rooms.find((r) => r.id === created.roomId)).toMatchObject({
+      mode: "standard",
+      prizeCount: 4,
+      creatorUsername: null,
+      creatorAvatarId: null,
+      creatorTitleId: null,
+    });
     const joinNoDeck = nextEvent<{ message: string }>(s2, "error");
     s2.emit("joinRoom", { roomId: created.roomId });
     expect((await joinNoDeck).message).toBe("Debes elegir un mazo");

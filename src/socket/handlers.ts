@@ -287,9 +287,10 @@ function reportDraftGame(io: Server, roomId: string, winner: PlayerKey | null, f
   announceDraftResult(io, draftInfo.draftRoomId, { gameRoomId: roomId, winnerId, loserId, forfeit }, progress, roomManager);
 }
 
-/** Serialize a room for the lobby room list */
+/** Serialize a room for the lobby room list. A table waiting for a rival is anonymous (who created it is never sent). */
 function serializeRoom(r: ReturnType<typeof roomManager.getRoom>) {
   if (!r) return null;
+  const isWaiting = r.status === "waiting";
   return {
     id: r.id,
     status: r.status,
@@ -301,9 +302,9 @@ function serializeRoom(r: ReturnType<typeof roomManager.getRoom>) {
     betAmount: r.config.betAmount,
     reservedUserId: r.config.reservedUserId,
     friendly: r.config.friendly,
-    creatorUsername: r.creator.username,
-    creatorAvatarId: r.creator.avatarId,
-    creatorTitleId: r.creator.titleId,
+    creatorUsername: isWaiting ? null : r.creator.username,
+    creatorAvatarId: isWaiting ? null : r.creator.avatarId,
+    creatorTitleId: isWaiting ? null : r.creator.titleId,
     joinerUsername: r.joiner.username,
     joinerAvatarId: r.joiner.avatarId,
     joinerTitleId: r.joiner.titleId,
