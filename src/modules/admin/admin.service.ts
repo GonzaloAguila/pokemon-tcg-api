@@ -125,6 +125,61 @@ export async function searchUsers(
 }
 
 // ---------------------------------------------------------------------------
+// Match history (finished and abandoned games, newest first)
+// ---------------------------------------------------------------------------
+
+/** Filter values of the match history: Match.mode, or Lucky Duel (Match.gameMode, any mode). */
+export const MATCH_HISTORY_MODES = ["normal", "friendly", "draft", "ai", "lucky-duel"] as const;
+export type MatchHistoryMode = (typeof MATCH_HISTORY_MODES)[number];
+
+export async function listMatches(filters: {
+  q: string;
+  mode?: MatchHistoryMode;
+  from?: Date;
+  to?: Date;
+  page: number;
+  limit: number;
+}) {
+  const { q, mode, from, to, page, limit } = filters;
+  const player = { username: { contains: q, mode: "insensitive" as const } };
+  const where: Prisma.MatchWhereInput = {
+    ...(q ? { OR: [{ player1: player }, { player2: player }] } : {}),
+    ...(mode === "lucky-duel" ? { gameMode: "lucky-duel" } : mode ? { mode } : {}),
+    ...(from || to ? { createdAt: { ...(from ? { gte: from } : {}), ...(to ? { lt: to } : {}) } } : {}),
+  };
+  const seat = { select: { id: true, username: true } };
+  const [matches, total] = await Promise.all([
+    prisma.match.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      skip: (page - 1) * limit,
+      take: limit,
+      select: {
+        id: true,
+        status: true,
+        mode: true,
+        gameMode: true,
+        roomId: true,
+        betAmount: true,
+        player1Xp: true,
+        player2Xp: true,
+        counted: true,
+        winReason: true,
+        finalTurn: true,
+        createdAt: true,
+        startedAt: true,
+        finishedAt: true,
+        player1: seat,
+        player2: seat,
+        winner: seat,
+      },
+    }),
+    prisma.match.count({ where }),
+  ]);
+  return { data: matches, total, page, limit };
+}
+
+// ---------------------------------------------------------------------------
 // Brief user search (for autocomplete / recipient picker)
 // ---------------------------------------------------------------------------
 

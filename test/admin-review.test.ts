@@ -424,3 +424,39 @@ describe("force-closing a room", () => {
     expect(closeRoomByAdmin(io as never, room.id)).toBe(false);
   });
 });
+
+describe("match history (GET /admin/matches)", () => {
+  it("lists played games newest first with players, winner and bet, filtered by player and mode", async () => {
+    const ash = await createUser();
+    const misty = await createUser();
+    await prisma.match.create({
+      data: { mode: "normal", status: "finished", player1Id: ash.id, player2Id: misty.id, winnerId: misty.id, winReason: "prizes", betAmount: 50, player1Xp: 10, player2Xp: 30, createdAt: new Date("2026-10-18T12:00:00Z") },
+    });
+    await prisma.match.create({
+      data: { mode: "ai", gameMode: "lucky-duel", status: "finished", player1Id: ash.id, winnerId: ash.id, betAmount: 20, createdAt: new Date("2026-10-19T12:00:00Z") },
+    });
+
+    const res = await req(superToken).get(`/api/admin/matches?q=${ash.username}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ total: 2, page: 1, limit: 10 });
+    expect(res.body.data[0]).toMatchObject({ mode: "ai", gameMode: "lucky-duel", betAmount: 20, winner: { username: ash.username } });
+    expect(res.body.data[1]).toMatchObject({
+      mode: "normal",
+      player1: { username: ash.username },
+      player2: { username: misty.username },
+      winner: { username: misty.username },
+      winReason: "prizes",
+      betAmount: 50,
+    });
+
+    const luckyOnly = await req(superToken).get(`/api/admin/matches?q=${ash.username}&mode=lucky-duel`);
+    expect(luckyOnly.body.total).toBe(1);
+    const before19 = await req(superToken).get(`/api/admin/matches?q=${ash.username}&to=2026-10-19`);
+    expect(before19.body.data.map((m: { mode: string }) => m.mode)).toEqual(["normal"]);
+  });
+
+  it("needs rooms:view and rejects unknown modes", async () => {
+    expect((await req(modToken).get("/api/admin/matches")).status).toBe(403);
+    expect((await req(superToken).get("/api/admin/matches?mode=ranked")).status).toBe(400);
+  });
+});

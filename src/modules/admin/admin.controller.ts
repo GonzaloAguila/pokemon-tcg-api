@@ -57,6 +57,15 @@ const optionalQuery = <S extends z.ZodTypeAny>(schema: S) =>
 
 const adminQueries = {
   stats: z.object({ period: optionalQuery(z.enum(["day", "week", "month", "all"])) }),
+  // Match history: player username (either seat), mode, created in [from, to) (ISO dates)
+  matches: z.object({
+    q: optionalQuery(queryString.trim().max(100)).transform((v) => v ?? ""),
+    mode: optionalQuery(z.enum(adminService.MATCH_HISTORY_MODES)),
+    from: optionalQuery(z.coerce.date()),
+    to: optionalQuery(z.coerce.date()),
+    page: optionalQuery(z.coerce.number().int().min(1).max(10_000)).transform((v) => v ?? 1),
+    limit: optionalQuery(z.coerce.number().int().min(1).max(50)).transform((v) => v ?? 10),
+  }),
   // Same shapes as the panel's searchUsers (src/infra/http/admin-api.ts)
   searchUsers: z.object({
     q: optionalQuery(queryString.trim().max(100)).transform((v) => v ?? ""),
@@ -479,6 +488,23 @@ router.get(
       }
 
       res.json({ rooms });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// GET /admin/matches — Played games (results, bets, XP), newest first
+// ---------------------------------------------------------------------------
+
+router.get(
+  "/admin/matches",
+  requireAuth,
+  requirePermission("rooms:view"),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      res.json(await adminService.listMatches(parseBody(adminQueries.matches, req.query)));
     } catch (err) {
       next(err);
     }
