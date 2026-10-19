@@ -28,6 +28,9 @@
  * Lucky Duel: until both players are ready (`luckyDuelRevealed`), both Actives are
  * `{ id, hidden: true }` for every viewer, owners included, and so is the owner's own deck.
  *
+ * Setup (MULLIGAN / SETUP): Pokémon are placed face down, so the opponent's Active and Bench go
+ * out as `{ id, hidden: true }` (spectators: both sides) and the log says "colocó un Pokémon".
+ *
  * Still visible to the owner: their own deck order and prizes (the client needs the
  * deck contents for search effects); hiding those needs search UIs to get a sorted
  * copy instead — tracked as a follow-up.
@@ -258,6 +261,33 @@ function hideFaceDownLuckyDuel(state: GameState): GameState {
   };
 }
 
+/**
+ * Setup before both players are ready: the Pokémon placed by `sides` are face down. Ids are
+ * generated (real ids carry the card name); the board's cards arrive at the reveal. Lucky Duel
+ * hides its own way (hideFaceDownLuckyDuel).
+ */
+function hideSetupBoard(state: GameState, sides: HiddenZoneSide[]): GameState {
+  if ((state.gamePhase !== "MULLIGAN" && state.gamePhase !== "SETUP") || state.gameMode === "lucky-duel") return state;
+  const masked: GameState = { ...state };
+  for (const side of sides) {
+    const activeKey = `${side}ActivePokemon`;
+    const benchKey = `${side}Bench`;
+    if (masked[activeKey]) masked[activeKey] = { id: `hidden-${side}-active`, hidden: true };
+    const bench = masked[benchKey];
+    if (Array.isArray(bench)) masked[benchKey] = bench.map((_, i) => ({ id: `hidden-${side}-bench-${i}`, hidden: true }));
+  }
+  // "Jugador 1" is the viewer (player 1 for a spectator): hide what the hidden sides placed
+  const hiddenNames: string[] = sides.map((side) => (side === "player" ? "Jugador 1" : "Jugador 2"));
+  const events = state.events as Array<{ message: string }> | undefined;
+  if (events) {
+    masked.events = events.map((event) => {
+      const match = /^(Jugador [12]) colocó .+? (como Pokémon activo|en la banca)$/.exec(event.message);
+      return match && hiddenNames.includes(match[1]) ? { ...event, message: `${match[1]} colocó un Pokémon ${match[2]}` } : event;
+    });
+  }
+  return masked;
+}
+
 /** Drop pending choices the viewer doesn't own (not their turn, or a spectator). */
 function stripForeignPending(state: GameState, viewer: Viewer): GameState {
   const owns = viewer !== "spectator" && state.isPlayerTurn === true;
@@ -368,7 +398,7 @@ export function maskGameStateForPlayer(
   const view = forPlayer === "spectator" ? state : getGameStateForPlayer(state, forPlayer);
   const sides: HiddenZoneSide[] = forPlayer === "spectator" ? ["player", "opponent"] : ["opponent"];
   let masked = stripForeignPending(maskDuel(hideSetAsideHands(hideZones(view, sides, revealedZones(view, forPlayer))), forPlayer), forPlayer);
-  masked = hideFaceDownLuckyDuel(masked);
+  masked = hideFaceDownLuckyDuel(hideSetupBoard(masked, sides));
   masked = maskAttackChoice(masked, forPlayer);
   masked = maskPowerChoice(masked, forPlayer);
   return maskTrainerChoice(masked, forPlayer);
