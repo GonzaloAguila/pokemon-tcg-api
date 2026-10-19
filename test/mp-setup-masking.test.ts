@@ -11,10 +11,10 @@ import { maskGameStateForPlayer } from "../src/socket/state-masking.js";
 function setupRoom() {
   const manager = new GameRoomManager();
   const state = startGame(initializeMultiplayerGame(getDeckById("zap")!, getDeckById("overgrowth")!));
-  const basics = state.playerHand.filter((card: GameCard) => isPokemonCard(card) && card.stage === "basic");
-  // Two Basics in player 1's opening hand: the first goes Active, the second to the Bench
-  const otherCards = state.playerHand.filter((card: GameCard) => !basics.includes(card));
-  const [active, benched] = [basics[0], basics[1] ?? state.playerDeck.find((card: GameCard) => isPokemonCard(card) && card.stage === "basic" && card !== basics[0])!];
+  const isBasic = (card: GameCard) => isPokemonCard(card) && card.stage === "basic";
+  // Two Basics in player 1's hand (the opening hand is random): the first goes Active, the second to the Bench
+  const [active, benched] = [...state.playerHand, ...state.playerDeck].filter(isBasic);
+  const otherCards = state.playerHand.filter((card: GameCard) => card !== active && card !== benched);
   const room = manager.createRoom();
   Object.assign(room, {
     player1SocketId: "s1",
