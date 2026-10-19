@@ -640,8 +640,9 @@ function neutralizeEvents(
   // relative forms ("pasa a ser el Pokémon activo del rival", "tu mazo", "Barajaste"...);
   // Fossil / Team Rocket lines are perspective-free in game-core and need none of their own.
   const regexReplacements: [RegExp, string][] = [
-    [/^Tu turno$/, `Turno de ${self}`],
-    [/^Turno del rival$/, `Turno de ${opponent}`],
+    // endTurn writes "Turno 3 - Tu turno" / "Turno 3 - Turno del rival"
+    [/\bTu turno$/, `Turno de ${self}`],
+    [/\bTurno del rival$/, `Turno de ${opponent}`],
     [/es ahora tu Pokémon activo/g, `es ahora el Pokémon activo de ${self}`],
     [/pasa a ser tu Pokémon activo/g, `pasa a ser el Pokémon activo de ${self}`],
     [/Pokémon activo del rival/g, `Pokémon activo de ${opponent}`],

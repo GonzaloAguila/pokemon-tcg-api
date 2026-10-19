@@ -441,3 +441,13 @@ describe("start of the game", () => {
     expect(state.playerDeck.length + state.playerHand.length).toBe(47);
   });
 });
+
+describe.each(["p1", "p2"] as const)("turn events as %s", (actor) => {
+  it("names the player whose turn starts, not 'Turno del rival'", async () => {
+    const t = setupGame(actor);
+    expect((await t.act("endTurn")).success).toBe(true);
+    const messages = t.room.gameState!.events.map((e) => e.message);
+    expect(messages.some((m) => /^Turno \d+ - Turno de /.test(m) && m.endsWith(NAME[other(actor)]))).toBe(true);
+    expect(messages.some((m) => /Tu turno$|Turno del rival$/.test(m))).toBe(false);
+  });
+});
