@@ -968,7 +968,7 @@ export class GameRoomManager {
       room.player2Ready = false;
     }
 
-    this.socketToRoom.delete(socketId);
+    this.unmapSocket(socketId, roomId);
 
     // Remove room if empty
     if (!room.player1Id && !room.player2Id) {
@@ -2118,7 +2118,17 @@ export class GameRoomManager {
     this.removeSpectatorSocket(socketId);
 
     const roomId = this.socketToRoom.get(socketId);
-    if (!roomId) return null;
+    // A creator may have one waiting table per mode on the same socket (socketToRoom keeps only
+    // one of them): every other one is left too (hidden, deleted after the grace period)
+    let otherWaiting: string | null = null;
+    for (const other of this.rooms.values()) {
+      if (other.id !== roomId && other.status === "waiting" && other.player1SocketId === socketId) {
+        other.player1SocketId = null;
+        this.startWaitingRoomTimer(other.id);
+        otherWaiting ??= other.id;
+      }
+    }
+    if (!roomId) return otherWaiting;
 
     const room = this.rooms.get(roomId);
     if (!room) return null;
@@ -2362,7 +2372,7 @@ export class GameRoomManager {
       console.log(`🗑️ Waiting room ${roomId} deleted (creator left the lobby)`);
       this.cancelAnswerTimer(roomId);
       this.rooms.delete(roomId);
-      if (room.player2SocketId) this.socketToRoom.delete(room.player2SocketId);
+      this.unmapRoomSockets(room);
       this.onRoomClosedCallback?.(roomId);
     }, this.waitingRoomGraceMs);
     timer.unref?.();
@@ -2483,8 +2493,7 @@ export class GameRoomManager {
     this.cancelWaitingRoomTimer(roomId);
     this.cancelAnswerTimer(roomId);
     this.rooms.delete(roomId);
-    if (room.player1SocketId) this.socketToRoom.delete(room.player1SocketId);
-    if (room.player2SocketId) this.socketToRoom.delete(room.player2SocketId);
+    this.unmapRoomSockets(room);
     return true;
   }
 
@@ -2501,8 +2510,7 @@ export class GameRoomManager {
     // Clean up timers and socket mappings
     this.cancelSetupTimer(roomId);
     this.cancelWaitingRoomTimer(roomId);
-    if (room.player1SocketId) this.socketToRoom.delete(room.player1SocketId);
-    if (room.player2SocketId) this.socketToRoom.delete(room.player2SocketId);
+    this.unmapRoomSockets(room);
     this.cancelAnswerTimer(roomId);
     this.rooms.delete(roomId);
     return true;
@@ -2622,15 +2630,47 @@ export class GameRoomManager {
   }
 
   /**
-   * Find a "waiting" room created by the given user (as player1).
+   * Close the waiting tables of these users except `keepRoomId` (a user plays one game at a
+   * time: their table got a rival, or they take a seat elsewhere). Nothing was escrowed yet (bets
+   * are charged when a game starts). Returns the closed rooms (the caller notifies their sockets).
+   * The kept room's seats become their sockets' room again (a socket maps to one room).
    */
-  findWaitingRoomByUser(userId: string): GameRoom | null {
-    for (const room of this.rooms.values()) {
-      if (room.status === "waiting" && room.player1Id === userId) {
-        return room;
+  closeWaitingRoomsOf(userIds: (string | null)[], keepRoomId: string): GameRoom[] {
+    const closed: GameRoom[] = [];
+    for (const userId of new Set(userIds)) {
+      if (!userId) continue;
+      for (const room of this.findWaitingRoomsByUser(userId)) {
+        if (room.id === keepRoomId) continue;
+        this.forceDeleteRoom(room.id);
+        closed.push(room);
       }
     }
-    return null;
+    const kept = this.rooms.get(keepRoomId);
+    if (kept?.player1SocketId) this.socketToRoom.set(kept.player1SocketId, kept.id);
+    if (kept?.player2SocketId) this.socketToRoom.set(kept.player2SocketId, kept.id);
+    return closed;
+  }
+
+  /** Forget a socket's room only if it is this one (a creator's socket may hold several tables). */
+  private unmapSocket(socketId: string, roomId: string): void {
+    if (this.socketToRoom.get(socketId) === roomId) this.socketToRoom.delete(socketId);
+  }
+
+  private unmapRoomSockets(room: GameRoom): void {
+    if (room.player1SocketId) this.unmapSocket(room.player1SocketId, room.id);
+    if (room.player2SocketId) this.unmapSocket(room.player2SocketId, room.id);
+  }
+
+  /**
+   * The lobby tables the user created that wait for a rival (player 1, not draft games): at most
+   * one per mode (createRoom). Also the ones whose creator left the lobby (grace period).
+   */
+  findWaitingRoomsByUser(userId: string): GameRoom[] {
+    const rooms: GameRoom[] = [];
+    for (const room of this.rooms.values()) {
+      if (room.status === "waiting" && !room.isDraft && room.player1Id === userId) rooms.push(room);
+    }
+    return rooms;
   }
 
   /**

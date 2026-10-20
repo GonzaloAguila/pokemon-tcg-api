@@ -167,6 +167,9 @@ async function startRoomGame(io: Server, roomId: string): Promise<GameState | nu
   const room = roomManager.getRoom(roomId);
   if (!room || room.status !== "waiting" || room.startPending || !room.player1Id || !room.player2Id) return null;
   room.startPending = true;
+  // Both players play this game: their other waiting tables close now (before any await, so a
+  // second table of the creator can't start meanwhile; one already starting fails and refunds)
+  closeOtherWaitingRooms(io, [room.player1Id, room.player2Id], roomId);
   try {
     try {
       await openRoomMatch(room, roomMatchMode(room, false));
@@ -195,6 +198,21 @@ async function startRoomGame(io: Server, roomId: string): Promise<GameState | nu
   } finally {
     room.startPending = false;
   }
+}
+
+/**
+ * Close these users' waiting tables but `keepRoomId` (GameRoomManager.closeWaitingRoomsOf):
+ * everyone in each closed room and its creator's sockets get `roomDeleted`, the lobbies the new
+ * room list.
+ */
+function closeOtherWaitingRooms(io: Server, userIds: (string | null)[], keepRoomId: string): void {
+  const closed = roomManager.closeWaitingRoomsOf(userIds, keepRoomId);
+  for (const room of closed) {
+    io.to([room.id, ...(room.player1Id ? [userRoom(room.player1Id)] : [])]).emit("roomDeleted", { roomId: room.id });
+    io.in(room.id).socketsLeave(room.id);
+    console.log(`🗑️ Waiting room ${room.id} closed (its creator plays in ${keepRoomId})`);
+  }
+  if (closed.length > 0) broadcastRoomList(io);
 }
 
 /** A player couldn't cover the bet when the game was about to start (nobody was charged). */
@@ -598,6 +616,13 @@ export function setupSocketHandlers(io: Server): void {
             return;
           }
         }
+        // One waiting table per mode (checked after the awaits: nothing runs between it and the seat)
+        if (roomManager.findWaitingRoomsByUser(userId).some((r) => r.config.mode === mode)) {
+          socket.emit("error", {
+            message: luckyDuel ? "Ya tienes una mesa de Lucky Duel esperando rival" : "Ya tienes una mesa esperando rival",
+          });
+          return;
+        }
         const room = roomManager.createRoom(
           undefined,
           { mode, prizeCount, betAmount, reservedUserId: reservedUserId || null, friendly: friendly ?? false },
@@ -703,15 +728,6 @@ export function setupSocketHandlers(io: Server): void {
           }
         }
 
-        // Auto-close any waiting room the user owns before joining another
-        const existingWaitingRoom = roomManager.findWaitingRoomByUser(userId);
-        if (existingWaitingRoom && existingWaitingRoom.id !== roomId) {
-          // Force-close waiting room since user is joining another
-          roomManager.forceDeleteRoom(existingWaitingRoom.id);
-          broadcastRoomList(io);
-          console.log(`🗑️ Auto-deleted waiting room ${existingWaitingRoom.id} (user ${userId} joining ${roomId})`);
-        }
-
         console.log(`[joinRoom] Attempting to join room ${roomId} as ${userId}`);
         const room = await roomManager.joinRoom(roomId, userId, socket.id, identity);
         console.log(`[joinRoom] Room state after join:`, {
@@ -719,6 +735,9 @@ export function setupSocketHandlers(io: Server): void {
           player2Id: room.player2Id,
           status: room.status,
         });
+
+        // Taking a seat at another table closes the user's own waiting tables
+        if (!seated) closeOtherWaitingRooms(io, [userId], roomId);
 
         // Set deck if provided (only before the game starts)
         if (deckId && room.status === "waiting") {
