@@ -465,6 +465,8 @@ function broadcastActionResult(io: Server, roomId: string, actionType: string, r
         results: result.coinFlipInfo.results,
         count: result.coinFlipInfo.results.length,
         ...(result.coinFlipInfo.flippedBy ? { flippedBy: result.coinFlipInfo.flippedBy } : {}),
+        // Rebellion (Gym Challenge): `powerCoins` power coins after the first `smokescreenCoins`
+        ...(result.coinFlipInfo.powerCoins ? { smokescreenCoins: result.coinFlipInfo.smokescreenCoins ?? 0, powerCoins: result.coinFlipInfo.powerCoins } : {}),
         ...(result.coinFlipInfo.defenderResults ? { defenderResults: result.coinFlipInfo.defenderResults } : {}),
         // Who flipped the defender coin when not the defending player (Shadow Images)
         ...(result.coinFlipInfo.defenderFlippedBy ? { defenderFlippedBy: result.coinFlipInfo.defenderFlippedBy } : {}),

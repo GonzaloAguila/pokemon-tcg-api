@@ -40,6 +40,7 @@ import {
   arePrizesRevealed,
   isHandRevealed,
   maskDuelFor,
+  maskFaceDownFor,
   swapSides,
   type GameState as EngineState,
   type PendingAttackChoice,
@@ -369,7 +370,8 @@ function maskPowerChoice(state: GameState, viewer: Viewer): GameState {
 function maskTrainerChoice(state: GameState, viewer: Viewer): GameState {
   const choice = state.pendingTrainerChoice as PendingTrainerChoice | undefined;
   if (!choice) return state;
-  const viewerIsTrainerPlayer = state.isPlayerTurn === true;
+  // Chaos Gym's offered card is played by the player whose turn it is NOT (playedOffTurn)
+  const viewerIsTrainerPlayer = choice.playedOffTurn ? state.isPlayerTurn !== true : state.isPlayerTurn === true;
   const viewerAnswers = viewer !== "spectator" && (choice.chooser === "opponent" ? !viewerIsTrainerPlayer : viewerIsTrainerPlayer);
   if (viewerAnswers) return withAnswererStep(state, "pendingTrainerChoice", choice);
   return {
@@ -379,9 +381,31 @@ function maskTrainerChoice(state: GameState, viewer: Viewer): GameState {
       trainerName: choice.trainerName,
       step: { ...strippedStep(choice.step), chooser: choice.step.chooser ?? "self" },
       chooser: choice.chooser,
+      ...(choice.playedOffTurn ? { playedOffTurn: true } : {}),
       waiting: true,
     },
   };
+}
+
+/**
+ * Lt. Surge's Secret Plan (Gym Challenge): a face-down card on the Bench. Its owner sees the real
+ * card (`pokemon.faceDownCard`); the other player and spectators get game-core's
+ * maskFaceDownFor (a hidden Basic "Carta oculta" in its place, same placeholder id and Energy).
+ */
+function hideFaceDownCards(state: GameState, viewer: Viewer): GameState {
+  const hasFaceDown = (side: "player" | "opponent") => {
+    const active = state[`${side}ActivePokemon`] as { pokemon?: { faceDownCard?: unknown } } | null | undefined;
+    const bench = state[`${side}Bench`];
+    return !!active?.pokemon?.faceDownCard || (Array.isArray(bench) && bench.some((p: { pokemon?: { faceDownCard?: unknown } }) => !!p?.pokemon?.faceDownCard));
+  };
+  const hiddenSides: ("player" | "opponent")[] = viewer === "spectator" ? ["player", "opponent"] : ["opponent"];
+  let masked = state;
+  for (const side of hiddenSides) {
+    if (!hasFaceDown(side)) continue;
+    // maskFaceDownFor(state, viewer) hides the OTHER side's face-down cards
+    masked = maskFaceDownFor(masked as unknown as EngineState, side === "opponent" ? "player" : "opponent") as unknown as GameState;
+  }
+  return masked;
 }
 
 /**
@@ -399,6 +423,7 @@ export function maskGameStateForPlayer(
   const sides: HiddenZoneSide[] = forPlayer === "spectator" ? ["player", "opponent"] : ["opponent"];
   let masked = stripForeignPending(maskDuel(hideSetAsideHands(hideZones(view, sides, revealedZones(view, forPlayer))), forPlayer), forPlayer);
   masked = hideFaceDownLuckyDuel(hideSetupBoard(masked, sides));
+  masked = hideFaceDownCards(masked, forPlayer);
   masked = maskAttackChoice(masked, forPlayer);
   masked = maskPowerChoice(masked, forPlayer);
   return maskTrainerChoice(masked, forPlayer);

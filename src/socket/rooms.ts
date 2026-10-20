@@ -92,6 +92,17 @@ import {
   submitDuelPick,
   aiDuelPick,
   type RpsChoice,
+  // Gym Challenge
+  getAttackPreReaction,
+  canPlayBasicPokemon,
+  getPlayBasicCoinFlips,
+  flipFaceDown,
+  isChaosGymCoinPending,
+  getChaosGymOfferStep,
+  answerChaosGymOffer,
+  declineChaosGymOffer,
+  forfeitChaosGymPlay,
+  declineBorrowedTrainer,
 } from "@gonzaloaguila/game-core";
 import { parseGameAction, type TABLE_MODES } from "./schemas.js";
 import { isLuckyDuelFaceDown } from "./state-masking.js";
@@ -246,7 +257,10 @@ export function awaitedSide(state: GameState | null | undefined): PlayerKey | nu
   const turnSide: PlayerKey = state.isPlayerTurn ? "player1" : "player2";
   const otherSide: PlayerKey = turnSide === "player1" ? "player2" : "player1";
   const trainerChoice = pendingTrainerChoiceOf(state);
-  if (trainerChoice) return trainerChoice.chooser === "opponent" ? otherSide : turnSide;
+  if (trainerChoice) return trainerChoiceAnswerer(state, trainerChoice);
+  // Chaos Gym: the player who accepted the offered Trainer plays it (out of turn)
+  const chaosPlayer = chaosOfferPlayer(state);
+  if (chaosPlayer) return chaosPlayer;
   // Misty's Duel: whoever hasn't picked (both: the player whose turn it isn't, see duelPickers)
   const pickers = duelPickers(state);
   if (pickers.length > 0) return pickers.includes(otherSide) ? otherSide : pickers[0];
@@ -274,7 +288,13 @@ export function offTurnAnswerer(state: GameState | null | undefined): PlayerKey 
   const turnSide: PlayerKey = state.isPlayerTurn ? "player1" : "player2";
   const otherSide: PlayerKey = turnSide === "player1" ? "player2" : "player1";
   const trainerChoice = pendingTrainerChoiceOf(state);
-  if (trainerChoice) return trainerChoice.chooser === "opponent" ? otherSide : null;
+  if (trainerChoice) {
+    const answerer = trainerChoiceAnswerer(state, trainerChoice);
+    return answerer === turnSide ? null : answerer;
+  }
+  // Chaos Gym: the accepted offer is played on the offered player's answer clock (default: give it up)
+  const chaosPlayer = chaosOfferPlayer(state);
+  if (chaosPlayer) return chaosPlayer === turnSide ? null : chaosPlayer;
   // Misty's Duel: always on the answer clock (never a kick), even when only the player whose turn
   // it is still has to pick; with both missing the clock shows the other player's
   const pickers = duelPickers(state);
@@ -329,6 +349,7 @@ function defaultAnswerAction(state: GameState, side: PlayerKey): { type: string;
     const selection = defaultSelection(trainerChoice.step);
     return selection ? { type: "answerTrainerChoice", payload: { selection } } : null;
   }
+  if (chaosOfferPlayer(state) === side) return { type: "declineChaosOffer", payload: {} };
   if (state.pendingBenchTrim?.length) {
     // The engine's pick (its lowest-value Benched Pokémon), on that player's own view
     const discardIds = chooseBenchTrim(side === "player1" ? state : swapSides(state));
@@ -364,6 +385,13 @@ interface CoinFlipInfo {
   results: Coin[];
   /** Who flipped each of `results` (Knock Down, Digger); omitted = all the acting player */
   flippedBy?: Flipper[];
+  /**
+   * Rebellion (Misty's Gyarados, Gym Challenge): `results` holds `powerCoins` power coins right
+   * after the first `smokescreenCoins` (Smokescreen / Sand-attack) ones, flipped by the attacker
+   * (both tails: the attack does nothing). Omitted when the attacker flips no power coin.
+   */
+  smokescreenCoins?: number;
+  powerCoins?: number;
   /** Coins flipped by the defending side (Transparency, Final Beam), after the attacker's */
   defenderResults?: Coin[];
   /**
@@ -383,6 +411,11 @@ export interface PendingTrainerChoice {
   trainerName: string;
   step: SelectionStep;
   chooser: "self" | "opponent";
+  /**
+   * The Trainer's player is NOT the side whose turn it is (Chaos Gym's offered card, played by
+   * the other player out of turn): `chooser` is relative to that player. Absent = the turn side.
+   */
+  playedOffTurn?: true;
 }
 
 interface PendingTrainerRecord {
@@ -391,6 +424,28 @@ interface PendingTrainerRecord {
   /** Answers so far (server-side only) */
   selections: string[][];
   coinKey: string;
+  /** Chaos Gym's offer question (getChaosGymOfferStep), answered with answerChaosGymOffer */
+  kind?: "chaosOffer";
+}
+
+const otherKey = (side: PlayerKey): PlayerKey => (side === "player1" ? "player2" : "player1");
+
+/** Who answers the pending Trainer step (state in player 1's perspective). */
+function trainerChoiceAnswerer(state: GameState, choice: PendingTrainerChoice): PlayerKey {
+  const turnSide: PlayerKey = state.isPlayerTurn ? "player1" : "player2";
+  const trainerSide = choice.playedOffTurn ? otherKey(turnSide) : turnSide;
+  return choice.chooser === "opponent" ? otherKey(trainerSide) : trainerSide;
+}
+
+/**
+ * Chaos Gym (Gym Challenge): the player who accepted the offered Trainer and now plays it out of
+ * turn (playTrainer / startTrainer / requestCoinFlip with the offer's cardId, or declineChaosOffer),
+ * or null. State in player 1's perspective (pendingChaosOffer's sides are relative).
+ */
+export function chaosOfferPlayer(state: GameState | null | undefined): PlayerKey | null {
+  const offer = state?.pendingChaosOffer;
+  if (!offer?.accepted) return null;
+  return offer.offeredTo === "player" ? "player1" : "player2";
 }
 
 type RoomGameState = GameState & { pendingTrainerChoice?: PendingTrainerChoice };
@@ -447,6 +502,28 @@ const powerFlippedBy = (view: GameState, pokemonId: string, count: number): Flip
 function trainerCoinInfo(view: GameState, cardId: string, trainerName: string | undefined, results: Coin[]): CoinFlipInfo {
   const flippedBy = trainerFlippedBy(view, cardId, results.length);
   return { attackName: trainerName ?? "Entrenador", results, ...(flippedBy ? { flippedBy } : {}) };
+}
+
+/**
+ * Name of the Trainer `cardId` as its player sees it (`view`: theirs): the card in the hand, or
+ * the card Sabrina's Psychic Control borrowed / Chaos Gym offered (not in the hand).
+ */
+function trainerDisplayName(view: GameState, cardId: string, handName: string | undefined): string {
+  if (handName) return handName;
+  if (view.pendingBorrowedTrainer?.cardId === cardId) return view.pendingBorrowedTrainer.cardName;
+  if (view.pendingChaosOffer?.cardId === cardId) return view.pendingChaosOffer.cardName;
+  return "";
+}
+
+/** Caption of a Trainer's coins: "Chaos Gym" for Chaos Gym's coin (game-core isChaosGymCoinPending), else the card's name. */
+function trainerCoinCaption(view: GameState, cardId: string, handName: string | undefined): string | undefined {
+  if (isChaosGymCoinPending(view, cardId)) return view.stadium?.card.name ?? "Chaos Gym";
+  return trainerDisplayName(view, cardId, handName) || undefined;
+}
+
+/** playTrainerCard's context for the Trainer Sabrina's Psychic Control borrowed from the opponent's discard pile. */
+function borrowedContext(view: GameState, cardId: string): { borrowedFromOpponentDiscard?: true } {
+  return view.pendingBorrowedTrainer?.cardId === cardId ? { borrowedFromOpponentDiscard: true } : {};
 }
 
 /** showCoinFlip of a power's coins (Heal...); `view` is its owner's. */
@@ -518,14 +595,18 @@ export function attackCoinInfo(attackName: string, plan: AttackCoinPlan, coinRes
   const attackerCoinCount = coinResults.length - plan.defender;
   const results = coinResults.slice(0, attackerCoinCount);
   const defenderResults = coinResults.slice(attackerCoinCount);
-  const ownCoins = attackerCoinCount - plan.smokescreen - (plan.stadium ?? 0);
+  // Rebellion (Misty's Gyarados): the attacker's power coins come right after Smokescreen's
+  const powerCoins = plan.power ?? 0;
+  const ownStart = plan.smokescreen + powerCoins;
+  const ownCoins = attackerCoinCount - ownStart - (plan.stadium ?? 0);
   const flippedBy: Flipper[] | undefined =
     plan.attackFlipper === "opponent"
-      ? results.map((_, i) => (i >= plan.smokescreen && i < plan.smokescreen + ownCoins ? "defender" : "attacker"))
+      ? results.map((_, i) => (i >= ownStart && i < ownStart + ownCoins ? "defender" : "attacker"))
       : undefined;
   return {
     attackName,
     results,
+    ...(powerCoins > 0 && results.length >= ownStart ? { smokescreenCoins: plan.smokescreen, powerCoins } : {}),
     ...(flippedBy ? { flippedBy } : {}),
     ...(defenderResults.length > 0 ? { defenderResults } : {}),
     ...(defenderResults.length > 0 && plan.defenderFlipper === "attacker" ? { defenderFlippedBy: defenderResults.map(() => "attacker" as const) } : {}),
@@ -1203,7 +1284,9 @@ export class GameRoomManager {
     if (!key) return { success: false, error: "Not a player in this room" };
     if (isLuckyDuelFaceDown(room.gameState)) return { success: false, error: LUCKY_DUEL_FACE_DOWN_ERROR };
     const isMyTurn = key === "player1" ? room.gameState.isPlayerTurn : !room.gameState.isPlayerTurn;
-    if (!isMyTurn) return { success: false, error: "Not your turn" };
+    // Chaos Gym's accepted offer: the offered player flips its Trainer's coins out of turn
+    const playsChaosOffer = chaosOfferPlayer(room.gameState) === key && request.purpose === "trainer";
+    if (!isMyTurn && !playsChaosOffer) return { success: false, error: "Not your turn" };
     if (pendingTrainerChoiceOf(room.gameState)) return { success: false, error: "Primero hay que resolver la carta de Entrenador" };
 
     const view = key === "player1" ? room.gameState : swapSides(room.gameState);
@@ -1378,8 +1461,15 @@ export class GameRoomManager {
     const setupActions = ["playBasicToActive", "playBasicToBench"];
     const isSetupPhase = room.gameState.gamePhase === "MULLIGAN" || room.gameState.gamePhase === "SETUP";
     const isMyTurn = isPlayer1 ? room.gameState.isPlayerTurn : !room.gameState.isPlayerTurn;
+    // Chaos Gym: the player who accepted the offered Trainer plays it (or gives it up) out of
+    // turn; the engine only lets them play that card (canPlayTrainerCard on their own view)
+    const playsChaosOffer = chaosOfferPlayer(room.gameState) === (isPlayer1 ? "player1" : "player2")
+      && ["playTrainer", "startTrainer", "declineChaosOffer"].includes(action.type);
+    if (action.type === "declineChaosOffer" && !playsChaosOffer) {
+      return { success: false, error: "No tienes ninguna carta de Chaos Gym por jugar" };
+    }
 
-    if (!isMyTurn && !turnFreeActions.includes(action.type)) {
+    if (!isMyTurn && !playsChaosOffer && !turnFreeActions.includes(action.type)) {
       // Allow setup actions during MULLIGAN/SETUP phase regardless of turn
       if (!isSetupPhase || !setupActions.includes(action.type)) {
         return { success: false, error: "Not your turn" };
@@ -1519,6 +1609,20 @@ export class GameRoomManager {
           // ends the attacker's turn.
           // Vermilion City Gym's opt-in coin goes in the plan (and the engine) only when asked for.
           const coinOptions = vermilionCoin ? { vermilionCoin: true } : {};
+          // Koga's Ninja Trick (Gym Challenge): the defender is asked BEFORE any coin of the attack
+          // (they depend on the Pokémon that defends). No coin now: the engine pauses the attack
+          // (pendingAttackChoice.reaction, chooser "opponent") and resolveAttackChoice flips
+          // getAttackChoiceCoinPlan(state, answer) — the plan against the Pokémon that defends.
+          if (getAttackPreReaction(toActor(beforeAttack), attackToUse)) {
+            const pauseOptions = { coinResults: [], skipDefenderPromotion: true, ...coinOptions, ...(chosenType ? { chosenType } : {}) };
+            newState = executeForPlayer((state) =>
+              typeof attackToUse === "number"
+                ? executeAttack(state, attackToUse, pauseOptions)
+                : executeMetronome(state, attackToUse, pauseOptions),
+            beforeAttack);
+            attackPaused = newState.pendingAttackChoice?.reaction !== undefined;
+            break;
+          }
           const coinPlan = getAttackCoinPlan(toActor(beforeAttack), attackToUse, coinOptions);
           const coinResults = flipAttackCoins(coinPlan, this.flipCoin);
           const attackOptions = { coinResults, skipDefenderPromotion: true, ...coinOptions, ...(chosenType ? { chosenType } : {}) };
@@ -1566,15 +1670,20 @@ export class GameRoomManager {
         }
 
         // ── Board actions: game-core validates and applies them (IllegalActionError otherwise) ──
-        case "playBasicToActive": {
-          const cardId = action.payload.cardId;
-          newState = executeForPlayer((state) => playBasicPokemon(state, cardId, "active"));
-          break;
-        }
-
+        // Rocket's Minefield Gym (a Basic onto the Bench) / Chaos Gym (a Trainer played as a
+        // Basic): game-core's getPlayBasicCoinFlips coin, flipped here only for a legal play and
+        // always passed in (omitted, the engine would use Math.random); both clients animate it.
+        case "playBasicToActive":
         case "playBasicToBench": {
           const cardId = action.payload.cardId;
-          newState = executeForPlayer((state) => playBasicPokemon(state, cardId, "bench"));
+          const position = action.type === "playBasicToActive" ? "active" : "bench";
+          const reason = canPlayBasicPokemon(actorView, cardId, position);
+          if (reason) return { success: false, error: reason };
+          const coinResults = Array.from({ length: getPlayBasicCoinFlips(actorView, cardId, position) }, () => this.flipCoin());
+          newState = executeForPlayer((state) => playBasicPokemon(state, cardId, position, { coinResults }));
+          if (coinResults.length > 0) {
+            actionCoinFlipInfo = { attackName: actorView.stadium?.card.name ?? "Estadio", results: coinResults };
+          }
           break;
         }
 
@@ -1624,6 +1733,38 @@ export class GameRoomManager {
           // not the last Pokémon). An Active one leaves the player promoting (`promote`) mid-turn.
           const { pokemonId } = action.payload;
           newState = executeForPlayer((state) => discardFromPlay(state, pokemonId));
+          break;
+        }
+
+        // ── Gym Challenge ──
+        // Lt. Surge's Secret Plan: the owner flips one of their face-down Benched cards (game-core
+        // canFlipFaceDown / flipFaceDown: own turn only)
+        case "flipFaceDown": {
+          const { pokemonId } = action.payload;
+          newState = executeForPlayer((state) => flipFaceDown(state, pokemonId));
+          break;
+        }
+
+        // Sabrina's Psychic Control: the player gives up the Trainer it borrowed from the
+        // opponent's discard pile (state.pendingBorrowedTrainer, acting side only)
+        case "declineBorrowedTrainer": {
+          if (!actorView.pendingBorrowedTrainer) return { success: false, error: "No tienes ninguna carta prestada por jugar" };
+          newState = executeForPlayer((state) => declineBorrowedTrainer(state));
+          break;
+        }
+
+        // Chaos Gym came up heads (state.pendingChaosGymPlay) but the player won't finish the
+        // card: it is discarded without effect
+        case "forfeitChaosGymPlay": {
+          if (!actorView.pendingChaosGymPlay) return { success: false, error: "No tienes ninguna carta de Chaos Gym por jugar" };
+          newState = executeForPlayer((state) => forfeitChaosGymPlay(state));
+          break;
+        }
+
+        // Chaos Gym's offered card, accepted: the offered player gives it up instead of playing it
+        // (checked above: only that player; also the default when their answer clock runs out)
+        case "declineChaosOffer": {
+          newState = executeForPlayer((state) => declineChaosGymOffer(state));
           break;
         }
 
@@ -1773,15 +1914,20 @@ export class GameRoomManager {
           // The next question is the other player's (Erika, Treaty, Blaine's Quiz) or needs hidden cards
           if (pendingStep && isServerStep(pendingStep)) throw new IllegalActionError("Esta elección la pide el servidor: juega la carta con startTrainer");
           const postCoins = this.trainerCoinsAfterSteps(actorView, cardId, selections, preCoins);
+          const coinCaption = trainerCoinCaption(actorView, cardId, card?.name);
           newState = executeForPlayer((state) =>
-            playTrainerCard(state, cardId, selections, { coinResults: preCoins.length > 0 ? preCoins : postCoins, skipEndTurn: true }));
+            playTrainerCard(state, cardId, selections, {
+              coinResults: preCoins.length > 0 ? preCoins : postCoins,
+              skipEndTurn: true,
+              ...borrowedContext(actorView, cardId),
+            }));
           newState = endTurnIfEffectEndedIt(newState, actorKey);
           if (preCoins.length > 0) {
             consumedCoinKey = coinKey;
-            opponentCoinFlipInfo = trainerCoinInfo(actorView, cardId, card?.name, preCoins);
+            opponentCoinFlipInfo = trainerCoinInfo(actorView, cardId, coinCaption, preCoins);
           }
           // Nobody has seen coins flipped after the steps: every client animates them
-          if (postCoins.length > 0) actionCoinFlipInfo = trainerCoinInfo(actorView, cardId, card?.name, postCoins);
+          if (postCoins.length > 0) actionCoinFlipInfo = trainerCoinInfo(actorView, cardId, coinCaption, postCoins);
           break;
         }
 
@@ -1799,21 +1945,32 @@ export class GameRoomManager {
           const preCoins = this.effectCoins(room, coinKey, getTrainerCoinFlips(actorView, cardId));
           const coinArg = preCoins.length > 0 ? preCoins : undefined;
           const next = walkClientSteps((answered) => getTrainerSteps(actorView, cardId, answered, coinArg), selections);
+          const coinCaption = trainerCoinCaption(actorView, cardId, card?.name);
           if (next) {
-            newState = withTrainerChoice(room.gameState, { cardId, trainerName: card?.name ?? "", step: next });
+            newState = withTrainerChoice(room.gameState, {
+              cardId,
+              trainerName: trainerDisplayName(actorView, cardId, card?.name),
+              step: next,
+              // Chaos Gym's offered card: its player is not the side whose turn it is
+              ...(isMyTurn ? {} : { playedOffTurn: true as const }),
+            });
             nextPendingTrainer = { side: actorKey, cardId, selections, coinKey };
             break;
           }
           // Nothing left to ask (e.g. Sneak Attack against an empty hand): played at once
           const postCoins = this.trainerCoinsAfterSteps(actorView, cardId, selections, preCoins);
           newState = executeForPlayer((state) =>
-            playTrainerCard(state, cardId, selections, { coinResults: preCoins.length > 0 ? preCoins : postCoins, skipEndTurn: true }));
+            playTrainerCard(state, cardId, selections, {
+              coinResults: preCoins.length > 0 ? preCoins : postCoins,
+              skipEndTurn: true,
+              ...borrowedContext(actorView, cardId),
+            }));
           newState = endTurnIfEffectEndedIt(newState, actorKey);
           if (preCoins.length > 0) {
             consumedCoinKey = coinKey;
-            opponentCoinFlipInfo = trainerCoinInfo(actorView, cardId, card?.name, preCoins);
+            opponentCoinFlipInfo = trainerCoinInfo(actorView, cardId, coinCaption, preCoins);
           }
-          if (postCoins.length > 0) actionCoinFlipInfo = trainerCoinInfo(actorView, cardId, card?.name, postCoins);
+          if (postCoins.length > 0) actionCoinFlipInfo = trainerCoinInfo(actorView, cardId, coinCaption, postCoins);
           break;
         }
 
@@ -1827,10 +1984,25 @@ export class GameRoomManager {
           const trainerIsPlayer1 = pendingRecord.side === "player1";
           const asTrainer = (state: GameState): GameState => (trainerIsPlayer1 ? state : swapSides(state));
           const trainerView = asTrainer(withoutTrainerChoice(room.gameState));
+          // Chaos Gym's offer question: the offered player accepts or declines (on the view of the
+          // side whose turn it is, game-core answerChaosGymOffer); "accept" lets them play it now
+          if (pendingRecord.kind === "chaosOffer") {
+            newState = asTrainer(answerChaosGymOffer(trainerView, action.payload.selection));
+            nextPendingTrainer = null;
+            const ownerName = trainerIsPlayer1 ? "Jugador 1" : "Jugador 2";
+            newState = { ...newState, events: neutralizeEvents(newState.events, eventsNeutralizedTo, ownerName, trainerIsPlayer1 ? "Jugador 2" : "Jugador 1") };
+            eventsNeutralizedTo = newState.events.length;
+            break;
+          }
           const preCoins = room.effectCoins?.[pendingRecord.coinKey]?.results ?? [];
           const next = getTrainerSteps(trainerView, pendingRecord.cardId, selections, preCoins.length > 0 ? preCoins : undefined);
           if (next) {
-            newState = withTrainerChoice(room.gameState, { cardId: pending.cardId, trainerName: pending.trainerName, step: next });
+            newState = withTrainerChoice(room.gameState, {
+              cardId: pending.cardId,
+              trainerName: pending.trainerName,
+              step: next,
+              ...(pending.playedOffTurn ? { playedOffTurn: true as const } : {}),
+            });
             nextPendingTrainer = { ...pendingRecord, selections };
             break;
           }
@@ -1838,6 +2010,7 @@ export class GameRoomManager {
           newState = asTrainer(playTrainerCard(trainerView, pendingRecord.cardId, selections, {
             coinResults: preCoins.length > 0 ? preCoins : postCoins,
             skipEndTurn: true,
+            ...borrowedContext(trainerView, pendingRecord.cardId),
           }));
           nextPendingTrainer = null;
           // Events speak for the Trainer's player, whoever answered last
@@ -1928,6 +2101,18 @@ export class GameRoomManager {
           ...newState,
           events: neutralizeEvents(newState.events, eventsNeutralizedTo, selfName, opponentName),
         };
+      }
+
+      // Chaos Gym came up tails for a Trainer the other player could use: the offer is asked to
+      // that player through pendingTrainerChoice (off-turn, answer clock, default "decline")
+      const chaosOffer = newState.pendingChaosOffer;
+      if (chaosOffer && !chaosOffer.accepted && !pendingTrainerChoiceOf(newState)) {
+        const turnSide: PlayerKey = newState.isPlayerTurn ? "player1" : "player2";
+        const step = getChaosGymOfferStep(turnSide === "player1" ? newState : swapSides(newState));
+        if (step) {
+          newState = withTrainerChoice(newState, { cardId: chaosOffer.cardId, trainerName: chaosOffer.cardName, step });
+          nextPendingTrainer = { side: turnSide, cardId: chaosOffer.cardId, selections: [], coinKey: "", kind: "chaosOffer" };
+        }
       }
 
       room.gameState = newState;

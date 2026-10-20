@@ -261,6 +261,13 @@ export const gameActionSchema = z.discriminatedUnion("type", [
   action("resolvePowerChoice", z.object({ selection: choiceSelection })),
   // Discard a Mysterious Fossil / Clefairy Doll in play (game-core canDiscardFromPlay)
   action("discardFromPlay", z.object({ pokemonId: instanceId })),
+  // Gym Challenge: Lt. Surge's Secret Plan flip (own face-down Benched card), Sabrina's Psychic
+  // Control / Chaos Gym give-ups (game-core declineBorrowedTrainer / forfeitChaosGymPlay /
+  // declineChaosGymOffer). Chaos Gym's offer itself is answered with answerTrainerChoice.
+  action("flipFaceDown", z.object({ pokemonId: instanceId })),
+  action("declineBorrowedTrainer", noPayload),
+  action("forfeitChaosGymPlay", noPayload),
+  action("declineChaosOffer", noPayload),
   action("mulligan", noPayload),
   action("playerReady", noPayload),
   action("usePower", powerPayload),
