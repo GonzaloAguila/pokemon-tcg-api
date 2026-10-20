@@ -32,10 +32,11 @@ export const AVAILABLE_COINS: CosmeticItem[] = [
 ];
 
 /**
- * Gym-leader coins (frontend COIN_COLLECTION, source "gym-leader"): not sold nor won, only granted
- * from the backoffice.
+ * Gym-leader and event coins (frontend COIN_COLLECTION, source "gym-leader" / "event"): not sold nor
+ * won, only granted from the backoffice.
  */
 export const ADMIN_ONLY_COINS: readonly string[] = [
+  "gengar",
   "golem",
   "starmie",
   "raichu",
