@@ -210,7 +210,7 @@ describe("hooks", () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
     room.phase = "matching";
     room.tournament = {
-      rounds: [{ roundNumber: 1, pairings: [{ matchNumber: 1, player1: { id: "pa", name: "Ana" }, player2: { id: "pb", name: "Beto" } }], byePlayerId: null, status: "in_progress", results: [] }],
+      rounds: [{ roundNumber: 1, pairings: [{ matchNumber: 1, player1: { id: "pa", name: "Ana" }, player2: { id: "pb", name: "Beto" }, games: [], wins: { ["pa"]: 0, ["pb"]: 0 } }], byePlayerId: null, status: "in_progress", results: [] }],
       standings: [
         { playerId: "pa", playerName: "Ana", wins: 0, losses: 0, byes: 0, withdrawn: false },
         { playerId: "pb", playerName: "Beto", wins: 0, losses: 0, byes: 0, withdrawn: false },

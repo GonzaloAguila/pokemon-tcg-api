@@ -61,7 +61,19 @@ export type DraftConfig = {
   adminPlays: boolean; // if true, admin takes seat 0 and plays (doesn't pay)
   /** Prizes the admin set on top of the entry-fee pool: every finisher and given places (draft-rewards.ts). */
   rewards: DraftRewardTier[];
+  /** Each tournament match: one game, or a best-of-3 series (default "bo1"). */
+  matchFormat: MatchFormat;
 };
+
+export const MATCH_FORMATS = ["bo1", "bo3"] as const;
+export type MatchFormat = (typeof MATCH_FORMATS)[number];
+/** bo3: game wins that take the series. */
+export const BO3_WINS_NEEDED = 2;
+/** bo3: games a series may last (games without a winner are replayed up to this); then most wins decide, a tie = no winner. */
+export const BO3_MAX_GAMES = 5;
+
+/** One game of a match (bo1: the only one). `gameRoomId` null: never created. */
+export type SeriesGame = { gameRoomId: string | null; winnerId: string | null };
 
 export type PackRarities = { rare: number; uncommon: number; common: number };
 
@@ -79,6 +91,8 @@ export type PendingMatchInfo = {
   roundNumber: number;
   isPlayer1: boolean;
   opponentName: string;
+  /** 1-based game of the match's series (always 1 in bo1). */
+  gameNumber: number;
 };
 
 export type DraftPlayer = {
@@ -188,6 +202,10 @@ export type MatchPairing = {
   matchNumber: number;
   player1: { id: string; name: string };
   player2: { id: string; name: string };
+  /** Games of this match so far, in order (bo1: at most one). */
+  games: SeriesGame[];
+  /** Game wins per player id (both players, from 0). */
+  wins: Record<string, number>;
 };
 
 export type MatchResult = {
@@ -202,7 +220,12 @@ export type MatchResult = {
   walkover: boolean;
   /** false: the game never left the opening (a player never showed up); no admin prizes for it. */
   played?: boolean;
+  /** The match's last game room (null: walkover before any game, or a bye). */
   gameRoomId: string | null;
+  /** The match's games (bo3: the whole series; [] for byes and walkovers before a game). */
+  games: SeriesGame[];
+  /** Game wins per player id ({} for byes). */
+  wins: Record<string, number>;
 };
 
 export type PlayerStanding = {
@@ -624,6 +647,8 @@ export class DraftRoomManager {
   private rooms = new Map<string, DraftRoom>();
   private socketToRoom = new Map<string, string>();
   private gameRoomToDraft = new Map<string, GameRoomDraftInfo>();
+  /** bo3 series ("room:round:match") with at least one game that left the opening (MatchResult.played). */
+  private seriesPlayed = new Set<string>();
   private broadcastFn: BroadcastFn | null = null;
   private hooks: DraftHooks = {};
   private timings: DraftTimings;
@@ -693,7 +718,9 @@ export class DraftRoomManager {
       entryFee: config.entryFee ?? 2000,
       adminPlays: config.adminPlays ?? false,
       rewards: config.rewards ?? [],
+      matchFormat: config.matchFormat ?? "bo1",
     };
+    if (!MATCH_FORMATS.includes(fullConfig.matchFormat)) throw new Error("Formato de partida inválido");
 
     const players: DraftPlayer[] = [];
 
@@ -1780,6 +1807,8 @@ export class DraftRoomManager {
           matchNumber: globalMatchNumber++,
           player1: { id: p1.id, name: p1.name },
           player2: { id: p2.id, name: p2.name },
+          games: [],
+          wins: { [p1.id]: 0, [p2.id]: 0 },
         });
       }
 
@@ -1849,6 +1878,8 @@ export class DraftRoomManager {
         isBye: true,
         walkover: false,
         gameRoomId: null,
+        games: [],
+        wins: {},
       });
     }
 
@@ -1888,6 +1919,22 @@ export class DraftRoomManager {
       player1Id,
       player2Id,
     });
+    const pairing = this.pairingOf(draftRoomId, roundNumber, matchNumber);
+    if (pairing && !pairing.games.some((g) => g.gameRoomId === gameRoomId)) {
+      pairing.games.push({ gameRoomId, winnerId: null });
+    }
+  }
+
+  private pairingOf(draftRoomId: string, roundNumber: number, matchNumber: number): MatchPairing | undefined {
+    return this.rooms
+      .get(draftRoomId)
+      ?.tournament?.rounds.find((r) => r.roundNumber === roundNumber)
+      ?.pairings.find((p) => p.matchNumber === matchNumber);
+  }
+
+  /** 1-based number of the match's current game (its last registered game room). */
+  currentGameNumber(draftRoomId: string, roundNumber: number, matchNumber: number): number {
+    return Math.max(1, this.pairingOf(draftRoomId, roundNumber, matchNumber)?.games.length ?? 1);
   }
 
   /**
@@ -1933,13 +1980,55 @@ export class DraftRoomManager {
     const pairing = round?.pairings.find((p) => p.matchNumber === matchNumber);
     if (!room || !round || !pairing || room.phase !== "matching" || this.isMatchDecided(draftRoomId, roundNumber, matchNumber)) {
       this.gameRoomToDraft.delete(gameRoomId);
-      return { newRoundStarted: false, tournamentFinished: false };
+      return { newRoundStarted: false, tournamentFinished: false, nextGame: null };
+    }
+    const nameOf = (id: string | null) => room.players.find((p) => p.id === id)?.name ?? "?";
+    const isBo3 = room.config.matchFormat === "bo3";
+    // bo3: only the series' game in progress counts (a stale or repeated report is ignored)
+    const info = this.gameRoomToDraft.get(gameRoomId);
+    if (isBo3 && (info?.draftRoomId !== draftRoomId || info.roundNumber !== roundNumber || info.matchNumber !== matchNumber)) {
+      return { newRoundStarted: false, tournamentFinished: false, nextGame: null };
     }
 
-    this.recordResult(room, round, pairing, winnerId, false, gameRoomId);
-    if (!played) round.results[round.results.length - 1].played = false;
+    // The game's result goes into the match's series (bo1: its only game)
+    if (winnerId !== null && !(winnerId in pairing.wins)) winnerId = null;
+    let game = pairing.games.find((g) => g.gameRoomId === gameRoomId);
+    if (!game) {
+      game = { gameRoomId, winnerId: null };
+      pairing.games.push(game);
+    }
+    game.winnerId = winnerId;
+    if (winnerId) pairing.wins[winnerId]++;
+    const seriesKey = `${draftRoomId}:${roundNumber}:${matchNumber}`;
+    if (played) this.seriesPlayed.add(seriesKey);
 
-    const nameOf = (id: string | null) => room.players.find((p) => p.id === id)?.name ?? "?";
+    let matchWinnerId = winnerId;
+    if (isBo3) {
+      const [a, b] = [pairing.player1.id, pairing.player2.id];
+      const [winsA, winsB] = [pairing.wins[a], pairing.wins[b]];
+      const gameNumber = pairing.games.length;
+      const decided = winsA >= BO3_WINS_NEEDED || winsB >= BO3_WINS_NEEDED || gameNumber >= BO3_MAX_GAMES;
+      if (!decided) {
+        this.gameRoomToDraft.delete(gameRoomId);
+        room.events.push(
+          this.createEvent(
+            "info",
+            `${winnerId ? `${nameOf(winnerId)} ganó el juego ${gameNumber}` : `El juego ${gameNumber} terminó sin ganador`} de la Partida ${matchNumber} (${nameOf(a)} ${winsA} - ${winsB} ${nameOf(b)})`,
+          ),
+        );
+        this.broadcast(room.id);
+        return { newRoundStarted: false, tournamentFinished: false, nextGame: { roundNumber, matchNumber } };
+      }
+      matchWinnerId = winsA === winsB ? null : winsA > winsB ? a : b;
+      played = this.seriesPlayed.has(seriesKey);
+      loserId = matchWinnerId === null ? null : matchWinnerId === a ? b : a;
+    }
+    this.seriesPlayed.delete(seriesKey);
+
+    this.recordResult(room, round, pairing, matchWinnerId, false, gameRoomId);
+    if (!played) round.results[round.results.length - 1].played = false;
+    winnerId = matchWinnerId;
+
     room.events.push(
       this.createEvent(
         "info",
@@ -2036,7 +2125,10 @@ export class DraftRoomManager {
       isBye: false,
       walkover,
       gameRoomId,
+      games: pairing.games.map((g) => ({ ...g })),
+      wins: { ...pairing.wins },
     });
+    this.seriesPlayed.delete(`${room.id}:${round.roundNumber}:${pairing.matchNumber}`);
 
     for (const standing of tournament.standings) {
       if (standing.playerId === winnerId) standing.wins++;
@@ -2131,7 +2223,12 @@ export class DraftRoomManager {
   }
 }
 
-export type TournamentProgress = { newRoundStarted: boolean; tournamentFinished: boolean };
+export type TournamentProgress = {
+  newRoundStarted: boolean;
+  tournamentFinished: boolean;
+  /** bo3: the series of this match goes on, the caller creates its next game. */
+  nextGame?: { roundNumber: number; matchNumber: number } | null;
+};
 
 /** A finished draft room stays this long (final standings and prizes), then it is removed. */
 const FINISHED_ROOM_TTL_MS = 30 * 60_000;

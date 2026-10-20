@@ -7,7 +7,7 @@
  * Identity never comes from a payload; see getAuthUserId() in handlers.ts.
  */
 import { z } from "zod";
-import { CARD_SET_IDS, DRAFT_PACK_SETS, MAX_BONUS_PICKS, packRaritiesError } from "./draft-rooms.js";
+import { CARD_SET_IDS, DRAFT_PACK_SETS, MATCH_FORMATS, MAX_BONUS_PICKS, packRaritiesError } from "./draft-rooms.js";
 import { draftRewardsError, draftRewardsSchema } from "./draft-rewards.js";
 
 // ---------------------------------------------------------------------------
@@ -173,6 +173,8 @@ const draftConfig = z.object({
   minDeckSize: z.number().int().min(20).max(60).optional(),
   entryFee: z.number().int().min(0).max(10_000).optional(),
   adminPlays: z.boolean().optional(),
+  /** Each match: one game or a best-of-3 series (default "bo1") */
+  matchFormat: z.enum(MATCH_FORMATS).optional(),
   /** Admin prizes on top of the entry-fee pool (draft-rewards.ts); places must exist in this draft */
   rewards: draftRewardsSchema.optional(),
 }).superRefine((config, ctx) => {

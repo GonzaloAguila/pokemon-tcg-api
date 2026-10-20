@@ -132,7 +132,7 @@ async function draftMatch(keepInCollection: boolean) {
   room.players[0].draftedCards = [card("Pikachu", "d1"), card("Pikachu", "d2"), card("Bill", "d3")];
   room.players[1].draftedCards = [card("Charmander", "d4")];
   room.tournament = {
-    rounds: [{ roundNumber: 1, pairings: [{ matchNumber: 1, player1: { id: a.id, name: "A" }, player2: { id: b.id, name: "B" } }], byePlayerId: null, status: "in_progress", results: [] }],
+    rounds: [{ roundNumber: 1, pairings: [{ matchNumber: 1, player1: { id: a.id, name: "A" }, player2: { id: b.id, name: "B" }, games: [], wins: { [a.id]: 0, [b.id]: 0 } }], byePlayerId: null, status: "in_progress", results: [] }],
     standings: [a, b, c].map((u, i) => ({ playerId: u.id, playerName: "ABC"[i], wins: 0, losses: 0, byes: 0, withdrawn: false })),
     currentRoundNumber: 1,
     totalRounds: 1,

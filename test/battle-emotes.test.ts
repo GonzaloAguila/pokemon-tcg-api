@@ -344,7 +344,7 @@ async function draftGame() {
   for (const [u, name] of [[a, "A"], [b, "B"]] as const) draftRoomManager.joinRoom(draft.id, u.id, `draft-${name}`, name);
   draft.phase = "matching";
   draft.tournament = {
-    rounds: [{ roundNumber: 1, pairings: [{ matchNumber: 1, player1: { id: a.id, name: "A" }, player2: { id: b.id, name: "B" } }], byePlayerId: null, status: "in_progress", results: [] }],
+    rounds: [{ roundNumber: 1, pairings: [{ matchNumber: 1, player1: { id: a.id, name: "A" }, player2: { id: b.id, name: "B" }, games: [], wins: { [a.id]: 0, [b.id]: 0 } }], byePlayerId: null, status: "in_progress", results: [] }],
     standings: [a, b].map((u, i) => ({ playerId: u.id, playerName: "AB"[i], wins: 0, losses: 0, byes: 0, withdrawn: false })),
     currentRoundNumber: 1,
     totalRounds: 1,
