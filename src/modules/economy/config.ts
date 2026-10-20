@@ -74,7 +74,7 @@ export const ECONOMY = {
   matchCoins: {
     online: { win: 25, loss: 10 },
     ai: { win: 10, loss: 5 },
-    dailyCap: 75,
+    dailyCap: 8000,
   },
 
   /**

@@ -64,7 +64,11 @@ export type DraftConfig = {
   rewards: DraftRewardTier[];
   /** Each tournament match: one game, or a best-of-3 series (default "bo1"). */
   matchFormat: MatchFormat;
+  /** Prize cards of every tournament game: 4, 5 or 6 (default 6). */
+  prizeCount: number;
 };
+
+export const DRAFT_PRIZE_COUNTS = [4, 5, 6] as const;
 
 export const MATCH_FORMATS = ["bo1", "bo3"] as const;
 export type MatchFormat = (typeof MATCH_FORMATS)[number];
@@ -720,8 +724,10 @@ export class DraftRoomManager {
       adminPlays: config.adminPlays ?? false,
       rewards: config.rewards ?? [],
       matchFormat: config.matchFormat ?? "bo1",
+      prizeCount: config.prizeCount ?? 6,
     };
     if (!MATCH_FORMATS.includes(fullConfig.matchFormat)) throw new Error("Formato de partida inválido");
+    if (!(DRAFT_PRIZE_COUNTS as readonly number[]).includes(fullConfig.prizeCount)) throw new Error("Las partidas se juegan a 4, 5 o 6 premios");
 
     const players: DraftPlayer[] = [];
 
