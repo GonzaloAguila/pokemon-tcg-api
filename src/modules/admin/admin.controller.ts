@@ -94,7 +94,11 @@ function preventSelfAction(req: Request, _res: Response, next: NextFunction) {
   next();
 }
 
-/** Cosmetics only: the superadmin may grant them to their own account (no economy effect). */
+/**
+ * Economy / collection adjustments and cosmetic grants: the superadmin may target their own
+ * account (owner decision 2026-10-20; the service re-checks the role in its transaction).
+ * Ban, suspend, role, permissions and delete stay forbidden on yourself for everyone.
+ */
 function preventSelfActionUnlessSuperadmin(req: Request, res: Response, next: NextFunction) {
   if (req.user?.role === "superadmin") return next();
   preventSelfAction(req, res, next);
@@ -256,7 +260,7 @@ router.post(
   "/admin/users/:userId/adjust-coins",
   requireAuth,
   requirePermission("users:economy"),
-  preventSelfAction,
+  preventSelfActionUnlessSuperadmin,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { amount, reason } = parseBody(adminBodies.adjustBalance, req.body);
@@ -281,7 +285,7 @@ router.post(
   "/admin/users/:userId/adjust-coupons",
   requireAuth,
   requirePermission("users:economy"),
-  preventSelfAction,
+  preventSelfActionUnlessSuperadmin,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { amount, reason } = parseBody(adminBodies.adjustBalance, req.body);
@@ -306,7 +310,7 @@ router.post(
   "/admin/users/:userId/adjust-rare-candy",
   requireAuth,
   requirePermission("users:economy"),
-  preventSelfAction,
+  preventSelfActionUnlessSuperadmin,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { amount, reason } = parseBody(adminBodies.adjustBalance, req.body);
@@ -335,7 +339,7 @@ router.post(
   "/admin/users/:userId/adjust-cards",
   requireAuth,
   requirePermission("users:cards"),
-  preventSelfAction,
+  preventSelfActionUnlessSuperadmin,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { cards } = parseBody(adminBodies.adjustCards, req.body);
@@ -363,7 +367,7 @@ router.post(
   "/admin/users/:userId/adjust-stats",
   requireAuth,
   requirePermission("users:stats"),
-  preventSelfAction,
+  preventSelfActionUnlessSuperadmin,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { field, amount } = parseBody(adminBodies.adjustStats, req.body);

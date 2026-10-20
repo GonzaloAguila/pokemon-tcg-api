@@ -368,9 +368,10 @@ describe("cosmetic grants", () => {
     expect(await prisma.userCoin.count({ where: { userId: moderator.id } })).toBe(0);
   });
 
-  it("the superadmin still can't adjust their own coins", async () => {
-    const res = await req(superToken).post(`/api/admin/users/${superadmin.id}/adjust-coins`, { amount: 5, reason: "x" });
-    expect(res.status).toBe(403);
+  // Owner decision 2026-10-20: the superadmin may adjust their own balances (test/admin-self-adjust.test.ts), never moderate themselves
+  it("the superadmin still can't ban or suspend themselves", async () => {
+    expect((await req(superToken).patch(`/api/admin/users/${superadmin.id}/ban`, { banned: true })).status).toBe(403);
+    expect((await req(superToken).post(`/api/admin/users/${superadmin.id}/suspend`, { hours: 1 })).status).toBe(403);
   });
 });
 
