@@ -13,7 +13,15 @@ import { claimOnce } from "../modules/economy/claims.js";
 import { grantPacks } from "../modules/economy/pack-inventory.js";
 import { boosterIdForSet } from "../modules/boosters/boosters.service.js";
 import { COSMETIC_TYPE_LABELS } from "../modules/admin/grantable-cosmetics.js";
-import { ALL_VARIANTS, AVAILABLE_AVATARS, AVAILABLE_CARD_BACKS, AVAILABLE_COINS, AVAILABLE_PLAYMATS } from "../modules/prizes/catalog.js";
+import {
+  ADMIN_ONLY_PLAYMATS,
+  ALL_VARIANTS,
+  AVAILABLE_AVATARS,
+  AVAILABLE_CARD_BACKS,
+  AVAILABLE_COINS,
+  AVAILABLE_PLAYMATS,
+  TROPHIES,
+} from "../modules/prizes/catalog.js";
 import { BATTLE_EMOTES } from "../modules/emotes/catalog.js";
 import { grantEmote } from "../modules/emotes/emotes.service.js";
 import { isEmptyGrant, type DraftRewardGrant, type DraftRewardItem } from "./draft-rewards.js";
@@ -174,6 +182,9 @@ async function grantCosmeticItem(tx: Db, userId: string, item: DraftRewardItem):
     case "emote":
       await grantEmote(tx, userId, item.id);
       break;
+    case "trophy":
+      await tx.userMedal.createMany({ data: [{ userId, medalId: item.id }], skipDuplicates: true });
+      break;
   }
 }
 
@@ -185,8 +196,9 @@ const ITEM_NAMES: Record<DraftRewardItem["type"], Map<string, string>> = {
   ]),
   avatar: new Map(AVAILABLE_AVATARS.map((a) => [a.itemId, a.name])),
   skin: new Map(ALL_VARIANTS.map((v) => [v.itemId, v.name])),
-  playmat: new Map(AVAILABLE_PLAYMATS.map((p) => [p.itemId, p.name])),
+  playmat: new Map([...AVAILABLE_PLAYMATS, ...ADMIN_ONLY_PLAYMATS].map((p) => [p.itemId, p.name])),
   emote: new Map(BATTLE_EMOTES.map((e) => [e.id, e.name])),
+  trophy: new Map(TROPHIES.map((t) => [t.itemId, t.name])),
 };
 
 function itemName(item: DraftRewardItem): string {

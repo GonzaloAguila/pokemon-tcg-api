@@ -22,7 +22,7 @@ import {
   MARKET_VARIANTS,
 } from "../prizes/catalog.js";
 import type { PlaymatRarity } from "../prizes/catalog.js";
-import { COLLECTIBLE_EMOTES, emoteImageUrl, type EmoteRarity } from "../emotes/catalog.js";
+import { POOL_EMOTES, emoteImageUrl, type EmoteRarity } from "../emotes/catalog.js";
 import { grantEmote } from "../emotes/emotes.service.js";
 import type {
   DailyCardOffer,
@@ -183,7 +183,7 @@ export async function getDailyOffers(userId?: string, now = new Date()): Promise
   const dailyAvatar = seededPick(AVAILABLE_AVATARS, seed, 12);
   const dailyVariant = seededPick(MARKET_VARIANTS, seed, 13);
   const dailyPlaymat = seededPick(AVAILABLE_PLAYMATS, seed, 14);
-  const dailyEmote = seededPick(COLLECTIBLE_EMOTES, scrambleSeed(seed), 15);
+  const dailyEmote = seededPick(POOL_EMOTES, scrambleSeed(seed), 15);
 
   const cosmeticOffers: DailyCosmeticOffer[] = [
     { type: "coin", itemId: dailyCoin.itemId, name: dailyCoin.name, imageUrl: dailyCoin.imageUrl, price: COSMETIC_PRICES.coin },

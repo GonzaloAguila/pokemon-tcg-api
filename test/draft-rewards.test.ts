@@ -306,6 +306,30 @@ describe("payout at the end of the tournament", () => {
     expect(await prisma.userPlaymat.count({ where: { userId: users[7].id } })).toBe(0);
   });
 
+  it("the Halloween pack (event coin, playmat, emote and trophy) goes to the winner only", async () => {
+    const { room, users } = await playTournament([
+      {
+        target: { place: 1 },
+        items: [
+          { type: "coin", id: "gengar" },
+          { type: "playmat", id: "halloween-forest" },
+          { type: "emote", id: "gengar-tongue" },
+          { type: "trophy", id: "trophy-halloween-2026" },
+        ],
+      },
+    ]);
+    await payDraftPrizes(room);
+    const [winner, second] = users;
+    expect(await prisma.userCoin.count({ where: { userId: winner.id, coinId: "gengar" } })).toBe(1);
+    expect(await prisma.userPlaymat.count({ where: { userId: winner.id, playmatId: "halloween-forest" } })).toBe(1);
+    expect(await prisma.userEmote.count({ where: { userId: winner.id, emoteId: "gengar-tongue" } })).toBe(1);
+    expect(await prisma.userMedal.count({ where: { userId: winner.id, medalId: "trophy-halloween-2026" } })).toBe(1);
+    expect(await prisma.userMedal.count({ where: { userId: second.id } })).toBe(0);
+    const message = await prisma.systemMessage.findFirstOrThrow({ where: { recipientId: winner.id, title: "Premio de draft" } });
+    expect(message.content).toContain("Tapete Bosque Embrujado");
+    expect(message.content).toContain("Trofeo Copa de Halloween 2026");
+  });
+
   it("adminPlays: the creating admin's seat gets its pool share but none of the admin's prizes", async () => {
     const { room, users } = await playTournament(OWNER_EXAMPLE, 1000, { adminPlays: true });
     const [admin, second, third] = users;

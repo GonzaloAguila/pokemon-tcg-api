@@ -17,6 +17,8 @@ export interface BattleEmote {
   animated: boolean;
   /** Owned by every player and equipped by default. */
   starter?: boolean;
+  /** Only granted (events, tournament prizes): never in the market nor the prize games. */
+  exclusive?: boolean;
 }
 
 /** Emotes a player can take into a game at once. */
@@ -61,6 +63,7 @@ export const BATTLE_EMOTES: readonly BattleEmote[] = [
   { id: "pachirisu-dance", name: "Pachirisu bailando", rarity: "rare", animated: true },
   { id: "squirtle-cool", name: "Squirtle con estilo", rarity: "rare", animated: true },
   { id: "pikachu-shocked", name: "Pikachu sorprendido", rarity: "rare", animated: true },
+  { id: "gengar-tongue", name: "Gengar burlón", rarity: "rare", animated: true, exclusive: true },
 ];
 
 export const EMOTE_BY_ID: ReadonlyMap<string, BattleEmote> = new Map(BATTLE_EMOTES.map((e) => [e.id, e]));
@@ -70,6 +73,9 @@ const STARTER_SET: ReadonlySet<string> = new Set(STARTER_EMOTE_IDS);
 
 /** Emotes that can be bought, won or granted (every emote but the starters). */
 export const COLLECTIBLE_EMOTES: readonly BattleEmote[] = BATTLE_EMOTES.filter((e) => !e.starter);
+
+/** Emotes the market and the prize games draw from (the collectibles but the exclusive ones). */
+export const POOL_EMOTES: readonly BattleEmote[] = COLLECTIBLE_EMOTES.filter((e) => !e.exclusive);
 
 export function isStarterEmote(emoteId: string): boolean {
   return STARTER_SET.has(emoteId);

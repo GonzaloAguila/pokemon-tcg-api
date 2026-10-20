@@ -213,6 +213,19 @@ describe("getting emotes", () => {
     expect(draftRewardsSchema.safeParse([{ target: "all", items: [{ type: "emote", id: RARE.id }] }]).success).toBe(true);
     expect(draftRewardsSchema.safeParse([{ target: "all", items: [{ type: "emote", id: "eevee-cool" }] }]).success).toBe(false);
   });
+
+  it("exclusive emotes are only granted: never in the market nor in the prizes", async () => {
+    const exclusive = BATTLE_EMOTES.filter((e) => e.exclusive).map((e) => e.id);
+    expect(exclusive).toContain("gengar-tongue");
+    for (let day = 0; day < 60; day++) {
+      const offers = await getDailyOffers(undefined, new Date(Date.UTC(2026, 9, 1 + day, 12)));
+      expect(exclusive).not.toContain(offers.cosmeticOffers.find((o) => o.type === "emote")!.itemId);
+    }
+    const allButExclusive = new Set(COLLECTIBLE_EMOTES.filter((e) => !e.exclusive).map((e) => e.id));
+    expect(resolveEmote(allButExclusive)).toBeNull();
+    expect(isGrantableCosmetic("emote", "gengar-tongue")).toBe(true);
+    expect(draftRewardsSchema.safeParse([{ target: { place: 1 }, items: [{ type: "emote", id: "gengar-tongue" }] }]).success).toBe(true);
+  });
 });
 
 describe("rate limit", () => {

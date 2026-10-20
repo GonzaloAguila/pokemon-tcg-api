@@ -54,6 +54,19 @@ export const AVAILABLE_CARD_BACKS: CosmeticItem[] = [
   { itemId: "pokeball", name: "Poké Ball", imageUrl: "/card-backs/card-back-pokeball.jpg" },
 ];
 
+/** Event playmats (frontend PLAYMAT_COLLECTION, source "event"): not sold nor won, only granted. */
+export const ADMIN_ONLY_PLAYMATS: CosmeticItem[] = [
+  { itemId: "halloween-forest", name: "Bosque Embrujado", imageUrl: "/bg/bg-halloween-forest.jpg" },
+];
+
+/**
+ * Trophies (frontend src/domain/profile/trophies.ts): event and tournament awards shown in the
+ * profile. Only granted (backoffice, draft prizes); stored as UserMedal rows with these ids.
+ */
+export const TROPHIES: CosmeticItem[] = [
+  { itemId: "trophy-halloween-2026", name: "Copa de Halloween 2026", imageUrl: "/trophies/halloween-2026.svg" },
+];
+
 export const AVAILABLE_AVATARS: CosmeticItem[] = [
   { itemId: "bellsprout", name: "Bellsprout", imageUrl: "/avatars/darius-dan/bellsprout.png" },
   { itemId: "pikachu", name: "Pikachu", imageUrl: "/avatars/darius-dan/pikachu.png" },
