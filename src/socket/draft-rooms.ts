@@ -50,6 +50,10 @@ export type DraftConfig = {
    */
   trainerSets: CardSetId[];
   cardsPerPack: number; // default 11
+  /** Rare / uncommon / common slots of every pack (sum = cardsPerPack); absent = the default formula (generatePack). */
+  packRarities?: PackRarities;
+  /** Bonus cards each player picks after the last round: 0-10, default 5; 0 skips the bonus-pick phase. */
+  bonusPicks: number;
   pickTimeSeconds: number; // default 45
   keepInCollection: boolean;
   minDeckSize: number; // default 40
@@ -58,6 +62,8 @@ export type DraftConfig = {
   /** Prizes the admin set on top of the entry-fee pool: every finisher and given places (draft-rewards.ts). */
   rewards: DraftRewardTier[];
 };
+
+export type PackRarities = { rare: number; uncommon: number; common: number };
 
 export type DraftPhase =
   | "lobby"
@@ -347,7 +353,8 @@ export const DEFAULT_DRAFT_TIMINGS: DraftTimings = {
   buildingSeconds: 600,
 };
 
-const BONUS_PICKS = 3;
+export const DEFAULT_BONUS_PICKS = 5;
+export const MAX_BONUS_PICKS = 10;
 /** Most drafted cards an automatic deck uses; the rest of the deck is basic Energy. */
 const AUTO_DECK_MAX_CARDS = 36;
 const AUTO_DECK_MIN_ENERGY = 24;
@@ -493,36 +500,60 @@ function pickUnique(
   return picked;
 }
 
+/** Why a pack composition doesn't fit `cardsPerPack` (Spanish), or null. */
+export function packRaritiesError(rarities: PackRarities, cardsPerPack: number): string | null {
+  const { rare, uncommon, common } = rarities;
+  if (![rare, uncommon, common].every((n) => Number.isInteger(n) && n >= 0)) {
+    return "Las cantidades de rarezas deben ser números enteros mayores o iguales a 0";
+  }
+  if (rare < 1) return "Cada sobre debe tener al menos 1 carta rara";
+  const total = rare + uncommon + common;
+  if (total !== cardsPerPack) {
+    return `Raras + infrecuentes + comunes deben sumar ${cardsPerPack} (las cartas por sobre); suman ${total}`;
+  }
+  return null;
+}
+
+/** The default composition from the pack's size: 1-2 rare slots, ~30% of the rest uncommons, the rest commons. */
+function defaultRarities(cardsPerPack: number, hasPlainRares: boolean): PackRarities {
+  const rare = cardsPerPack >= 10 && hasPlainRares ? 2 : 1;
+  const remaining = cardsPerPack - rare;
+  const uncommon = Math.max(1, Math.round(remaining * 0.3));
+  return { rare, uncommon, common: remaining - uncommon };
+}
+
 /**
  * A draft pack of exactly `cardsPerPack` cards. A Trainers pack holds the Trainers of
  * `trainerSets` (every set by default); when they are fewer than the pack's size the pack is
- * completed with repeats.
+ * completed with repeats. `rarities` (the admin's composition, sum = cardsPerPack) replaces the
+ * default formula, except in a Trainers pack.
  */
 export function generatePack(
   cardsPerPack: number,
   packSet: DraftPackSet = MIXED_PACK,
   trainerSets: readonly CardSetId[] = CARD_SET_IDS,
+  rarities?: PackRarities,
 ): GameCard[] {
   const usedIds = new Set<string>();
   const pools =
     packSet === TRAINERS_PACK ? trainerPools(trainerSets) : (poolsByPackSet.get(packSet) ?? poolsByPackSet.get(MIXED_PACK)!);
 
-  // Jungle, Fossil and Team Rocket only list holo rares: their one rare slot is a holo and
-  // the second rare slot becomes an uncommon.
+  // Jungle, Fossil and Team Rocket only list holo rares: their first rare slot is a holo, and an
+  // extra rare slot that doesn't come out holo becomes an uncommon (by default they have one rare slot).
   const hasPlainRares = pools.rare.length > 0;
-  const rareSlotCount = cardsPerPack >= 10 && hasPlainRares ? 2 : 1;
-  const remaining = cardsPerPack - rareSlotCount;
-  const uncommonCount = Math.max(1, Math.round(remaining * 0.3));
-  const commonCount = remaining - uncommonCount;
+  const slots = rarities && packSet !== TRAINERS_PACK ? rarities : defaultRarities(cardsPerPack, hasPlainRares);
+  let uncommonCount = slots.uncommon;
+  const commonCount = slots.common;
 
   // Guaranteed non-holo rare (a holo in sets without them)
   const rares = pickUnique(hasPlainRares ? pools.rare : pools.rareHolo, 1, usedIds);
 
-  // Second rare slot: 33% chance holo
-  if (rareSlotCount >= 2) {
+  // Every other rare slot: 33% chance holo
+  for (let slot = 1; slot < slots.rare; slot++) {
     const isHolo = Math.random() < 0.33;
-    const pool = isHolo ? pools.rareHolo : pools.rare;
-    rares.push(...pickUnique(pool, 1, usedIds));
+    if (isHolo) rares.push(...pickUnique(pools.rareHolo, 1, usedIds));
+    else if (hasPlainRares) rares.push(...pickUnique(pools.rare, 1, usedIds));
+    else uncommonCount++;
   }
 
   const uncommons = pickUnique(pools.uncommon, uncommonCount, usedIds);
@@ -632,12 +663,30 @@ export class DraftRoomManager {
     const roomId = this.generateRoomId();
     const packsPerPlayer = config.packsPerPlayer ?? 3;
     const packSets = normalizePackSets(config.packSets, packsPerPlayer);
+    const trainerSets = normalizeTrainerSets(config.trainerSets, packSets);
+    const cardsPerPack = config.cardsPerPack ?? 11;
+    const rarityError = config.packRarities && packRaritiesError(config.packRarities, cardsPerPack);
+    if (rarityError) throw new Error(rarityError);
+    const bonusPicks = config.bonusPicks ?? DEFAULT_BONUS_PICKS;
+    if (!Number.isInteger(bonusPicks) || bonusPicks < 0 || bonusPicks > MAX_BONUS_PICKS) {
+      throw new Error(`Las cartas bonus deben ser entre 0 y ${MAX_BONUS_PICKS}`);
+    }
+    // The bonus pool is the catalog of the draft's sets (dozens of cards), except in a draft of
+    // only Trainers packs from few sets: never ask for more distinct cards than it holds.
+    if (bonusPicks > 0) {
+      const poolSize = bonusPoolFor(packSets, trainerSets).length;
+      if (bonusPicks > poolSize) {
+        throw new Error(`Este draft solo ofrece ${poolSize} cartas bonus para elegir: elige ${poolSize} o menos`);
+      }
+    }
     const fullConfig: DraftConfig = {
       maxPlayers: config.maxPlayers ?? 8,
       packsPerPlayer,
       packSets,
-      trainerSets: normalizeTrainerSets(config.trainerSets, packSets),
-      cardsPerPack: config.cardsPerPack ?? 11,
+      trainerSets,
+      cardsPerPack,
+      ...(config.packRarities ? { packRarities: { ...config.packRarities } } : {}),
+      bonusPicks,
       pickTimeSeconds: config.pickTimeSeconds ?? 45,
       keepInCollection: config.keepInCollection ?? false,
       minDeckSize: config.minDeckSize ?? 40,
@@ -1014,8 +1063,9 @@ export class DraftRoomManager {
     const player = room.players.find((p) => p.socketId === socketId);
     if (!player) throw new Error("Jugador no encontrado");
     if (player.isReady) throw new Error("Ya elegiste tus cartas bonus");
-    if (cardDefIds.length !== BONUS_PICKS) throw new Error("Debes elegir exactamente 3 cartas");
-    if (new Set(cardDefIds).size !== cardDefIds.length) throw new Error("Elige 3 cartas distintas");
+    const count = room.config.bonusPicks;
+    if (cardDefIds.length !== count) throw new Error(`Debes elegir exactamente ${count} ${count === 1 ? "carta" : "cartas"}`);
+    if (new Set(cardDefIds).size !== cardDefIds.length) throw new Error(`Elige ${count} cartas distintas`);
 
     // Find cards from the bonus pool by their draft ID (all of them before adding any)
     const templates = cardDefIds.map((defId) => {
@@ -1027,7 +1077,7 @@ export class DraftRoomManager {
     for (const template of templates) player.draftedCards.push({ ...template, id: generateCardId() });
 
     player.isReady = true;
-    room.events.push(this.createEvent("pick", `${player.name} eligió sus 3 cartas bonus`));
+    room.events.push(this.createEvent("pick", `${player.name} eligió sus cartas bonus`));
 
     this.evaluateProgress(room);
     return room;
@@ -1458,14 +1508,19 @@ export class DraftRoomManager {
       room.currentRound++;
 
       if (room.currentRound > room.config.packsPerPlayer) {
-        // All rounds done → bonus-pick phase (with its own deadline)
+        // All rounds done → bonus-pick phase (with its own deadline), or building without bonus picks
+        if (room.config.bonusPicks === 0) {
+          room.events.push(this.createEvent("system", "¡Draft completado!"));
+          this.startBuilding(room);
+          return;
+        }
         room.phase = "bonus-pick";
         room.bonusPickPool = bonusPoolFor(room.config.packSets, room.config.trainerSets).map(toGameCard);
         for (const p of room.players) p.isReady = false;
         room.events.push(
           this.createEvent(
             "system",
-            "¡Draft completado! Elige 3 cartas bonus del catálogo.",
+            `¡Draft completado! Elige ${room.config.bonusPicks} cartas bonus del catálogo.`,
           ),
         );
         this.startPhaseTimer(room, this.timings.bonusPickSeconds);
@@ -1493,17 +1548,23 @@ export class DraftRoomManager {
     this.evaluateProgress(room);
   }
 
-  /** Bonus-pick over (all picked, deadline, or grace): 3 random bonus cards for whoever didn't. */
+  /** Bonus-pick over (all picked, deadline, or grace): config.bonusPicks random bonus cards for whoever didn't. */
   private finishBonusPick(room: DraftRoom): void {
     if (room.phase !== "bonus-pick") return;
     this.clearTimers(room);
     for (const player of room.players) {
       if (player.isReady) continue;
-      const picks = shuffle(room.bonusPickPool).slice(0, BONUS_PICKS);
+      const picks = shuffle(room.bonusPickPool).slice(0, room.config.bonusPicks);
       for (const template of picks) player.draftedCards.push({ ...template, id: generateCardId() });
       player.isReady = true;
       room.events.push(this.createEvent("system", `Cartas bonus al azar para ${player.name}`));
     }
+    this.startBuilding(room);
+  }
+
+  /** Deck building (after the bonus picks, or after the last round without them), with its deadline. */
+  private startBuilding(room: DraftRoom): void {
+    this.clearTimers(room);
     room.phase = "building";
     for (const p of room.players) p.isReady = false;
     room.bonusPickPool = []; // Free memory
@@ -1588,7 +1649,7 @@ export class DraftRoomManager {
   private generatePacksForRound(room: DraftRoom): void {
     const packSet = room.config.packSets[room.currentRound - 1] ?? MIXED_PACK;
     for (const player of room.players) {
-      player.currentPack = generatePack(room.config.cardsPerPack, packSet, room.config.trainerSets);
+      player.currentPack = generatePack(room.config.cardsPerPack, packSet, room.config.trainerSets, room.config.packRarities);
     }
   }
 

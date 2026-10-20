@@ -45,7 +45,7 @@ function setup(opts: { grace?: number; bonus?: number; building?: number; config
     onPlayerRemoved: (_r, player, info) => events.removed.push([player.id, info.refund]),
   });
   const room = manager.createRoom(
-    { adminPlays: false, entryFee: 0, packsPerPlayer: 1, cardsPerPack: 5, pickTimeSeconds: 45, minDeckSize: 20, ...opts.config },
+    { adminPlays: false, entryFee: 0, packsPerPlayer: 1, cardsPerPack: 5, pickTimeSeconds: 45, minDeckSize: 20, bonusPicks: 3, ...opts.config },
     ADMIN,
     "admin-sock",
     "Admin",
