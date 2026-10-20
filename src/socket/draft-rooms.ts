@@ -19,6 +19,7 @@ import {
   isPokemonCard,
 } from "@gonzaloaguila/game-core";
 import type { Card, CardSetId, GameCard } from "@gonzaloaguila/game-core";
+import { RELEASED_CARDS, RELEASED_SETS } from "../lib/released-sets.js";
 import { ECONOMY } from "../modules/economy/config.js";
 import type { RoomChatMessage } from "./room-chat.js";
 import { draftRewardExclusions, rewardsForPosition, type DraftRewardGrant, type DraftRewardTier } from "./draft-rewards.js";
@@ -34,10 +35,10 @@ export type DraftPackSet = CardSetId | typeof MIXED_PACK | typeof TRAINERS_PACK;
 export const DRAFT_PACK_SETS: readonly [DraftPackSet, ...DraftPackSet[]] = [
   MIXED_PACK,
   TRAINERS_PACK,
-  ...CARD_SETS.map((set) => set.id),
+  ...RELEASED_SETS.map((set) => set.id),
 ];
 /** Every set id, in registry order. */
-export const CARD_SET_IDS = CARD_SETS.map((set) => set.id) as [CardSetId, ...CardSetId[]];
+export const CARD_SET_IDS = RELEASED_SETS.map((set) => set.id) as [CardSetId, ...CardSetId[]];
 
 export type DraftConfig = {
   maxPlayers: number; // 2-8
@@ -363,7 +364,7 @@ export function catalogIdOf(card: GameCard): string | null {
 // ============================================================================
 
 // Every set in game-core's registry
-export const draftPool: readonly Card[] = ALL_CARDS.filter((card) => !isBasicEnergy(card));
+export const draftPool: readonly Card[] = RELEASED_CARDS.filter((card) => !isBasicEnergy(card));
 
 function rarityPools(cards: readonly Card[]) {
   return {
@@ -394,7 +395,7 @@ export function trainerPackPool(trainerSets: readonly CardSetId[]): readonly Car
 
 const poolsByPackSet = new Map<DraftPackSet, ReturnType<typeof rarityPools>>([
   [MIXED_PACK, rarityPools(nonTrainerPool)],
-  ...CARD_SETS.map((set) => [set.id, rarityPools(setPackPool(set.id))] as const),
+  ...RELEASED_SETS.map((set) => [set.id, rarityPools(setPackPool(set.id))] as const),
 ]);
 const trainerPoolsByKey = new Map<string, ReturnType<typeof rarityPools>>();
 

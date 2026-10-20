@@ -10,8 +10,8 @@ import { draftPool } from "../src/socket/draft-rooms.js";
 
 describe("set registry consumers", () => {
   it("the catalog lists every registry set with its cards", () => {
-    expect(getAllSets().map((s) => s.id)).toEqual(CARD_SETS.map((s) => s.id));
-    for (const set of CARD_SETS) {
+    expect(getAllSets().map((s) => s.id)).toEqual(CARD_SETS.filter((s) => !s.inDevelopment).map((s) => s.id));
+    for (const set of CARD_SETS.filter((s) => !s.inDevelopment)) {
       expect(getCardsBySet(set.id)).toHaveLength(set.cards.length);
     }
     expect(getAllSets().find((s) => s.id === "jungle")?.totalCards).toBe(48);

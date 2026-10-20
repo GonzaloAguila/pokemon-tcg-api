@@ -4,7 +4,8 @@
  * `card_values` and in memory (one API process): loaded at startup, reloaded on every change.
  */
 
-import { CARD_SETS, findCardById, getSetById, isBasicEnergy } from "@gonzaloaguila/game-core";
+import { findCardById, getSetById, isBasicEnergy } from "@gonzaloaguila/game-core";
+import { RELEASED_SETS } from "../../lib/released-sets.js";
 import { prisma } from "../../lib/prisma.js";
 import { Errors } from "../../middleware/error-handler.js";
 import { ECONOMY } from "../economy/config.js";
@@ -52,7 +53,7 @@ export function listSetCardValues(setId: string) {
 }
 
 export function listCardValueSets() {
-  return CARD_SETS.map((set) => ({ id: set.id, name: set.name }));
+  return RELEASED_SETS.map((set) => ({ id: set.id, name: set.name }));
 }
 
 /** Set (points) or reset to the rarity default (null) the value of some cards. */

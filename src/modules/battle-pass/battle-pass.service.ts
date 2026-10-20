@@ -12,7 +12,8 @@
  */
 
 import { randomInt } from "crypto";
-import { ALL_CARDS, CardRarity, type Card } from "@gonzaloaguila/game-core";
+import { CardRarity, type Card } from "@gonzaloaguila/game-core";
+import { RELEASED_CARDS } from "../../lib/released-sets.js";
 import { prisma } from "../../lib/prisma.js";
 import { Errors } from "../../middleware/error-handler.js";
 import * as usersService from "../users/users.service.js";
@@ -318,7 +319,7 @@ export async function claimReward(passId: string, userId: string, step: number, 
 // Reward granting (inside transaction)
 // =============================================================================
 
-const holoCards: Card[] = ALL_CARDS.filter((c) => c.rarity === CardRarity.RareHolo);
+const holoCards: Card[] = RELEASED_CARDS.filter((c) => c.rarity === CardRarity.RareHolo);
 
 /** A random rare-holo the user doesn't own (any quantity); any holo when they own them all. */
 export async function pickUnownedHolo(tx: Db, userId: string): Promise<Card> {

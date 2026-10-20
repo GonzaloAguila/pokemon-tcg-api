@@ -7,6 +7,7 @@
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { ALL_CARDS, CARD_SETS, type GameCard } from "@gonzaloaguila/game-core";
+import { RELEASED_SETS } from "../src/lib/released-sets.js";
 import { prisma } from "../src/lib/prisma.js";
 import { clearAccountStateCache } from "../src/lib/account-state.js";
 import { roomManager } from "../src/socket/handlers.js";
@@ -224,8 +225,8 @@ describe("draft set packs come without Trainers", () => {
 describe("the Trainers pack holds only Trainers of the draft's sets", () => {
   it("by default: the sets of the draft's packs (every set when a pack is mixed)", () => {
     expect(participatingSets(["jungle", "trainers", "base-set"])).toEqual(["base-set", "jungle"]);
-    expect(participatingSets(["jungle", "mixed"])).toEqual(CARD_SETS.map((s) => s.id));
-    expect(participatingSets(["trainers", "trainers"])).toEqual(CARD_SETS.map((s) => s.id));
+    expect(participatingSets(["jungle", "mixed"])).toEqual(RELEASED_SETS.map((s) => s.id));
+    expect(participatingSets(["trainers", "trainers"])).toEqual(RELEASED_SETS.map((s) => s.id));
 
     const manager = new DraftRoomManager();
     managers.push(manager);

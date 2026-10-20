@@ -1,6 +1,6 @@
 import { Router, type Request, type Response, type NextFunction } from "express";
 import { z } from "zod";
-import { CARD_SETS } from "@gonzaloaguila/game-core";
+import { RELEASED_SETS } from "../../lib/released-sets.js";
 import { requireAuth, requireVerifiedEmail } from "../../middleware/auth.js";
 import { Errors } from "../../middleware/error-handler.js";
 import { STANDARD_BOOSTER_IDS } from "../boosters/boosters.service.js";
@@ -61,7 +61,7 @@ function publicConfig() {
     },
     setMilestones: {
       tiers: cfg.setMilestones.tiers,
-      sets: CARD_SETS.map((set) => ({
+      sets: RELEASED_SETS.map((set) => ({
         setId: set.id,
         cardBackId: cfg.setMilestones.cardBackId(set.id),
         titleMedalId: cfg.setMilestones.titleMedalId(set.id),

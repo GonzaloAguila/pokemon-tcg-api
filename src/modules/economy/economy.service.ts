@@ -5,7 +5,8 @@
  * as the balance change, and every currency change goes through users.service.
  */
 
-import { ALL_CARDS, CARD_SETS, findCardById, getSetById, isBasicEnergy } from "@gonzaloaguila/game-core";
+import { findCardById, getSetById, isBasicEnergy } from "@gonzaloaguila/game-core";
+import { RELEASED_CARDS, RELEASED_SETS, isReleasedCard } from "../../lib/released-sets.js";
 import { prisma } from "../../lib/prisma.js";
 import { isEconomyVerified } from "../../lib/email-verification.js";
 import { Errors } from "../../middleware/error-handler.js";
@@ -228,13 +229,13 @@ export async function getEconomyStatus(userId: string, now = new Date()) {
 /** Tokens a card costs, or null when it can't be redeemed (basic Energy, unknown rarity). */
 export function exchangeCost(cardDefId: string): number | null {
   const card = findCardById(cardDefId);
-  if (!card || isBasicEnergy(card)) return null;
+  if (!card || isBasicEnergy(card) || !isReleasedCard(card)) return null;
   return ECONOMY.exchangeTokens.costByRarity[card.rarity] ?? null;
 }
 
 export async function redeemExchangeToken(userId: string, cardDefId: string) {
   const card = findCardById(cardDefId);
-  if (!card) throw Errors.NotFound("Carta");
+  if (!card || !isReleasedCard(card)) throw Errors.NotFound("Carta");
   const cost = exchangeCost(cardDefId);
   if (cost === null) throw Errors.BadRequest("Esta carta no se puede canjear");
 
@@ -280,7 +281,7 @@ function milestoneReward(setId: string, percent: number): MilestoneReward | null
 }
 
 function setCardIds(setId: string): string[] {
-  if (setId === ALL_SETS_KEY) return ALL_CARDS.map((c) => c.id);
+  if (setId === ALL_SETS_KEY) return RELEASED_CARDS.map((c) => c.id);
   return getSetById(setId)?.cards.map((c) => c.id) ?? [];
 }
 
@@ -321,7 +322,7 @@ export async function getSetMilestones(userId: string) {
   };
 
   return {
-    sets: CARD_SETS.map((set) => describe(set.id, set.name, ECONOMY.setMilestones.tiers.map((t) => t.percent))),
+    sets: RELEASED_SETS.map((set) => describe(set.id, set.name, ECONOMY.setMilestones.tiers.map((t) => t.percent))),
     collector: describe(ALL_SETS_KEY, "Colección completa", [100]),
   };
 }

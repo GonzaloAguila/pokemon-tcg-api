@@ -3,7 +3,8 @@
  * booster (daily free pack, welcome and prize packs keep giving set boosters).
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { ALL_CARDS, CARD_SETS, UNSUPPORTED_TRAINERS } from "@gonzaloaguila/game-core";
+import { UNSUPPORTED_TRAINERS } from "@gonzaloaguila/game-core";
+import { RELEASED_CARDS as ALL_CARDS, RELEASED_SETS as CARD_SETS } from "../src/lib/released-sets.js";
 import { prisma } from "../src/lib/prisma.js";
 import { ECONOMY } from "../src/modules/economy/config.js";
 import { boostersRouter } from "../src/modules/boosters/index.js";

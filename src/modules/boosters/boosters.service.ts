@@ -9,7 +9,6 @@
  */
 
 import {
-  ALL_CARDS,
   CARD_SETS,
   getSetById,
   isBasicEnergy,
@@ -18,6 +17,7 @@ import {
 } from "@gonzaloaguila/game-core";
 
 import type { Db } from "../users/users.service.js";
+import { RELEASED_CARDS, RELEASED_SETS, isReleasedSet } from "../../lib/released-sets.js";
 import { recordCardChange, type CardChangeReason } from "../users/card-ledger.js";
 import { ECONOMY } from "../economy/config.js";
 import type {
@@ -98,20 +98,29 @@ const SET_BOOSTERS: Record<string, SetBoosterDef> = {
     description: "Contains 11 random cards from the Gym Heroes expansion. Includes 1 guaranteed Rare!",
     image: "/packs/gym-heroes/booster.png",
   },
+  "gym-challenge": {
+    id: "gym-challenge-booster",
+    name: "Gym Challenge Booster",
+    description: "Contains 11 random cards from the Gym Challenge expansion. Includes 1 guaranteed Rare!",
+    image: "/packs/gym-challenge/booster.png",
+  },
 };
 
 /** Set name of each standard booster ("Base Set"), for the card history. */
 const BOOSTER_SET_NAME = new Map(CARD_SETS.flatMap((set) => (SET_BOOSTERS[set.id] ? [[SET_BOOSTERS[set.id].id, set.name] as const] : [])));
 
-/** Ids of the standard boosters, in set-registry order (one per set). */
-export const STANDARD_BOOSTER_IDS: string[] = CARD_SETS.flatMap((set) => {
+/**
+ * Ids of the standard boosters, in set-registry order (one per released set: a set still
+ * `inDevelopment` in game-core is neither sold nor listed until the engine clears the flag).
+ */
+export const STANDARD_BOOSTER_IDS: string[] = RELEASED_SETS.flatMap((set) => {
   const def = SET_BOOSTERS[set.id];
   return def ? [def.id] : [];
 });
 
-/** The standard booster of a set, or null when the set has none. */
+/** The standard booster of a set, or null when the set has none (or is still in development). */
 export function boosterIdForSet(setId: string): string | null {
-  return SET_BOOSTERS[setId]?.id ?? null;
+  return isReleasedSet(setId) ? (SET_BOOSTERS[setId]?.id ?? null) : null;
 }
 
 export function isStandardBoosterId(packId: string): boolean {
@@ -119,7 +128,7 @@ export function isStandardBoosterId(packId: string): boolean {
 }
 
 function initializeDefaultPacks(): void {
-  for (const set of CARD_SETS) {
+  for (const set of RELEASED_SETS) {
     const def = SET_BOOSTERS[set.id];
     if (!def) continue;
     packTypes.set(def.id, {
@@ -203,7 +212,7 @@ export function isOpenableCard(card: Card, unsupported: ReadonlySet<string> = UN
   return !(card.kind === "trainer" && unsupported.has(card.name));
 }
 
-const ALL_TRAINERS: Card[] = ALL_CARDS.filter((card) => card.kind === "trainer" && isOpenableCard(card));
+const ALL_TRAINERS: Card[] = RELEASED_CARDS.filter((card) => card.kind === "trainer" && isOpenableCard(card));
 
 /**
  * Cards a pack draws from: every playable Trainer for the Trainer booster; for a set booster its

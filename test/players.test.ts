@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { CARD_SETS } from "@gonzaloaguila/game-core";
+// Released sets only: a set still in development (game-core inDevelopment) is not listed
+import { RELEASED_SETS as CARD_SETS } from "../src/lib/released-sets.js";
 import { prisma } from "../src/lib/prisma.js";
 import { clearAccountStateCache } from "../src/lib/account-state.js";
 import { playersRouter } from "../src/modules/players/index.js";

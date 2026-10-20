@@ -3,6 +3,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { CARD_SETS } from "@gonzaloaguila/game-core";
+import { RELEASED_SETS } from "../src/lib/released-sets.js";
 import { DraftRoomManager, bonusPoolFor, draftPool, generatePack, normalizePackSets, type DraftRoom } from "../src/socket/draft-rooms.js";
 import { draftSchemas, parsePayload } from "../src/socket/schemas.js";
 
@@ -52,7 +53,7 @@ describe("draft pack sets", () => {
   });
 
   it("single-set packs keep their size, have no repeats and always bring a rare", () => {
-    for (const set of CARD_SETS) {
+    for (const set of RELEASED_SETS) {
       for (const size of [5, 11, 15]) {
         for (let i = 0; i < 20; i++) {
           const pack = generatePack(size, set.id);
@@ -76,7 +77,7 @@ describe("draft pack sets", () => {
         for (const c of pack) sets.add(c.set);
       }
     }
-    expect(sets.size).toBe(CARD_SETS.length);
+    expect(sets.size).toBe(RELEASED_SETS.length);
     expect(parsePayload(draftSchemas.create, { config: { packSets: ["trainers", "jungle"] } }).ok).toBe(true);
   });
 

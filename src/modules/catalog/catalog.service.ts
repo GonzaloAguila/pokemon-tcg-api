@@ -6,8 +6,6 @@
  */
 
 import {
-  CARD_SETS,
-  ALL_CARDS,
   findCardById,
   getSetById as getCoreSet,
   getCardImageUrl as getCoreImageUrl,
@@ -23,6 +21,7 @@ import {
 } from "@gonzaloaguila/game-core";
 
 import type { SetInfo, DeckListItem } from "./catalog.types.js";
+import { RELEASED_CARDS, RELEASED_SETS, isReleasedCard, isReleasedSet } from "../../lib/released-sets.js";
 
 // =============================================================================
 // Local Deck Helpers (not exported from game-core)
@@ -92,10 +91,10 @@ function getDeckFeaturedPokemon(deck: Deck, count: number = 3): PokemonCard[] {
 // =============================================================================
 
 /**
- * Every set in game-core's registry (CARD_SETS); a new set shows up here without API changes.
+ * Every released set in game-core's registry (CARD_SETS minus `inDevelopment` ones); a new set shows up here without API changes.
  * `totalCards` is the number of catalog cards (non-holo duplicates excluded), as before.
  */
-const SETS: SetInfo[] = CARD_SETS.map((set) => ({
+const SETS: SetInfo[] = RELEASED_SETS.map((set) => ({
   id: set.id,
   name: set.name,
   code: set.code,
@@ -126,21 +125,22 @@ export function getSetById(setId: string): SetInfo | undefined {
  * Get all cards in a set
  */
 export function getCardsBySet(setId: string): Card[] {
-  return getCoreSet(setId)?.cards ?? [];
+  return isReleasedSet(setId) ? (getCoreSet(setId)?.cards ?? []) : [];
 }
 
 /**
  * Get a single card by ID (format: "base-set-001-alakazam")
  */
 export function getCardById(cardId: string): Card | undefined {
-  return findCardById(cardId);
+  const card = findCardById(cardId);
+  return card && isReleasedCard(card) ? card : undefined;
 }
 
 /**
  * Get a card by set and number
  */
 export function getCardByNumber(setId: string, number: number): Card | undefined {
-  return getCoreSet(setId)?.cards.find((c) => c.number === number);
+  return getCardsBySet(setId).find((c) => c.number === number);
 }
 
 /**
@@ -157,7 +157,7 @@ export function searchCards(query: string, setId?: string): Card[] {
   const normalizedQuery = query.toLowerCase();
   const cards = setId
     ? getCardsBySet(setId)
-    : [...ALL_CARDS];
+    : [...RELEASED_CARDS];
 
   return cards.filter((c) => c.name.toLowerCase().includes(normalizedQuery));
 }

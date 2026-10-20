@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
 import { afterAll, describe, expect, it } from "vitest";
-import { ALL_CARDS, CARD_SETS, getSetById, isBasicEnergy } from "@gonzaloaguila/game-core";
+import { getSetById, isBasicEnergy } from "@gonzaloaguila/game-core";
+// Released sets only: a set still in development (game-core inDevelopment) gives nothing
+import { RELEASED_CARDS as ALL_CARDS, RELEASED_SETS as CARD_SETS } from "../src/lib/released-sets.js";
 import { prisma } from "../src/lib/prisma.js";
 import { ECONOMY } from "../src/modules/economy/config.js";
 import {

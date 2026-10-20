@@ -6,6 +6,7 @@
  */
 
 import { CARD_SETS } from "@gonzaloaguila/game-core";
+import { RELEASED_SETS } from "../../lib/released-sets.js";
 import { prisma } from "../../lib/prisma.js";
 import { AppError } from "../../middleware/error-handler.js";
 import { listEarnedAchievements } from "../achievements/achievements.service.js";
@@ -77,7 +78,7 @@ export function summarizeCollection(cards: readonly { cardDefId: string; quantit
     const setId = SET_ID_BY_CARD_ID.get(cardDefId);
     if (setId) owned.set(setId, (owned.get(setId) ?? 0) + 1);
   }
-  const sets = CARD_SETS.map((set) => ({ setId: set.id, owned: owned.get(set.id) ?? 0, total: set.cards.length }));
+  const sets = RELEASED_SETS.map((set) => ({ setId: set.id, owned: owned.get(set.id) ?? 0, total: set.cards.length }));
   return {
     owned: sets.reduce((sum, set) => sum + set.owned, 0),
     total: sets.reduce((sum, set) => sum + set.total, 0),

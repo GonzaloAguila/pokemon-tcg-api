@@ -4,7 +4,7 @@
  * offers). Items every player has (Eevee coin, classic back, field playmat, free avatars, starter
  * emotes) are not grantable.
  */
-import { CARD_SETS } from "@gonzaloaguila/game-core";
+import { RELEASED_SETS } from "../../lib/released-sets.js";
 import {
   ADMIN_ONLY_COINS,
   ALL_VARIANTS,
@@ -33,7 +33,7 @@ export const GRANTABLE_COSMETICS: Record<CosmeticType, ReadonlySet<string>> = {
   coin: new Set([...AVAILABLE_COINS.map((c) => c.itemId), ...ADMIN_ONLY_COINS]),
   cardBack: new Set([
     ...AVAILABLE_CARD_BACKS.map((c) => c.itemId),
-    ...CARD_SETS.map((set) => ECONOMY.setMilestones.cardBackId(set.id)),
+    ...RELEASED_SETS.map((set) => ECONOMY.setMilestones.cardBackId(set.id)),
   ]),
   avatar: new Set(AVAILABLE_AVATARS.map((a) => a.itemId).filter((id) => !FREE_AVATAR_IDS.has(id))),
   // "<pokemon-slug>-<overlayId>": every Rare Holo Pokémon × every overlay (catalog.ts)

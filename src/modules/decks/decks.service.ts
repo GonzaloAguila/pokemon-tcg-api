@@ -5,7 +5,8 @@
  */
 
 import type { Prisma } from "@prisma/client";
-import { findCardById, getDeckById as getThemeDeckById, isLimitedInDeck, isPlayableAsBasic } from "@gonzaloaguila/game-core";
+import { findCardById, getDeckById as getThemeDeckById, isLimitedInDeck, isPlayableAsBasic, resolveDeck } from "@gonzaloaguila/game-core";
+import { isReleasedCard } from "../../lib/released-sets.js";
 import { prisma } from "../../lib/prisma.js";
 import { Errors } from "../../middleware/error-handler.js";
 import * as usersService from "../users/users.service.js";
@@ -24,6 +25,8 @@ const DECK_SLOT_PRICE = 500;
 const MIN_DECK_SIZE = 60;
 const MAX_COPIES_PER_CARD = 4;
 export const NO_BASIC_ERROR = "El mazo necesita al menos un Pokémon básico";
+/** A card of a set still in development (game-core `inDevelopment`) can't be in a deck yet. */
+export const UNRELEASED_CARD_ERROR = (name: string) => `"${name}" pertenece a una expansión que todavía no está disponible`;
 
 /**
  * Basic Energy is the only unlimited card (game-core isLimitedInDeck): special Energy (Double
@@ -78,6 +81,14 @@ export function validateDeckCards(cards: DeckCardEntry[]): {
   });
   if (!hasBasic) errors.push(NO_BASIC_ERROR);
 
+  for (const entry of cards) {
+    const card = findCardById(entry.cardDefId);
+    if (card && !isReleasedCard(card)) {
+      errors.push(UNRELEASED_CARD_ERROR(card.name));
+      break;
+    }
+  }
+
   return { valid: errors.length === 0, errors };
 }
 
@@ -123,7 +134,12 @@ export async function validateDeckForUser(userId: string, cards: DeckCardEntry[]
 export async function checkDeckPlayable(userId: string, deckId: string | undefined | null): Promise<string | null> {
   // A seat in a room always needs a deck (a room without one started with default theme decks)
   if (!deckId) return "Debes elegir un mazo";
-  if (!UUID_RE.test(deckId)) return getThemeDeckById(deckId) ? null : "Mazo no encontrado";
+  if (!UUID_RE.test(deckId)) {
+    const theme = getThemeDeckById(deckId);
+    if (!theme) return "Mazo no encontrado";
+    const unreleased = resolveDeck(theme).find((entry) => !isReleasedCard(entry.card));
+    return unreleased ? `Mazo inválido: ${UNRELEASED_CARD_ERROR(unreleased.card.name)}` : null;
+  }
   const deck = await prisma.deck.findFirst({ where: { id: deckId, userId }, select: { cards: true } });
   if (!deck) return "Mazo no encontrado";
   const validation = await validateDeckForUser(userId, (deck.cards ?? []) as unknown as DeckCardEntry[]);

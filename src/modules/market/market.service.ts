@@ -1,11 +1,11 @@
 import {
-  ALL_CARDS,
   isPokemonCard,
   isEnergyCard,
   isTrainerCard,
   CardRarity,
 } from "@gonzaloaguila/game-core";
 import type { Card } from "@gonzaloaguila/game-core";
+import { RELEASED_CARDS } from "../../lib/released-sets.js";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../../lib/prisma.js";
 import { Errors } from "../../middleware/error-handler.js";
@@ -35,7 +35,7 @@ import type {
 // Catalog pools
 // ---------------------------------------------------------------------------
 
-const allCards: Card[] = [...ALL_CARDS];
+const allCards: Card[] = [...RELEASED_CARDS];
 
 // Every card but basic Energy (Pokémon, Trainers and special Energy). "Rare" offers come from
 // rare ∪ rare-holo, so the Base Set rares (Computer Search, Item Finder, ...) can show up.
