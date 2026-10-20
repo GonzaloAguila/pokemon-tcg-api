@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished } from "vitest";
 import { prisma } from "../src/lib/prisma.js";
 import * as matches from "../src/modules/matches/matches.service.js";
 import { DAILY_XP_CAP, XP_REWARDS, applyExperience } from "../src/modules/users/xp.service.js";
@@ -311,6 +311,14 @@ describe("counted games (anti-farming) and match rewards", () => {
   });
 
   it("match coins stop at the daily cap", async () => {
+    expect(ECONOMY.matchCoins.dailyCap).toBe(8000);
+    // Three wins' worth for the test (the real cap takes 320 wins to reach)
+    const matchCoins = ECONOMY.matchCoins as { dailyCap: number };
+    const realCap = matchCoins.dailyCap;
+    matchCoins.dailyCap = 75;
+    onTestFinished(() => {
+      matchCoins.dailyCap = realCap;
+    });
     const a = await createPlayer();
     const opponents = await Promise.all([1, 2, 3, 4].map(() => createPlayer()));
     const rewards: number[] = [];

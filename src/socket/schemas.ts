@@ -175,6 +175,8 @@ const draftConfig = z.object({
   adminPlays: z.boolean().optional(),
   /** Each match: one game or a best-of-3 series (default "bo1") */
   matchFormat: z.enum(MATCH_FORMATS).optional(),
+  /** Prize cards of every tournament game (default 6) */
+  prizeCount: z.number().int().min(4).max(MAX_PRIZES).optional(),
   /** Admin prizes on top of the entry-fee pool (draft-rewards.ts); places must exist in this draft */
   rewards: draftRewardsSchema.optional(),
 }).superRefine((config, ctx) => {

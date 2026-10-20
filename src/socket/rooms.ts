@@ -1150,11 +1150,13 @@ export class GameRoomManager {
   /**
    * Start a game using raw card arrays (for draft matches).
    * Creates a GameState directly from pre-built decks instead of DeckEntry definitions.
+   * `prizeCount`: the draft's Prize cards per player (4-6, default 6).
    */
   async startGameWithRawDecks(
     roomId: string,
     player1Cards: GameCard[],
     player2Cards: GameCard[],
+    prizeCount = 6,
   ): Promise<GameState> {
     const room = this.rooms.get(roomId);
     if (!room) throw new Error("Room not found");
@@ -1196,7 +1198,8 @@ export class GameRoomManager {
       events: [createGameEvent("Partida de draft inicializada", "system")],
     };
 
-    gameState = startGame(gameState);
+    gameState = startGame(gameState, { prizeCount });
+    room.config.prizeCount = gameState.prizeCount ?? prizeCount;
 
     gameState = {
       ...gameState,

@@ -63,6 +63,26 @@ describe("config", () => {
     expect(draftSchemas.create.safeParse({ config: { matchFormat: "bo3" } }).success).toBe(true);
     expect(draftSchemas.create.safeParse({ config: { matchFormat: "bo5" } }).success).toBe(false);
   });
+
+  it("prizeCount defaults to 6, takes 4 or 5, rejects anything else", () => {
+    const manager = new DraftRoomManager();
+    expect(manager.createRoom({ adminPlays: false, entryFee: 0 }, ADMIN, "s", "Admin").config.prizeCount).toBe(6);
+    expect(manager.createRoom({ adminPlays: false, entryFee: 0, prizeCount: 4 }, ADMIN, "s", "Admin").config.prizeCount).toBe(4);
+    expect(() => manager.createRoom({ adminPlays: false, entryFee: 0, prizeCount: 3 }, ADMIN, "s", "Admin")).toThrow(/4, 5 o 6/);
+    expect(draftSchemas.create.safeParse({ config: { prizeCount: 5 } }).success).toBe(true);
+    expect(draftSchemas.create.safeParse({ config: { prizeCount: 7 } }).success).toBe(false);
+  });
+
+  it("a draft game starts with the draft's Prize cards", async () => {
+    const deck = ALL_CARDS.slice(0, 60).map((c, i) => ({ ...c, id: `pc${i}` }) as GameCard);
+    for (const prizeCount of [4, 6]) {
+      const game = roomManager.createRoom();
+      await roomManager.joinRoom(game.id, `p1-${prizeCount}`, "s1");
+      await roomManager.joinRoom(game.id, `p2-${prizeCount}`, "s2");
+      const state = await roomManager.startGameWithRawDecks(game.id, deck, deck.map((x) => ({ ...x, id: `${x.id}b` })), prizeCount);
+      expect([state.playerPrizes.length, state.opponentPrizes.length, game.config.prizeCount]).toEqual([prizeCount, prizeCount, prizeCount]);
+    }
+  });
 });
 
 describe("bo3 series", () => {

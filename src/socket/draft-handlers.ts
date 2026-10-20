@@ -191,7 +191,8 @@ async function createMatchGame(
   );
 
   // Start the game with their drafted decks
-  const gameState = await gameRoomManager.startGameWithRawDecks(gameRoomId, [...p1.deck], [...p2.deck]);
+  const draftPrizeCount = draftRoomManager.getRoom(draftRoomId)?.config.prizeCount ?? 6;
+  const gameState = await gameRoomManager.startGameWithRawDecks(gameRoomId, [...p1.deck], [...p2.deck], draftPrizeCount);
   // Both players' playmat, coin and card back (owned only) for the game screen; drafted decks have no variants
   await snapshotRoomCosmetics(gameRoom);
 
