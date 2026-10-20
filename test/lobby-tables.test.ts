@@ -158,3 +158,39 @@ describe("deck rank F–S", () => {
     }
   });
 });
+
+describe("myRooms: the creator's own tables with their deck", () => {
+  it("after create and delete, on getMyRooms, and empty once a game starts", async () => {
+    const a = await player();
+    const b = await player();
+    const first = nextEvent<{ rooms: Any[] }>(a.socket, "myRooms");
+    const standard = await createTable(a.socket, { deckId: "blackout", prizeCount: 5 });
+    expect((await first).rooms).toEqual([
+      { id: standard, mode: "standard", deckId: "blackout", deckName: expect.any(String), prizeCount: 5, betAmount: 0, deckRank: "D" },
+    ]);
+
+    const both = nextEvent<{ rooms: Any[] }>(a.socket, "myRooms");
+    const lucky = await createTable(a.socket, LUCKY);
+    expect((await both).rooms.map((r) => r.id).sort()).toEqual([standard, lucky].sort());
+
+    // A reloaded lobby (another socket) asks for them
+    const reloaded = await server.connect(tokenFor(a.user));
+    const asked = nextEvent<{ rooms: Any[] }>(reloaded, "myRooms");
+    reloaded.emit("getMyRooms");
+    expect((await asked).rooms.find((r) => r.id === lucky)).toEqual({
+      id: lucky, mode: "lucky-duel", deckId: null, deckName: null, prizeCount: 0, betAmount: 0, deckRank: null,
+    });
+    // The deck name is the theme deck's
+    expect((await asked).rooms.find((r) => r.id === standard)?.deckName).toBe("Blackout");
+
+    // A rival at the Lucky Duel table: the standard one closes, nothing is left
+    const started = Promise.all([nextEvent<Any>(a.socket, "gameStart"), nextEvent<Any>(b.socket, "gameStart")]);
+    const lists: Any[][] = [];
+    a.socket.on("myRooms", (p: { rooms: Any[] }) => lists.push(p.rooms));
+    b.socket.emit("joinRoom", { roomId: lucky });
+    await started;
+    await new Promise((r) => setTimeout(r, 100));
+    expect(lists.at(-1)).toEqual([]);
+    a.socket.off("myRooms");
+  });
+});

@@ -725,7 +725,7 @@ type ForfeitCallback = (
 type AbandonCallback = (room: GameRoom, reason: string) => void;
 
 /** A room removed by the manager itself (e.g. its creator left the lobby): refresh the room list. */
-type RoomClosedCallback = (roomId: string) => void;
+type RoomClosedCallback = (roomId: string, room: GameRoom) => void;
 
 /** The server answered for a player whose answer clock ran out (`action` = what it sent for them). */
 type AutoAnswerCallback = (roomId: string, side: PlayerKey, action: { type: string }, result: ActionResult) => void;
@@ -2379,7 +2379,7 @@ export class GameRoomManager {
       this.cancelAnswerTimer(roomId);
       this.rooms.delete(roomId);
       this.unmapRoomSockets(room);
-      this.onRoomClosedCallback?.(roomId);
+      this.onRoomClosedCallback?.(roomId, room);
     }, this.waitingRoomGraceMs);
     timer.unref?.();
     this.waitingRoomTimers.set(roomId, timer);
