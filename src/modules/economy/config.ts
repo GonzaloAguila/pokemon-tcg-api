@@ -270,6 +270,19 @@ export const ECONOMY = {
     dailyStakedGames: 20,
   },
 
+  /**
+   * Lobby tables (socket/handlers.ts). deckRank: a standard table shows its deck's rank, from the
+   * average points per card without basic Energy (card_values overrides, else
+   * trades.valueByRarity: common 3, uncommon 5, rare 10, rare-holo 30). The first threshold the
+   * average reaches, else F (see deck-rank.ts). With the default points: only commons 3 (F),
+   * commons + uncommons ~4 (E), the starter theme decks 4.6-6.3 (Blackout, Overgrowth D;
+   * Zap, Brushfire C), Haymaker / Raindance 7.3-8.3 (C-B), the rare-heavy ones 9.5-11.4
+   * (B-A); S takes about a third of the non-Energy cards being holos.
+   */
+  lobby: {
+    deckRank: { S: 15, A: 11, B: 8, C: 6, D: 4.5, E: 3.5 },
+  },
+
   /** Table bets are off. The settlement code stays; flip `enabled` to bring them back. */
   tableBets: {
     enabled: false,

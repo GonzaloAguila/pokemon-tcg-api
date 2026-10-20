@@ -98,6 +98,7 @@ import { isLuckyDuelFaceDown } from "./state-masking.js";
 import type { RoomChatMessage } from "./room-chat.js";
 import type { RoomCosmetics } from "./room-cosmetics.js";
 import type { RoomEmoteLoadouts } from "./room-emotes.js";
+import type { DeckRank } from "../modules/decks/deck-rank.js";
 
 /** Table type: a normal table, or Lucky Duel (random Basic and deck, no Bench, no Prizes). */
 export type TableMode = (typeof TABLE_MODES)[number];
@@ -147,6 +148,11 @@ export interface GameRoom {
   player2SocketId: string | null;
   player2Ready: boolean;
   player2DeckId: string | null;
+  /**
+   * The creator's deck (player1DeckId) as the lobby shows it: its rank F–S (public, the deck
+   * itself never is) and its name (only to the creator, `myRooms`). Unset at Lucky Duel.
+   */
+  creatorDeck?: { name: string | null; rank: DeckRank | null };
 
   // Game state
   gameState: GameState | null;

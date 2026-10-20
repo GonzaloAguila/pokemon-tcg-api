@@ -8,7 +8,9 @@
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { Socket as ClientSocket } from "socket.io-client";
+import { ALL_CARDS, isBasicEnergy } from "@gonzaloaguila/game-core";
 import { prisma } from "../src/lib/prisma.js";
+import { deckAveragePoints, rankForAverage, rankForCards } from "../src/modules/decks/deck-rank.js";
 import { clearAccountStateCache } from "../src/lib/account-state.js";
 import { roomManager } from "../src/socket/handlers.js";
 import { createUser } from "./helpers.js";
@@ -120,5 +122,39 @@ describe("one waiting table per mode", () => {
     const listed = roomManager.getActiveRooms().map((r) => r.id);
     expect(listed).not.toContain(standard);
     expect(listed).not.toContain(lucky);
+  });
+});
+
+describe("deck rank F–S", () => {
+  it("average points per card without basic Energy, against ECONOMY.lobby.deckRank", () => {
+    const commons = ALL_CARDS.filter((c) => c.rarity === "common" && !isBasicEnergy(c)).slice(0, 20).map((c) => c.id);
+    const holos = ALL_CARDS.filter((c) => c.rarity === "rare-holo").slice(0, 20).map((c) => c.id);
+    const energy = ALL_CARDS.find((c) => isBasicEnergy(c))!.id;
+    expect(deckAveragePoints([...commons, ...Array(20).fill(energy)])).toBe(3);
+    expect(rankForCards(commons)).toBe("F");
+    expect(rankForCards(holos)).toBe("S");
+    expect(rankForCards([energy])).toBeNull();
+    expect(rankForAverage(4.5)).toBe("D");
+    expect(rankForAverage(11)).toBe("A");
+  });
+
+  it("the lobby lists a low and a high theme deck's rank (Lucky Duel: null), never the deck", async () => {
+    const a = await player();
+    const b = await player();
+    const low = await createTable(a.socket, { deckId: "blackout", prizeCount: 6 });
+    const listed = nextEvent<{ rooms: Any[] }>(a.socket, "roomList");
+    const high = await createTable(b.socket, { deckId: "thunderstorm", prizeCount: 6 });
+    const lucky = await createTable(a.socket, LUCKY);
+    const rooms = (await listed).rooms;
+    expect(rooms.find((r) => r.id === low)?.deckRank).toBe("D");
+    expect(rooms.find((r) => r.id === high)?.deckRank).toBe("A");
+    const list = nextEvent<{ rooms: Any[] }>(a.socket, "roomList");
+    a.socket.emit("getRooms");
+    const all = (await list).rooms;
+    expect(all.find((r) => r.id === lucky)?.deckRank).toBeNull();
+    for (const r of all) {
+      expect(r).not.toHaveProperty("deckId");
+      expect(r).not.toHaveProperty("deckName");
+    }
   });
 });

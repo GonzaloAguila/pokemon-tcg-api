@@ -14,6 +14,7 @@ import { cosmeticsPayload, getRoomCosmetics, snapshotRoomCosmetics } from "./roo
 import type { Viewer } from "./state-masking.js";
 import { maxBetForTitle, titleIdFromStats } from "../modules/users/titles.js";
 import { checkDeckPlayable } from "../modules/decks/decks.service.js";
+import { describeDeck } from "../modules/decks/deck-rank.js";
 import {
   registerDraftEvents,
   draftRoomManager,
@@ -320,6 +321,8 @@ function serializeRoom(r: ReturnType<typeof roomManager.getRoom>) {
     betAmount: r.config.betAmount,
     reservedUserId: r.config.reservedUserId,
     friendly: r.config.friendly,
+    /** The creator's deck rank F–S (deck-rank.ts); null at Lucky Duel (no deck). */
+    deckRank: r.config.mode === "lucky-duel" ? null : (r.creatorDeck?.rank ?? null),
     creatorUsername: isWaiting ? null : r.creator.username,
     creatorAvatarId: isWaiting ? null : r.creator.avatarId,
     creatorTitleId: isWaiting ? null : r.creator.titleId,
@@ -595,6 +598,8 @@ export function setupSocketHandlers(io: Server): void {
           const deckError = await checkDeckPlayable(userId, deckId);
           if (deckError) { socket.emit("error", { message: deckError }); return; }
         }
+        // The lobby shows the deck's rank F–S, never the deck
+        const creatorDeck = deckId ? await describeDeck(userId, deckId) : undefined;
         // Table bets are off unless ECONOMY.tableBets.enabled (the bet is forced to 0). When on:
         // friendly tables carry no bet; otherwise the bet is capped by the creator's title (lobby
         // slider), the creator must be eligible and cover it now (it's charged to both players
@@ -633,6 +638,7 @@ export function setupSocketHandlers(io: Server): void {
         // Set deck if provided
         if (deckId) {
           roomManager.setPlayerDeck(room.id, socket.id, deckId);
+          room.creatorDeck = creatorDeck;
         }
 
         socket.join(room.id);
@@ -742,6 +748,11 @@ export function setupSocketHandlers(io: Server): void {
         // Set deck if provided (only before the game starts)
         if (deckId && room.status === "waiting") {
           roomManager.setPlayerDeck(roomId, socket.id, deckId);
+          // The creator coming back with another deck: the table shows that one's rank
+          if (room.player1Id === userId) {
+            room.creatorDeck = await describeDeck(userId, deckId);
+            broadcastRoomList(io);
+          }
         }
 
         socket.join(roomId);
