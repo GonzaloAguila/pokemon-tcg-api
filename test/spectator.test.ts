@@ -484,7 +484,7 @@ describe("watching a draft", () => {
 
     room.phase = "matching";
     room.tournament = {
-      rounds: [{ roundNumber: 1, pairings: [{ matchNumber: 1, player1: { id: d.a.id, name: "A" }, player2: { id: d.b.id, name: "B" } }], byePlayerId: null, status: "in_progress", results: [] }],
+      rounds: [{ roundNumber: 1, pairings: [{ matchNumber: 1, player1: { id: d.a.id, name: "A" }, player2: { id: d.b.id, name: "B" }, games: [], wins: { [d.a.id]: 0, [d.b.id]: 0 } }], byePlayerId: null, status: "in_progress", results: [] }],
       standings: [],
       currentRoundNumber: 1,
       totalRounds: 1,

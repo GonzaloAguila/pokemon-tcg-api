@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "../src/lib/prisma.js";
 import { newsRouter } from "../src/modules/news/news.controller.js";
 import { adminRouter } from "../src/modules/admin/admin.controller.js";
-import { newsStatus, toExcerpt } from "../src/modules/news/news.service.js";
+import { newsStatus, stripEmbeds, toExcerpt } from "../src/modules/news/news.service.js";
 import { createUser } from "./helpers.js";
 import { tokenFor } from "./socket-helpers.js";
 import { startHttpApp } from "./http-helpers.js";
@@ -341,6 +341,13 @@ describe("helpers", () => {
     const long = toExcerpt("palabra ".repeat(50), 30);
     expect(long.endsWith("…")).toBe(true);
     expect(long.length).toBeLessThanOrEqual(31);
+  });
+
+  it("embed lines stay out of excerpts and Mensajes", () => {
+    const body = "¡Se viene el torneo!\n\n[[torneo-halloween-2026]]\n\nAnotate en **Draft**.";
+    expect(toExcerpt(body)).toBe("¡Se viene el torneo! Anotate en Draft.");
+    expect(stripEmbeds(body)).toBe("¡Se viene el torneo!\n\n\nAnotate en **Draft**.");
+    expect(stripEmbeds("Texto con [[algo]] en el medio")).toBe("Texto con [[algo]] en el medio");
   });
 
   it("newsStatus", () => {

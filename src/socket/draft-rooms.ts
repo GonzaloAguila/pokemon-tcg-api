@@ -51,6 +51,10 @@ export type DraftConfig = {
    */
   trainerSets: CardSetId[];
   cardsPerPack: number; // default 11
+  /** Rare / uncommon / common slots of every pack (sum = cardsPerPack); absent = the default formula (generatePack). */
+  packRarities?: PackRarities;
+  /** Bonus cards each player picks after the last round: 0-10, default 5; 0 skips the bonus-pick phase. */
+  bonusPicks: number;
   pickTimeSeconds: number; // default 45
   keepInCollection: boolean;
   minDeckSize: number; // default 40
@@ -58,7 +62,21 @@ export type DraftConfig = {
   adminPlays: boolean; // if true, admin takes seat 0 and plays (doesn't pay)
   /** Prizes the admin set on top of the entry-fee pool: every finisher and given places (draft-rewards.ts). */
   rewards: DraftRewardTier[];
+  /** Each tournament match: one game, or a best-of-3 series (default "bo1"). */
+  matchFormat: MatchFormat;
 };
+
+export const MATCH_FORMATS = ["bo1", "bo3"] as const;
+export type MatchFormat = (typeof MATCH_FORMATS)[number];
+/** bo3: game wins that take the series. */
+export const BO3_WINS_NEEDED = 2;
+/** bo3: games a series may last (games without a winner are replayed up to this); then most wins decide, a tie = no winner. */
+export const BO3_MAX_GAMES = 5;
+
+/** One game of a match (bo1: the only one). `gameRoomId` null: never created. */
+export type SeriesGame = { gameRoomId: string | null; winnerId: string | null };
+
+export type PackRarities = { rare: number; uncommon: number; common: number };
 
 export type DraftPhase =
   | "lobby"
@@ -74,6 +92,8 @@ export type PendingMatchInfo = {
   roundNumber: number;
   isPlayer1: boolean;
   opponentName: string;
+  /** 1-based game of the match's series (always 1 in bo1). */
+  gameNumber: number;
 };
 
 export type DraftPlayer = {
@@ -183,6 +203,10 @@ export type MatchPairing = {
   matchNumber: number;
   player1: { id: string; name: string };
   player2: { id: string; name: string };
+  /** Games of this match so far, in order (bo1: at most one). */
+  games: SeriesGame[];
+  /** Game wins per player id (both players, from 0). */
+  wins: Record<string, number>;
 };
 
 export type MatchResult = {
@@ -197,7 +221,12 @@ export type MatchResult = {
   walkover: boolean;
   /** false: the game never left the opening (a player never showed up); no admin prizes for it. */
   played?: boolean;
+  /** The match's last game room (null: walkover before any game, or a bye). */
   gameRoomId: string | null;
+  /** The match's games (bo3: the whole series; [] for byes and walkovers before a game). */
+  games: SeriesGame[];
+  /** Game wins per player id ({} for byes). */
+  wins: Record<string, number>;
 };
 
 export type PlayerStanding = {
@@ -348,7 +377,8 @@ export const DEFAULT_DRAFT_TIMINGS: DraftTimings = {
   buildingSeconds: 600,
 };
 
-const BONUS_PICKS = 3;
+export const DEFAULT_BONUS_PICKS = 5;
+export const MAX_BONUS_PICKS = 10;
 /** Most drafted cards an automatic deck uses; the rest of the deck is basic Energy. */
 const AUTO_DECK_MAX_CARDS = 36;
 const AUTO_DECK_MIN_ENERGY = 24;
@@ -494,36 +524,60 @@ function pickUnique(
   return picked;
 }
 
+/** Why a pack composition doesn't fit `cardsPerPack` (Spanish), or null. */
+export function packRaritiesError(rarities: PackRarities, cardsPerPack: number): string | null {
+  const { rare, uncommon, common } = rarities;
+  if (![rare, uncommon, common].every((n) => Number.isInteger(n) && n >= 0)) {
+    return "Las cantidades de rarezas deben ser números enteros mayores o iguales a 0";
+  }
+  if (rare < 1) return "Cada sobre debe tener al menos 1 carta rara";
+  const total = rare + uncommon + common;
+  if (total !== cardsPerPack) {
+    return `Raras + infrecuentes + comunes deben sumar ${cardsPerPack} (las cartas por sobre); suman ${total}`;
+  }
+  return null;
+}
+
+/** The default composition from the pack's size: 1-2 rare slots, ~30% of the rest uncommons, the rest commons. */
+function defaultRarities(cardsPerPack: number, hasPlainRares: boolean): PackRarities {
+  const rare = cardsPerPack >= 10 && hasPlainRares ? 2 : 1;
+  const remaining = cardsPerPack - rare;
+  const uncommon = Math.max(1, Math.round(remaining * 0.3));
+  return { rare, uncommon, common: remaining - uncommon };
+}
+
 /**
  * A draft pack of exactly `cardsPerPack` cards. A Trainers pack holds the Trainers of
  * `trainerSets` (every set by default); when they are fewer than the pack's size the pack is
- * completed with repeats.
+ * completed with repeats. `rarities` (the admin's composition, sum = cardsPerPack) replaces the
+ * default formula, except in a Trainers pack.
  */
 export function generatePack(
   cardsPerPack: number,
   packSet: DraftPackSet = MIXED_PACK,
   trainerSets: readonly CardSetId[] = CARD_SET_IDS,
+  rarities?: PackRarities,
 ): GameCard[] {
   const usedIds = new Set<string>();
   const pools =
     packSet === TRAINERS_PACK ? trainerPools(trainerSets) : (poolsByPackSet.get(packSet) ?? poolsByPackSet.get(MIXED_PACK)!);
 
-  // Jungle, Fossil and Team Rocket only list holo rares: their one rare slot is a holo and
-  // the second rare slot becomes an uncommon.
+  // Jungle, Fossil and Team Rocket only list holo rares: their first rare slot is a holo, and an
+  // extra rare slot that doesn't come out holo becomes an uncommon (by default they have one rare slot).
   const hasPlainRares = pools.rare.length > 0;
-  const rareSlotCount = cardsPerPack >= 10 && hasPlainRares ? 2 : 1;
-  const remaining = cardsPerPack - rareSlotCount;
-  const uncommonCount = Math.max(1, Math.round(remaining * 0.3));
-  const commonCount = remaining - uncommonCount;
+  const slots = rarities && packSet !== TRAINERS_PACK ? rarities : defaultRarities(cardsPerPack, hasPlainRares);
+  let uncommonCount = slots.uncommon;
+  const commonCount = slots.common;
 
   // Guaranteed non-holo rare (a holo in sets without them)
   const rares = pickUnique(hasPlainRares ? pools.rare : pools.rareHolo, 1, usedIds);
 
-  // Second rare slot: 33% chance holo
-  if (rareSlotCount >= 2) {
+  // Every other rare slot: 33% chance holo
+  for (let slot = 1; slot < slots.rare; slot++) {
     const isHolo = Math.random() < 0.33;
-    const pool = isHolo ? pools.rareHolo : pools.rare;
-    rares.push(...pickUnique(pool, 1, usedIds));
+    if (isHolo) rares.push(...pickUnique(pools.rareHolo, 1, usedIds));
+    else if (hasPlainRares) rares.push(...pickUnique(pools.rare, 1, usedIds));
+    else uncommonCount++;
   }
 
   const uncommons = pickUnique(pools.uncommon, uncommonCount, usedIds);
@@ -594,6 +648,8 @@ export class DraftRoomManager {
   private rooms = new Map<string, DraftRoom>();
   private socketToRoom = new Map<string, string>();
   private gameRoomToDraft = new Map<string, GameRoomDraftInfo>();
+  /** bo3 series ("room:round:match") with at least one game that left the opening (MatchResult.played). */
+  private seriesPlayed = new Set<string>();
   private broadcastFn: BroadcastFn | null = null;
   private hooks: DraftHooks = {};
   private timings: DraftTimings;
@@ -633,19 +689,39 @@ export class DraftRoomManager {
     const roomId = this.generateRoomId();
     const packsPerPlayer = config.packsPerPlayer ?? 3;
     const packSets = normalizePackSets(config.packSets, packsPerPlayer);
+    const trainerSets = normalizeTrainerSets(config.trainerSets, packSets);
+    const cardsPerPack = config.cardsPerPack ?? 11;
+    const rarityError = config.packRarities && packRaritiesError(config.packRarities, cardsPerPack);
+    if (rarityError) throw new Error(rarityError);
+    const bonusPicks = config.bonusPicks ?? DEFAULT_BONUS_PICKS;
+    if (!Number.isInteger(bonusPicks) || bonusPicks < 0 || bonusPicks > MAX_BONUS_PICKS) {
+      throw new Error(`Las cartas bonus deben ser entre 0 y ${MAX_BONUS_PICKS}`);
+    }
+    // The bonus pool is the catalog of the draft's sets (dozens of cards), except in a draft of
+    // only Trainers packs from few sets: never ask for more distinct cards than it holds.
+    if (bonusPicks > 0) {
+      const poolSize = bonusPoolFor(packSets, trainerSets).length;
+      if (bonusPicks > poolSize) {
+        throw new Error(`Este draft solo ofrece ${poolSize} cartas bonus para elegir: elige ${poolSize} o menos`);
+      }
+    }
     const fullConfig: DraftConfig = {
       maxPlayers: config.maxPlayers ?? 8,
       packsPerPlayer,
       packSets,
-      trainerSets: normalizeTrainerSets(config.trainerSets, packSets),
-      cardsPerPack: config.cardsPerPack ?? 11,
+      trainerSets,
+      cardsPerPack,
+      ...(config.packRarities ? { packRarities: { ...config.packRarities } } : {}),
+      bonusPicks,
       pickTimeSeconds: config.pickTimeSeconds ?? 45,
       keepInCollection: config.keepInCollection ?? false,
       minDeckSize: config.minDeckSize ?? 40,
       entryFee: config.entryFee ?? 2000,
       adminPlays: config.adminPlays ?? false,
       rewards: config.rewards ?? [],
+      matchFormat: config.matchFormat ?? "bo1",
     };
+    if (!MATCH_FORMATS.includes(fullConfig.matchFormat)) throw new Error("Formato de partida inválido");
 
     const players: DraftPlayer[] = [];
 
@@ -1015,8 +1091,9 @@ export class DraftRoomManager {
     const player = room.players.find((p) => p.socketId === socketId);
     if (!player) throw new Error("Jugador no encontrado");
     if (player.isReady) throw new Error("Ya elegiste tus cartas bonus");
-    if (cardDefIds.length !== BONUS_PICKS) throw new Error("Debes elegir exactamente 3 cartas");
-    if (new Set(cardDefIds).size !== cardDefIds.length) throw new Error("Elige 3 cartas distintas");
+    const count = room.config.bonusPicks;
+    if (cardDefIds.length !== count) throw new Error(`Debes elegir exactamente ${count} ${count === 1 ? "carta" : "cartas"}`);
+    if (new Set(cardDefIds).size !== cardDefIds.length) throw new Error(`Elige ${count} cartas distintas`);
 
     // Find cards from the bonus pool by their draft ID (all of them before adding any)
     const templates = cardDefIds.map((defId) => {
@@ -1028,7 +1105,7 @@ export class DraftRoomManager {
     for (const template of templates) player.draftedCards.push({ ...template, id: generateCardId() });
 
     player.isReady = true;
-    room.events.push(this.createEvent("pick", `${player.name} eligió sus 3 cartas bonus`));
+    room.events.push(this.createEvent("pick", `${player.name} eligió sus cartas bonus`));
 
     this.evaluateProgress(room);
     return room;
@@ -1459,14 +1536,19 @@ export class DraftRoomManager {
       room.currentRound++;
 
       if (room.currentRound > room.config.packsPerPlayer) {
-        // All rounds done → bonus-pick phase (with its own deadline)
+        // All rounds done → bonus-pick phase (with its own deadline), or building without bonus picks
+        if (room.config.bonusPicks === 0) {
+          room.events.push(this.createEvent("system", "¡Draft completado!"));
+          this.startBuilding(room);
+          return;
+        }
         room.phase = "bonus-pick";
         room.bonusPickPool = bonusPoolFor(room.config.packSets, room.config.trainerSets).map(toGameCard);
         for (const p of room.players) p.isReady = false;
         room.events.push(
           this.createEvent(
             "system",
-            "¡Draft completado! Elige 3 cartas bonus del catálogo.",
+            `¡Draft completado! Elige ${room.config.bonusPicks} cartas bonus del catálogo.`,
           ),
         );
         this.startPhaseTimer(room, this.timings.bonusPickSeconds);
@@ -1494,17 +1576,23 @@ export class DraftRoomManager {
     this.evaluateProgress(room);
   }
 
-  /** Bonus-pick over (all picked, deadline, or grace): 3 random bonus cards for whoever didn't. */
+  /** Bonus-pick over (all picked, deadline, or grace): config.bonusPicks random bonus cards for whoever didn't. */
   private finishBonusPick(room: DraftRoom): void {
     if (room.phase !== "bonus-pick") return;
     this.clearTimers(room);
     for (const player of room.players) {
       if (player.isReady) continue;
-      const picks = shuffle(room.bonusPickPool).slice(0, BONUS_PICKS);
+      const picks = shuffle(room.bonusPickPool).slice(0, room.config.bonusPicks);
       for (const template of picks) player.draftedCards.push({ ...template, id: generateCardId() });
       player.isReady = true;
       room.events.push(this.createEvent("system", `Cartas bonus al azar para ${player.name}`));
     }
+    this.startBuilding(room);
+  }
+
+  /** Deck building (after the bonus picks, or after the last round without them), with its deadline. */
+  private startBuilding(room: DraftRoom): void {
+    this.clearTimers(room);
     room.phase = "building";
     for (const p of room.players) p.isReady = false;
     room.bonusPickPool = []; // Free memory
@@ -1589,7 +1677,7 @@ export class DraftRoomManager {
   private generatePacksForRound(room: DraftRoom): void {
     const packSet = room.config.packSets[room.currentRound - 1] ?? MIXED_PACK;
     for (const player of room.players) {
-      player.currentPack = generatePack(room.config.cardsPerPack, packSet, room.config.trainerSets);
+      player.currentPack = generatePack(room.config.cardsPerPack, packSet, room.config.trainerSets, room.config.packRarities);
     }
   }
 
@@ -1720,6 +1808,8 @@ export class DraftRoomManager {
           matchNumber: globalMatchNumber++,
           player1: { id: p1.id, name: p1.name },
           player2: { id: p2.id, name: p2.name },
+          games: [],
+          wins: { [p1.id]: 0, [p2.id]: 0 },
         });
       }
 
@@ -1789,6 +1879,8 @@ export class DraftRoomManager {
         isBye: true,
         walkover: false,
         gameRoomId: null,
+        games: [],
+        wins: {},
       });
     }
 
@@ -1828,6 +1920,22 @@ export class DraftRoomManager {
       player1Id,
       player2Id,
     });
+    const pairing = this.pairingOf(draftRoomId, roundNumber, matchNumber);
+    if (pairing && !pairing.games.some((g) => g.gameRoomId === gameRoomId)) {
+      pairing.games.push({ gameRoomId, winnerId: null });
+    }
+  }
+
+  private pairingOf(draftRoomId: string, roundNumber: number, matchNumber: number): MatchPairing | undefined {
+    return this.rooms
+      .get(draftRoomId)
+      ?.tournament?.rounds.find((r) => r.roundNumber === roundNumber)
+      ?.pairings.find((p) => p.matchNumber === matchNumber);
+  }
+
+  /** 1-based number of the match's current game (its last registered game room). */
+  currentGameNumber(draftRoomId: string, roundNumber: number, matchNumber: number): number {
+    return Math.max(1, this.pairingOf(draftRoomId, roundNumber, matchNumber)?.games.length ?? 1);
   }
 
   /**
@@ -1873,13 +1981,55 @@ export class DraftRoomManager {
     const pairing = round?.pairings.find((p) => p.matchNumber === matchNumber);
     if (!room || !round || !pairing || room.phase !== "matching" || this.isMatchDecided(draftRoomId, roundNumber, matchNumber)) {
       this.gameRoomToDraft.delete(gameRoomId);
-      return { newRoundStarted: false, tournamentFinished: false };
+      return { newRoundStarted: false, tournamentFinished: false, nextGame: null };
+    }
+    const nameOf = (id: string | null) => room.players.find((p) => p.id === id)?.name ?? "?";
+    const isBo3 = room.config.matchFormat === "bo3";
+    // bo3: only the series' game in progress counts (a stale or repeated report is ignored)
+    const info = this.gameRoomToDraft.get(gameRoomId);
+    if (isBo3 && (info?.draftRoomId !== draftRoomId || info.roundNumber !== roundNumber || info.matchNumber !== matchNumber)) {
+      return { newRoundStarted: false, tournamentFinished: false, nextGame: null };
     }
 
-    this.recordResult(room, round, pairing, winnerId, false, gameRoomId);
-    if (!played) round.results[round.results.length - 1].played = false;
+    // The game's result goes into the match's series (bo1: its only game)
+    if (winnerId !== null && !(winnerId in pairing.wins)) winnerId = null;
+    let game = pairing.games.find((g) => g.gameRoomId === gameRoomId);
+    if (!game) {
+      game = { gameRoomId, winnerId: null };
+      pairing.games.push(game);
+    }
+    game.winnerId = winnerId;
+    if (winnerId) pairing.wins[winnerId]++;
+    const seriesKey = `${draftRoomId}:${roundNumber}:${matchNumber}`;
+    if (played) this.seriesPlayed.add(seriesKey);
 
-    const nameOf = (id: string | null) => room.players.find((p) => p.id === id)?.name ?? "?";
+    let matchWinnerId = winnerId;
+    if (isBo3) {
+      const [a, b] = [pairing.player1.id, pairing.player2.id];
+      const [winsA, winsB] = [pairing.wins[a], pairing.wins[b]];
+      const gameNumber = pairing.games.length;
+      const decided = winsA >= BO3_WINS_NEEDED || winsB >= BO3_WINS_NEEDED || gameNumber >= BO3_MAX_GAMES;
+      if (!decided) {
+        this.gameRoomToDraft.delete(gameRoomId);
+        room.events.push(
+          this.createEvent(
+            "info",
+            `${winnerId ? `${nameOf(winnerId)} ganó el juego ${gameNumber}` : `El juego ${gameNumber} terminó sin ganador`} de la Partida ${matchNumber} (${nameOf(a)} ${winsA} - ${winsB} ${nameOf(b)})`,
+          ),
+        );
+        this.broadcast(room.id);
+        return { newRoundStarted: false, tournamentFinished: false, nextGame: { roundNumber, matchNumber } };
+      }
+      matchWinnerId = winsA === winsB ? null : winsA > winsB ? a : b;
+      played = this.seriesPlayed.has(seriesKey);
+      loserId = matchWinnerId === null ? null : matchWinnerId === a ? b : a;
+    }
+    this.seriesPlayed.delete(seriesKey);
+
+    this.recordResult(room, round, pairing, matchWinnerId, false, gameRoomId);
+    if (!played) round.results[round.results.length - 1].played = false;
+    winnerId = matchWinnerId;
+
     room.events.push(
       this.createEvent(
         "info",
@@ -1976,7 +2126,10 @@ export class DraftRoomManager {
       isBye: false,
       walkover,
       gameRoomId,
+      games: pairing.games.map((g) => ({ ...g })),
+      wins: { ...pairing.wins },
     });
+    this.seriesPlayed.delete(`${room.id}:${round.roundNumber}:${pairing.matchNumber}`);
 
     for (const standing of tournament.standings) {
       if (standing.playerId === winnerId) standing.wins++;
@@ -2071,7 +2224,12 @@ export class DraftRoomManager {
   }
 }
 
-export type TournamentProgress = { newRoundStarted: boolean; tournamentFinished: boolean };
+export type TournamentProgress = {
+  newRoundStarted: boolean;
+  tournamentFinished: boolean;
+  /** bo3: the series of this match goes on, the caller creates its next game. */
+  nextGame?: { roundNumber: number; matchNumber: number } | null;
+};
 
 /** A finished draft room stays this long (final standings and prizes), then it is removed. */
 const FINISHED_ROOM_TTL_MS = 30 * 60_000;

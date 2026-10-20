@@ -7,7 +7,7 @@
  * Identity never comes from a payload; see getAuthUserId() in handlers.ts.
  */
 import { z } from "zod";
-import { CARD_SET_IDS, DRAFT_PACK_SETS } from "./draft-rooms.js";
+import { CARD_SET_IDS, DRAFT_PACK_SETS, MATCH_FORMATS, MAX_BONUS_PICKS, packRaritiesError } from "./draft-rooms.js";
 import { draftRewardsError, draftRewardsSchema } from "./draft-rewards.js";
 
 // ---------------------------------------------------------------------------
@@ -158,16 +158,32 @@ const draftConfig = z.object({
   /** Sets whose Trainers go into the Trainers pack (default: every set of the draft); checked against packSets by createRoom */
   trainerSets: z.array(z.enum(CARD_SET_IDS)).min(1, "Elige al menos una expansión para el sobre de Entrenadores").max(CARD_SET_IDS.length).optional(),
   cardsPerPack: z.number().int().min(5).max(15).optional(),
+  /** Rare / uncommon / common slots of every pack; sum = cardsPerPack (default 11), checked below */
+  packRarities: z
+    .object({
+      rare: z.number().int().min(1, "Cada sobre debe tener al menos 1 carta rara"),
+      uncommon: z.number().int().min(0),
+      common: z.number().int().min(0),
+    })
+    .optional(),
+  /** Bonus cards each player picks after the last round (0 = no bonus-pick phase), default 5 */
+  bonusPicks: z.number().int().min(0).max(MAX_BONUS_PICKS).optional(),
   pickTimeSeconds: z.number().int().min(15).max(90).optional(),
   keepInCollection: z.boolean().optional(),
   minDeckSize: z.number().int().min(20).max(60).optional(),
   entryFee: z.number().int().min(0).max(10_000).optional(),
   adminPlays: z.boolean().optional(),
+  /** Each match: one game or a best-of-3 series (default "bo1") */
+  matchFormat: z.enum(MATCH_FORMATS).optional(),
   /** Admin prizes on top of the entry-fee pool (draft-rewards.ts); places must exist in this draft */
   rewards: draftRewardsSchema.optional(),
 }).superRefine((config, ctx) => {
   const error = config.rewards && draftRewardsError(config.rewards, config.maxPlayers ?? 8);
   if (error) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["rewards"], message: error, params: { forPlayer: true } });
+  const rarityError = config.packRarities && packRaritiesError(config.packRarities, config.cardsPerPack ?? 11);
+  if (rarityError) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["packRarities"], message: rarityError, params: { forPlayer: true } });
+  }
 });
 
 export const draftSchemas = {
@@ -178,7 +194,7 @@ export const draftSchemas = {
   bonusPick: z.object({ roomId, cardDefIds: idList(10) }),
   submitDeck: z.object({
     roomId,
-    // 6 packs x 15 cards + 3 bonus picks is the most a player can draft
+    // 6 packs x 15 cards + 10 bonus picks is the most a player can draft
     deckCardIds: idList(120),
     energyCards: z
       .array(z.object({ type: z.enum(BASIC_ENERGY_TYPES), count: z.number().int().min(0).max(MAX_ZONE_CARDS) }))

@@ -136,6 +136,27 @@ export async function createMatchGames(
   broadcastDraftState(io, draftRoomId);
 }
 
+/** bo3: the next game of a series still undecided (same two players, same seats). */
+export async function createSeriesGame(
+  io: Server,
+  draftRoomId: string,
+  roundNumber: number,
+  matchNumber: number,
+  gameRoomManager: GameRoomManager,
+): Promise<void> {
+  const draftRoom = draftRoomManager.getRoom(draftRoomId);
+  if (!draftRoom || draftRoom.phase !== "matching") return;
+  if (draftRoomManager.isMatchDecided(draftRoomId, roundNumber, matchNumber)) return;
+  const pairing = draftRoom.tournament?.rounds
+    .find((r) => r.roundNumber === roundNumber)
+    ?.pairings.find((p) => p.matchNumber === matchNumber);
+  const p1 = draftRoom.players.find((p) => p.id === pairing?.player1.id);
+  const p2 = draftRoom.players.find((p) => p.id === pairing?.player2.id);
+  if (!p1 || !p2) return;
+  await createMatchGame(io, draftRoomId, roundNumber, matchNumber, p1, p2, gameRoomManager);
+  broadcastDraftState(io, draftRoomId);
+}
+
 /** One draft match: a game room with both drafted decks, and each player told. */
 async function createMatchGame(
   io: Server,
@@ -148,8 +169,8 @@ async function createMatchGame(
 ): Promise<void> {
   if (!p1.deck || !p2.deck) return;
   const [p1Identity, p2Identity] = await Promise.all([draftGameIdentity(p1), draftGameIdentity(p2)]);
-  // The draft may have been closed while this round's games were being created
-  if (!draftRoomManager.getRoom(draftRoomId)) return;
+  // The draft may have been closed (or the match decided: a player left) while the games were being created
+  if (!draftRoomManager.getRoom(draftRoomId) || draftRoomManager.isMatchDecided(draftRoomId, roundNumber, matchNumber)) return;
 
   // Create a game room (names and avatars for the game screen; not listed in the lobby) and add
   // both players. Their seats wait for them (no socket): each one's check-in clock runs until
@@ -174,7 +195,14 @@ async function createMatchGame(
   // Both players' playmat, coin and card back (owned only) for the game screen; drafted decks have no variants
   await snapshotRoomCosmetics(gameRoom);
 
-  console.log(`🎮 Draft match R${roundNumber}-M${matchNumber}: ${p1.name} vs ${p2.name} → room ${gameRoomId}`);
+  const gameNumber = draftRoomManager.currentGameNumber(draftRoomId, roundNumber, matchNumber);
+  const draftRoom = draftRoomManager.getRoom(draftRoomId);
+  const matchFormat = draftRoom?.config.matchFormat ?? "bo1";
+  const pairing = draftRoom?.tournament?.rounds
+    .find((r) => r.roundNumber === roundNumber)
+    ?.pairings.find((p) => p.matchNumber === matchNumber);
+  const wins = { ...(pairing?.wins ?? {}) };
+  console.log(`🎮 Draft match R${roundNumber}-M${matchNumber} G${gameNumber}: ${p1.name} vs ${p2.name} → room ${gameRoomId}`);
   // A player who isn't connected right now (e.g. still on the last game's screen) has
   // DRAFT_CHECKIN_MS to show up
   gameRoomManager.ensureForfeitTimers(gameRoomId, DRAFT_CHECKIN_MS);
@@ -190,6 +218,7 @@ async function createMatchGame(
       roundNumber,
       isPlayer1,
       opponentName: opponent.name,
+      gameNumber,
     });
     if (player.socketId) {
       io.to(player.socketId).emit("draft:matchReady", {
@@ -200,6 +229,9 @@ async function createMatchGame(
         userId: player.id,
         isPlayer1,
         opponentName: opponent.name,
+        matchFormat,
+        gameNumber,
+        wins,
         gameState: maskRoomState(gameRoomManager, gameRoom, gameState, isPlayer1 ? "player1" : "player2"),
       });
     }
@@ -248,11 +280,18 @@ export function announceDraftResult(
         draftRoomId,
         ...result,
         tournamentFinished: draftRoom.phase === "finished",
+        // bo3: false while the series goes on (its next game comes as draft:matchReady)
+        seriesFinished: !progress.nextGame,
       });
     }
   }
   // Results and the games still being played (spectators follow the bracket from the state)
   broadcastDraftState(io, draftRoomId);
+  if (progress.nextGame) {
+    createSeriesGame(io, draftRoomId, progress.nextGame.roundNumber, progress.nextGame.matchNumber, gameRoomManager).catch(
+      (err) => console.error("Error creating the next game of a series:", err),
+    );
+  }
   if (progress.newRoundStarted && draftRoom.tournament) {
     createMatchGames(io, draftRoomId, draftRoom.tournament.currentRoundNumber, gameRoomManager).catch((err) => {
       console.error("Error creating next round games:", err);
@@ -663,6 +702,13 @@ export function registerDraftEvents(
               userId,
               isPlayer1: pendingMatch.isPlayer1,
               opponentName: pendingMatch.opponentName,
+              matchFormat: room.config.matchFormat,
+              gameNumber: pendingMatch.gameNumber,
+              wins: {
+                ...room.tournament?.rounds
+                  .find((r) => r.roundNumber === pendingMatch.roundNumber)
+                  ?.pairings.find((p) => p.matchNumber === pendingMatch.matchNumber)?.wins,
+              },
               gameState: maskRoomState(
                 gameRoomManager,
                 gameRoom,

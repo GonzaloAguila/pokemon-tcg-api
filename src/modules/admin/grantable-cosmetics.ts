@@ -12,12 +12,14 @@ import {
   AVAILABLE_CARD_BACKS,
   AVAILABLE_COINS,
   AVAILABLE_PLAYMATS,
+  ADMIN_ONLY_PLAYMATS,
+  TROPHIES,
 } from "../prizes/catalog.js";
 import { ECONOMY } from "../economy/config.js";
 import { FREE_AVATAR_IDS } from "../users/users.service.js";
 import { COLLECTIBLE_EMOTES } from "../emotes/catalog.js";
 
-export const COSMETIC_TYPES = ["coin", "cardBack", "avatar", "skin", "playmat", "emote"] as const;
+export const COSMETIC_TYPES = ["coin", "cardBack", "avatar", "skin", "playmat", "emote", "trophy"] as const;
 export type CosmeticType = (typeof COSMETIC_TYPES)[number];
 
 export const COSMETIC_TYPE_LABELS: Record<CosmeticType, string> = {
@@ -27,6 +29,7 @@ export const COSMETIC_TYPE_LABELS: Record<CosmeticType, string> = {
   skin: "Skin de carta",
   playmat: "Tapete",
   emote: "Emote",
+  trophy: "Trofeo",
 };
 
 export const GRANTABLE_COSMETICS: Record<CosmeticType, ReadonlySet<string>> = {
@@ -38,8 +41,9 @@ export const GRANTABLE_COSMETICS: Record<CosmeticType, ReadonlySet<string>> = {
   avatar: new Set(AVAILABLE_AVATARS.map((a) => a.itemId).filter((id) => !FREE_AVATAR_IDS.has(id))),
   // "<pokemon-slug>-<overlayId>": every Rare Holo Pokémon × every overlay (catalog.ts)
   skin: new Set(ALL_VARIANTS.map((v) => v.itemId)),
-  playmat: new Set(AVAILABLE_PLAYMATS.map((p) => p.itemId)),
+  playmat: new Set([...AVAILABLE_PLAYMATS, ...ADMIN_ONLY_PLAYMATS].map((p) => p.itemId)),
   emote: new Set(COLLECTIBLE_EMOTES.map((e) => e.id)),
+  trophy: new Set(TROPHIES.map((t) => t.itemId)),
 };
 
 export function isGrantableCosmetic(type: CosmeticType, itemId: string): boolean {

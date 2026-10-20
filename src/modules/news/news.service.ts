@@ -71,9 +71,17 @@ const NEWEST_FIRST: Prisma.NewsPostOrderByWithRelationInput[] = [{ publishedAt: 
 // Text helpers
 // =============================================================================
 
-/** Plain-text preview of a markdown-lite body: markers removed, whitespace collapsed, cut at a word. */
+/**
+ * The body without its embed lines (`[[torneo-halloween-2026]]`: a block the frontend's news page
+ * draws, see src/features/news/embeds). Excerpts and Mensajes only carry the text.
+ */
+export function stripEmbeds(body: string): string {
+  return body.replace(/^[ \t]*\[\[[a-z0-9-]+\]\][ \t]*(\r?\n|$)/gm, "").trim();
+}
+
+/** Plain-text preview of a markdown-lite body: embeds and markers removed, whitespace collapsed, cut at a word. */
 export function toExcerpt(body: string, length = EXCERPT_LENGTH): string {
-  const plain = body
+  const plain = stripEmbeds(body)
     .replace(/\*\*(.+?)\*\*/g, "$1")
     .replace(/__(.+?)__/g, "$1")
     .replace(/\*(.+?)\*/g, "$1")
@@ -237,8 +245,8 @@ function assertCta(ctaLabel: string | null, ctaHref: string | null) {
 
 /** Broadcast "Avisar en Mensajes": maintenance posts use the maintenance category, the rest "news". */
 async function createNotification(tx: Prisma.TransactionClient, post: NewsPost, senderId: string) {
-  const content =
-    post.body.length > NOTIFICATION_BODY_LENGTH ? toExcerpt(post.body, NOTIFICATION_BODY_LENGTH) : post.body;
+  const text = stripEmbeds(post.body);
+  const content = text.length > NOTIFICATION_BODY_LENGTH ? toExcerpt(text, NOTIFICATION_BODY_LENGTH) : text;
   const message = await tx.systemMessage.create({
     data: {
       type: "broadcast",

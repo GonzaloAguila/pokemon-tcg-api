@@ -28,14 +28,25 @@ function applySessionChange(userId: string, kickMessage?: string) {
 /**
  * Who an admin may moderate or adjust: never a superadmin, and another admin only when the
  * actor is the superadmin. Both roles come from the DB (`db`: the caller's transaction, if any).
+ * Nobody acts on their own account, except the superadmin with `allowSuperadminSelf` (economy
+ * and collection adjustments, cosmetic grants: never moderation, role or deletion).
  */
-async function assertCanActOn(db: Db, actorId: string, targetId: string): Promise<{ role: UserRole; status: string }> {
+async function assertCanActOn(
+  db: Db,
+  actorId: string,
+  targetId: string,
+  opts: { allowSuperadminSelf?: boolean } = {},
+): Promise<{ role: UserRole; status: string }> {
   const rows = await db.user.findMany({
     where: { id: { in: [actorId, targetId] } },
     select: { id: true, role: true, status: true },
   });
   const target = rows.find((u) => u.id === targetId);
   if (!target) throw Errors.NotFound("Usuario");
+  if (actorId === targetId) {
+    if (opts.allowSuperadminSelf && target.role === "superadmin") return target;
+    throw Errors.Forbidden("No puedes realizar esta acción sobre tu propia cuenta");
+  }
   if (target.role === "superadmin") {
     throw Errors.Forbidden("No se puede aplicar esta acción a un superadmin");
   }
@@ -203,13 +214,14 @@ export async function searchUsersBrief(query: string, limit = 10) {
 // ---------------------------------------------------------------------------
 
 export async function getUserOwnedCosmetics(userId: string) {
-  const [coins, cardBacks, avatars, skins, playmats, emotes] = await Promise.all([
+  const [coins, cardBacks, avatars, skins, playmats, emotes, trophies] = await Promise.all([
     prisma.userCoin.findMany({ where: { userId }, select: { coinId: true } }),
     prisma.userCardBack.findMany({ where: { userId }, select: { cardBackId: true } }),
     prisma.userAvatar.findMany({ where: { userId }, select: { avatarId: true } }),
     prisma.userCardSkin.findMany({ where: { userId }, select: { skinId: true } }),
     prisma.userPlaymat.findMany({ where: { userId }, select: { playmatId: true } }),
     prisma.userEmote.findMany({ where: { userId }, select: { emoteId: true } }),
+    prisma.userMedal.findMany({ where: { userId, medalId: { in: [...GRANTABLE_COSMETICS.trophy] } }, select: { medalId: true } }),
   ]);
 
   return {
@@ -219,6 +231,7 @@ export async function getUserOwnedCosmetics(userId: string) {
     skinIds: skins.map((s) => s.skinId),
     playmatIds: playmats.map((p) => p.playmatId),
     emoteIds: emotes.map((e) => e.emoteId),
+    trophyIds: trophies.map((t) => t.medalId),
   };
 }
 
@@ -535,7 +548,7 @@ async function adjustBalance(
   const { title, unit } = BALANCE_LABELS[currency];
 
   return prisma.$transaction(async (tx) => {
-    await assertCanActOn(tx, adminId, userId);
+    await assertCanActOn(tx, adminId, userId, { allowSuperadminSelf: true });
     const balances = await tx.user.findUniqueOrThrow({
       where: { id: userId },
       select: { coins: true, coupons: true, rareCandy: true },
@@ -551,7 +564,8 @@ async function adjustBalance(
       ? await usersService.creditBalance(userId, currency, amount, "admin_adjustment", description, tx)
       : await usersService.debitBalance(userId, currency, -amount, "admin_adjustment", description, tx);
 
-    await tx.systemMessage.create({
+    // The player's notice (none when the superadmin adjusts their own account: the wallet row is the record)
+    if (adminId !== userId) await tx.systemMessage.create({
       data: {
         type: "personal",
         title: `${title}: ${amount > 0 ? "+" : "-"}${Math.abs(amount)}`,
@@ -605,7 +619,7 @@ export async function adjustCards(
   }
 
   const outcome = await prisma.$transaction(async (tx) => {
-    await assertCanActOn(tx, adminId, userId);
+    await assertCanActOn(tx, adminId, userId, { allowSuperadminSelf: true });
 
     const results: { cardDefId: string; newQuantity: number }[] = [];
     const applied: CardChange[] = [];
@@ -675,12 +689,7 @@ export async function grantCosmetic(
     await prisma.$transaction(async (tx) => {
       // The superadmin may grant cosmetics to their own account; nobody else acts on themselves
       const isSelf = adminId === userId;
-      if (isSelf) {
-        const actor = await tx.user.findUnique({ where: { id: adminId }, select: { role: true } });
-        if (actor?.role !== "superadmin") throw Errors.Forbidden("No puedes realizar esta acción sobre tu propia cuenta");
-      } else {
-        await assertCanActOn(tx, adminId, userId);
-      }
+      await assertCanActOn(tx, adminId, userId, { allowSuperadminSelf: true });
       switch (type) {
         case "coin":
           await tx.userCoin.create({ data: { userId, coinId: itemId } });
@@ -699,6 +708,9 @@ export async function grantCosmetic(
           break;
         case "emote":
           await tx.userEmote.create({ data: { userId, emoteId: itemId } });
+          break;
+        case "trophy":
+          await tx.userMedal.create({ data: { userId, medalId: itemId } });
           break;
       }
 
@@ -809,7 +821,7 @@ export async function adjustStats(userId: string, field: string, amount: number,
   const statField = field as StatField;
 
   return prisma.$transaction(async (tx) => {
-    await assertCanActOn(tx, adminId, userId);
+    await assertCanActOn(tx, adminId, userId, { allowSuperadminSelf: true });
     // Ensure UserStats exists
     await tx.userStats.upsert({ where: { userId }, create: { userId }, update: {} });
 

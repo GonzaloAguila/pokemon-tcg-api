@@ -213,6 +213,19 @@ describe("getting emotes", () => {
     expect(draftRewardsSchema.safeParse([{ target: "all", items: [{ type: "emote", id: RARE.id }] }]).success).toBe(true);
     expect(draftRewardsSchema.safeParse([{ target: "all", items: [{ type: "emote", id: "eevee-cool" }] }]).success).toBe(false);
   });
+
+  it("exclusive emotes are only granted: never in the market nor in the prizes", async () => {
+    const exclusive = BATTLE_EMOTES.filter((e) => e.exclusive).map((e) => e.id);
+    expect(exclusive).toContain("gengar-tongue");
+    for (let day = 0; day < 60; day++) {
+      const offers = await getDailyOffers(undefined, new Date(Date.UTC(2026, 9, 1 + day, 12)));
+      expect(exclusive).not.toContain(offers.cosmeticOffers.find((o) => o.type === "emote")!.itemId);
+    }
+    const allButExclusive = new Set(COLLECTIBLE_EMOTES.filter((e) => !e.exclusive).map((e) => e.id));
+    expect(resolveEmote(allButExclusive)).toBeNull();
+    expect(isGrantableCosmetic("emote", "gengar-tongue")).toBe(true);
+    expect(draftRewardsSchema.safeParse([{ target: { place: 1 }, items: [{ type: "emote", id: "gengar-tongue" }] }]).success).toBe(true);
+  });
 });
 
 describe("rate limit", () => {
@@ -344,7 +357,7 @@ async function draftGame() {
   for (const [u, name] of [[a, "A"], [b, "B"]] as const) draftRoomManager.joinRoom(draft.id, u.id, `draft-${name}`, name);
   draft.phase = "matching";
   draft.tournament = {
-    rounds: [{ roundNumber: 1, pairings: [{ matchNumber: 1, player1: { id: a.id, name: "A" }, player2: { id: b.id, name: "B" } }], byePlayerId: null, status: "in_progress", results: [] }],
+    rounds: [{ roundNumber: 1, pairings: [{ matchNumber: 1, player1: { id: a.id, name: "A" }, player2: { id: b.id, name: "B" }, games: [], wins: { [a.id]: 0, [b.id]: 0 } }], byePlayerId: null, status: "in_progress", results: [] }],
     standings: [a, b].map((u, i) => ({ playerId: u.id, playerName: "AB"[i], wins: 0, losses: 0, byes: 0, withdrawn: false })),
     currentRoundNumber: 1,
     totalRounds: 1,

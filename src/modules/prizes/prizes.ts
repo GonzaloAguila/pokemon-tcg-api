@@ -20,7 +20,7 @@ import {
   AVAILABLE_PLAYMATS,
   ALL_VARIANTS,
 } from "./catalog.js";
-import { COLLECTIBLE_EMOTES, emoteImageUrl } from "../emotes/catalog.js";
+import { POOL_EMOTES, emoteImageUrl } from "../emotes/catalog.js";
 import { grantEmote } from "../emotes/emotes.service.js";
 
 export type ResolvedPrize =
@@ -133,7 +133,7 @@ export function resolvePlaymat(): ResolvedPrize {
  * null when they own them all: a prize never names an emote that adds nothing.
  */
 export function resolveEmote(owned: ReadonlySet<string> = new Set()): (ResolvedPrize & { type: "emote" }) | null {
-  const pool = COLLECTIBLE_EMOTES.filter((e) => !owned.has(e.id));
+  const pool = POOL_EMOTES.filter((e) => !owned.has(e.id));
   if (pool.length === 0) return null;
   const emote = pick(pool);
   return { type: "emote", emoteId: emote.id, emoteName: emote.name, emoteImageUrl: emoteImageUrl(emote.id), emoteRarity: emote.rarity };

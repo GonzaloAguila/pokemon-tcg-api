@@ -7,13 +7,14 @@ import {
   decks as themeDeckList,
 } from "@gonzaloaguila/game-core";
 import type { GameState } from "@gonzaloaguila/game-core";
-import { GameRoomManager, PrivateTableError, RoomNotFoundError, SeatedSpectatorError, isPublicTable, type ActionResult, type GameRoom, type PlayerKey } from "./rooms.js";
+import { GameRoomManager, OwnTableTakenError, PrivateTableError, RoomNotFoundError, SeatedSpectatorError, isPublicTable, type ActionResult, type GameRoom, type PlayerKey } from "./rooms.js";
 import { SPECTATE_RATE_LIMITED, allowSpectate, forgetSpectateSocket } from "./spectate-limit.js";
 import { maskRoomState } from "./room-state.js";
 import { cosmeticsPayload, getRoomCosmetics, snapshotRoomCosmetics } from "./room-cosmetics.js";
 import type { Viewer } from "./state-masking.js";
 import { maxBetForTitle, titleIdFromStats } from "../modules/users/titles.js";
 import { checkDeckPlayable } from "../modules/decks/decks.service.js";
+import { describeDeck } from "../modules/decks/deck-rank.js";
 import {
   registerDraftEvents,
   draftRoomManager,
@@ -167,6 +168,9 @@ async function startRoomGame(io: Server, roomId: string): Promise<GameState | nu
   const room = roomManager.getRoom(roomId);
   if (!room || room.status !== "waiting" || room.startPending || !room.player1Id || !room.player2Id) return null;
   room.startPending = true;
+  // Both players play this game: their other waiting tables close now (before any await, so a
+  // second table of the creator can't start meanwhile; one already starting fails and refunds)
+  closeOtherWaitingRooms(io, [room.player1Id, room.player2Id], roomId);
   try {
     try {
       await openRoomMatch(room, roomMatchMode(room, false));
@@ -194,7 +198,49 @@ async function startRoomGame(io: Server, roomId: string): Promise<GameState | nu
     throw err;
   } finally {
     room.startPending = false;
+    emitMyRooms(io, room.player1Id, room.player2Id);
   }
+}
+
+/**
+ * The user's own waiting tables with their deck (`myRooms`, only to that user: the public room
+ * list is anonymous). Also the ones whose creator left the lobby (rejoin them to keep them).
+ */
+function myRoomsPayload(userId: string) {
+  return {
+    rooms: roomManager.findWaitingRoomsByUser(userId).map((r) => ({
+      id: r.id,
+      mode: r.config.mode,
+      deckId: r.config.mode === "lucky-duel" ? null : r.player1DeckId,
+      deckName: r.config.mode === "lucky-duel" ? null : (r.creatorDeck?.name ?? null),
+      prizeCount: r.config.prizeCount,
+      betAmount: r.config.betAmount,
+      deckRank: r.config.mode === "lucky-duel" ? null : (r.creatorDeck?.rank ?? null),
+    })),
+  };
+}
+
+/** `myRooms` to every socket of these users (after their tables changed). */
+function emitMyRooms(io: Server, ...userIds: (string | null | undefined)[]): void {
+  for (const userId of new Set(userIds)) {
+    if (userId) io.to(userRoom(userId)).emit("myRooms", myRoomsPayload(userId));
+  }
+}
+
+/**
+ * Close these users' waiting tables but `keepRoomId` (GameRoomManager.closeWaitingRoomsOf):
+ * everyone in each closed room and its creator's sockets get `roomDeleted`, the lobbies the new
+ * room list.
+ */
+function closeOtherWaitingRooms(io: Server, userIds: (string | null)[], keepRoomId: string): void {
+  const closed = roomManager.closeWaitingRoomsOf(userIds, keepRoomId);
+  for (const room of closed) {
+    io.to([room.id, ...(room.player1Id ? [userRoom(room.player1Id)] : [])]).emit("roomDeleted", { roomId: room.id });
+    io.in(room.id).socketsLeave(room.id);
+    console.log(`🗑️ Waiting room ${room.id} closed (its creator plays in ${keepRoomId})`);
+  }
+  if (closed.length > 0) broadcastRoomList(io);
+  emitMyRooms(io, ...closed.map((r) => r.player1Id));
 }
 
 /** A player couldn't cover the bet when the game was about to start (nobody was charged). */
@@ -218,6 +264,7 @@ async function handleUnpaidBet(io: Server, room: GameRoom, userId: string): Prom
       io.to(creatorSocket).emit("error", { message: `No tienes suficientes monedas para la apuesta de tu mesa (${bet} monedas). La mesa se cerró.` });
       io.to(creatorSocket).emit("roomDeleted", { roomId: room.id });
     }
+    emitMyRooms(io, userId);
     if (joinerSocket) {
       io.in(joinerSocket).socketsLeave(room.id);
       io.to(joinerSocket).emit("error", { message: "El creador de la mesa ya no tiene monedas para la apuesta. La mesa se cerró." });
@@ -302,6 +349,8 @@ function serializeRoom(r: ReturnType<typeof roomManager.getRoom>) {
     betAmount: r.config.betAmount,
     reservedUserId: r.config.reservedUserId,
     friendly: r.config.friendly,
+    /** The creator's deck rank F–S (deck-rank.ts); null at Lucky Duel (no deck). */
+    deckRank: r.config.mode === "lucky-duel" ? null : (r.creatorDeck?.rank ?? null),
     creatorUsername: isWaiting ? null : r.creator.username,
     creatorAvatarId: isWaiting ? null : r.creator.avatarId,
     creatorTitleId: isWaiting ? null : r.creator.titleId,
@@ -358,8 +407,10 @@ function announceSpectators(io: Server, room: GameRoom): void {
  * Returns false when the room doesn't exist.
  */
 export function closeRoomByAdmin(io: Server | null, roomId: string, reason = "Mesa cerrada por un administrador"): boolean {
+  const creatorId = roomManager.getRoom(roomId)?.player1Id;
   if (!roomManager.forceDeleteRoom(roomId)) return false;
   if (io) {
+    emitMyRooms(io, creatorId);
     io.to(roomId).emit("gameClosed", { roomId, reason });
     io.to(roomId).emit("roomDeleted", { roomId });
     io.in(roomId).socketsLeave(roomId);
@@ -556,6 +607,13 @@ export function setupSocketHandlers(io: Server): void {
     // Lobby - Room Listing
     // ==========================================================================
 
+    // The user's own waiting tables (a reloaded lobby restores them)
+    if (socket.data.user?.userId) socket.emit("myRooms", myRoomsPayload(socket.data.user.userId));
+    socket.on("getMyRooms", () => {
+      const userId = getAuthUserId(socket);
+      if (userId) socket.emit("myRooms", myRoomsPayload(userId));
+    });
+
     socket.on("getRooms", () => {
       socket.emit("roomList", {
         rooms: roomManager.getActiveRooms().map(serializeRoom).filter(Boolean),
@@ -579,6 +637,8 @@ export function setupSocketHandlers(io: Server): void {
           const deckError = await checkDeckPlayable(userId, deckId);
           if (deckError) { socket.emit("error", { message: deckError }); return; }
         }
+        // The lobby shows the deck's rank F–S, never the deck
+        const creatorDeck = deckId ? await describeDeck(userId, deckId) : undefined;
         // Table bets are off unless ECONOMY.tableBets.enabled (the bet is forced to 0). When on:
         // friendly tables carry no bet; otherwise the bet is capped by the creator's title (lobby
         // slider), the creator must be eligible and cover it now (it's charged to both players
@@ -600,6 +660,13 @@ export function setupSocketHandlers(io: Server): void {
             return;
           }
         }
+        // One waiting table per mode (checked after the awaits: nothing runs between it and the seat)
+        if (roomManager.findWaitingRoomsByUser(userId).some((r) => r.config.mode === mode)) {
+          socket.emit("error", {
+            message: luckyDuel ? "Ya tienes una mesa de Lucky Duel esperando rival" : "Ya tienes una mesa esperando rival",
+          });
+          return;
+        }
         const room = roomManager.createRoom(
           undefined,
           { mode, prizeCount, betAmount, reservedUserId: reservedUserId || null, friendly: friendly ?? false },
@@ -610,6 +677,7 @@ export function setupSocketHandlers(io: Server): void {
         // Set deck if provided
         if (deckId) {
           roomManager.setPlayerDeck(room.id, socket.id, deckId);
+          room.creatorDeck = creatorDeck;
         }
 
         socket.join(room.id);
@@ -622,6 +690,7 @@ export function setupSocketHandlers(io: Server): void {
         });
 
         broadcastRoomList(io);
+        emitMyRooms(io, userId);
 
         console.log(`🏠 Room ${room.id} created by ${userId} (mode:${room.config.mode}, prizes:${room.config.prizeCount}, bet:${room.config.betAmount})`);
       } catch (error) {
@@ -651,6 +720,7 @@ export function setupSocketHandlers(io: Server): void {
           }
 
           broadcastRoomList(io);
+          emitMyRooms(io, userId);
 
           console.log(`🗑️ Room ${roomId} deleted`);
         } else {
@@ -705,15 +775,6 @@ export function setupSocketHandlers(io: Server): void {
           }
         }
 
-        // Auto-close any waiting room the user owns before joining another
-        const existingWaitingRoom = roomManager.findWaitingRoomByUser(userId);
-        if (existingWaitingRoom && existingWaitingRoom.id !== roomId) {
-          // Force-close waiting room since user is joining another
-          roomManager.forceDeleteRoom(existingWaitingRoom.id);
-          broadcastRoomList(io);
-          console.log(`🗑️ Auto-deleted waiting room ${existingWaitingRoom.id} (user ${userId} joining ${roomId})`);
-        }
-
         console.log(`[joinRoom] Attempting to join room ${roomId} as ${userId}`);
         const room = await roomManager.joinRoom(roomId, userId, socket.id, identity);
         console.log(`[joinRoom] Room state after join:`, {
@@ -722,9 +783,18 @@ export function setupSocketHandlers(io: Server): void {
           status: room.status,
         });
 
+        // Taking a seat at another table closes the user's own waiting tables
+        if (!seated) closeOtherWaitingRooms(io, [userId], roomId);
+
         // Set deck if provided (only before the game starts)
         if (deckId && room.status === "waiting") {
           roomManager.setPlayerDeck(roomId, socket.id, deckId);
+          // The creator coming back with another deck: the table shows that one's rank
+          if (room.player1Id === userId) {
+            room.creatorDeck = await describeDeck(userId, deckId);
+            broadcastRoomList(io);
+            emitMyRooms(io, userId);
+          }
         }
 
         socket.join(roomId);
@@ -811,6 +881,10 @@ export function setupSocketHandlers(io: Server): void {
       } catch (error) {
         if (error instanceof RoomNotFoundError) {
           socket.emit("error", { code: error.code, message: error.message });
+          return;
+        }
+        if (error instanceof OwnTableTakenError) {
+          socket.emit("error", { code: error.code, message: error.message, roomId: error.roomId });
           return;
         }
         socket.emit("error", { message: (error as Error).message });
@@ -1254,9 +1328,10 @@ export function setupSocketHandlers(io: Server): void {
   });
 
   // A waiting room deleted by the manager (its creator left the lobby): refresh the lobbies
-  roomManager.setOnRoomClosed((roomId) => {
+  roomManager.setOnRoomClosed((roomId, room) => {
     io.to(roomId).emit("roomDeleted", { roomId });
     io.in(roomId).socketsLeave(roomId);
     broadcastRoomList(io);
+    emitMyRooms(io, room.player1Id);
   });
 }

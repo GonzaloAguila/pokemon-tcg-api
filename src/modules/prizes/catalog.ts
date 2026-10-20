@@ -32,10 +32,11 @@ export const AVAILABLE_COINS: CosmeticItem[] = [
 ];
 
 /**
- * Gym-leader coins (frontend COIN_COLLECTION, source "gym-leader"): not sold nor won, only granted
- * from the backoffice.
+ * Gym-leader and event coins (frontend COIN_COLLECTION, source "gym-leader" / "event"): not sold nor
+ * won, only granted from the backoffice.
  */
 export const ADMIN_ONLY_COINS: readonly string[] = [
+  "gengar",
   "golem",
   "starmie",
   "raichu",
@@ -51,6 +52,21 @@ export const AVAILABLE_CARD_BACKS: CosmeticItem[] = [
   { itemId: "draw", name: "Draw", imageUrl: "/card-backs/card-back-draw.jpg" },
   { itemId: "pikachu", name: "Pikachu", imageUrl: "/card-backs/card-back-pikachu.jpg" },
   { itemId: "pokeball", name: "Poké Ball", imageUrl: "/card-backs/card-back-pokeball.jpg" },
+];
+
+/** Event playmats (frontend PLAYMAT_COLLECTION, source "event"): not sold nor won, only granted. */
+export const ADMIN_ONLY_PLAYMATS: CosmeticItem[] = [
+  { itemId: "halloween-forest", name: "Bosque Embrujado", imageUrl: "/bg/bg-halloween-forest.jpg" },
+];
+
+/**
+ * Trophies (frontend src/domain/profile/trophies.ts): event and tournament awards shown in the
+ * profile. Only granted (backoffice, draft prizes); stored as UserMedal rows with these ids.
+ */
+export const TROPHIES: CosmeticItem[] = [
+  { itemId: "trophy-halloween-2026-gold", name: "Calabaza de Oro", imageUrl: "/trophies/halloween-2026-gold.svg" },
+  { itemId: "trophy-halloween-2026-silver", name: "Calabaza de Plata", imageUrl: "/trophies/halloween-2026-silver.svg" },
+  { itemId: "trophy-halloween-2026-bronze", name: "Calabaza de Bronce", imageUrl: "/trophies/halloween-2026-bronze.svg" },
 ];
 
 export const AVAILABLE_AVATARS: CosmeticItem[] = [
