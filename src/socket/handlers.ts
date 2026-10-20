@@ -7,7 +7,7 @@ import {
   decks as themeDeckList,
 } from "@gonzaloaguila/game-core";
 import type { GameState } from "@gonzaloaguila/game-core";
-import { GameRoomManager, PrivateTableError, RoomNotFoundError, SeatedSpectatorError, isPublicTable, type ActionResult, type GameRoom, type PlayerKey } from "./rooms.js";
+import { GameRoomManager, OwnTableTakenError, PrivateTableError, RoomNotFoundError, SeatedSpectatorError, isPublicTable, type ActionResult, type GameRoom, type PlayerKey } from "./rooms.js";
 import { SPECTATE_RATE_LIMITED, allowSpectate, forgetSpectateSocket } from "./spectate-limit.js";
 import { maskRoomState } from "./room-state.js";
 import { cosmeticsPayload, getRoomCosmetics, snapshotRoomCosmetics } from "./room-cosmetics.js";
@@ -879,6 +879,10 @@ export function setupSocketHandlers(io: Server): void {
       } catch (error) {
         if (error instanceof RoomNotFoundError) {
           socket.emit("error", { code: error.code, message: error.message });
+          return;
+        }
+        if (error instanceof OwnTableTakenError) {
+          socket.emit("error", { code: error.code, message: error.message, roomId: error.roomId });
           return;
         }
         socket.emit("error", { message: (error as Error).message });

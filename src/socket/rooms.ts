@@ -233,6 +233,15 @@ export class RoomNotFoundError extends Error {
   }
 }
 
+/** Joining another table while a rival already sat at one of yours: go to yours (`roomId`). */
+export class OwnTableTakenError extends Error {
+  readonly code = "OWN_TABLE_TAKEN";
+  constructor(readonly roomId: string) {
+    super("Un rival ya se unió a tu mesa");
+    this.name = "OwnTableTakenError";
+  }
+}
+
 /**
  * The player the game is waiting on (the one a turn-timer kick targets), from the stored
  * state (player 1's perspective), or null when nobody / both:
@@ -914,6 +923,17 @@ export class GameRoomManager {
     // Check if room is full
     if (room.player1Id && room.player2Id) {
       throw new Error("Room is full");
+    }
+
+    // Taking a seat at a lobby table closes your waiting tables, but only if nobody sat at one of
+    // them yet: then you are sent to that table instead (checked here, atomically with the join).
+    // Draft games seat their players through here too and are left out.
+    if (!room.isDraft) {
+      for (const other of this.rooms.values()) {
+        if (other.id !== roomId && !other.isDraft && other.player1Id === userId && other.player2Id && other.status !== "finished") {
+          throw new OwnTableTakenError(other.id);
+        }
+      }
     }
 
     // A waiting room whose creator left the lobby is about to be deleted: nobody would play you

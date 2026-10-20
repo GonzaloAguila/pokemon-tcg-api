@@ -99,6 +99,22 @@ describe("one waiting table per mode", () => {
     expect(roomManager.getRoom(bTable)).toBeUndefined();
   });
 
+  it("joining elsewhere while a rival already sat at one of your tables sends you to yours", async () => {
+    const a = await player();
+    const b = await player();
+    const c = await player();
+    const aLucky = await createTable(a.socket, LUCKY);
+    const started = Promise.all([nextEvent<Any>(a.socket, "gameStart"), nextEvent<Any>(b.socket, "gameStart")]);
+    b.socket.emit("joinRoom", { roomId: aLucky });
+    await started;
+    const cTable = await createTable(c.socket, STANDARD);
+
+    const refused = nextEvent<Any>(a.socket, "error");
+    a.socket.emit("joinRoom", { roomId: cTable, deckId: "brushfire" });
+    expect(await refused).toMatchObject({ code: "OWN_TABLE_TAKEN", roomId: aLucky });
+    expect(roomManager.getRoom(cTable)?.player2Id).toBeFalsy();
+  });
+
   it("the creator never takes the rival's seat of their own table", async () => {
     const a = await player();
     const lucky = await createTable(a.socket, LUCKY);
