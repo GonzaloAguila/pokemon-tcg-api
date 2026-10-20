@@ -64,7 +64,9 @@ export const ADMIN_ONLY_PLAYMATS: CosmeticItem[] = [
  * profile. Only granted (backoffice, draft prizes); stored as UserMedal rows with these ids.
  */
 export const TROPHIES: CosmeticItem[] = [
-  { itemId: "trophy-halloween-2026", name: "Copa de Halloween 2026", imageUrl: "/trophies/halloween-2026.svg" },
+  { itemId: "trophy-halloween-2026-gold", name: "Calabaza de Oro", imageUrl: "/trophies/halloween-2026-gold.svg" },
+  { itemId: "trophy-halloween-2026-silver", name: "Calabaza de Plata", imageUrl: "/trophies/halloween-2026-silver.svg" },
+  { itemId: "trophy-halloween-2026-bronze", name: "Calabaza de Bronce", imageUrl: "/trophies/halloween-2026-bronze.svg" },
 ];
 
 export const AVAILABLE_AVATARS: CosmeticItem[] = [
