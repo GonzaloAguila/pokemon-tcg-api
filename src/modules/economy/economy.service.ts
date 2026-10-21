@@ -218,7 +218,9 @@ export async function getEconomyStatus(userId: string, now = new Date()) {
     },
     exchangeTokens: user.exchangeTokens,
     unopenedPacks,
+    /** Standard tables. */
     tableBetsEnabled: ECONOMY.tableBets.enabled,
+    luckyDuelTableBetsEnabled: ECONOMY.tableBets.luckyDuel.enabled,
   };
 }
 

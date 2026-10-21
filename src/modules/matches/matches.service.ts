@@ -70,8 +70,22 @@ export function assertValidBet(betAmount: number) {
 }
 
 // ---------------------------------------------------------------------------
-// Table bets (off by default: ECONOMY.tableBets.enabled)
+// Table bets: standard tables behind ECONOMY.tableBets.enabled (off), Lucky Duel tables behind
+// ECONOMY.tableBets.luckyDuel (on, 0–maxBet coins whatever the title, pot paid on any turn)
 // ---------------------------------------------------------------------------
+
+/** Whether a table of this kind can carry a bet. */
+export function tableBetsEnabledFor(gameMode: GameModeMarker = "standard"): boolean {
+  return gameMode === "lucky-duel" ? ECONOMY.tableBets.luckyDuel.enabled : ECONOMY.tableBets.enabled;
+}
+
+/**
+ * The highest bet a creator can put on a table of this kind: Lucky Duel's flat cap
+ * (ECONOMY.tableBets.luckyDuel.maxBet), else the creator's title cap (users/titles.ts).
+ */
+export function maxTableBet(gameMode: GameModeMarker, titleCap: number): number {
+  return gameMode === "lucky-duel" ? Math.min(ECONOMY.tableBets.luckyDuel.maxBet, MAX_BET) : titleCap;
+}
 
 /** Online games (normal + ranked + draft) that counted for the user's stats. */
 export async function countedOnlineGames(db: Db, userId: string): Promise<number> {
@@ -81,12 +95,18 @@ export async function countedOnlineGames(db: Db, userId: string): Promise<number
 }
 
 /**
- * Why `userId` can't take part in a bet table (Spanish reason), or null. Only meaningful when
- * bets are enabled: ≥ minOnlineGames counted online games and a verified email.
+ * Why `userId` can't take part in a bet table of this kind (Spanish reason), or null: bets on for
+ * that kind of table, ≥ minOnlineGames counted online games and a verified email.
  */
-export async function betIneligibilityReason(userId: string, db: Db = prisma): Promise<string | null> {
+export async function betIneligibilityReason(
+  userId: string,
+  db: Db = prisma,
+  gameMode: GameModeMarker = "standard",
+): Promise<string | null> {
   const cfg = ECONOMY.tableBets;
-  if (!cfg.enabled) return "Las apuestas de mesa están desactivadas";
+  if (!tableBetsEnabledFor(gameMode)) {
+    return gameMode === "lucky-duel" ? "Las apuestas en mesas Lucky Duel están desactivadas" : "Las apuestas de mesa están desactivadas";
+  }
   const user = await db.user.findUnique({ where: { id: userId }, select: { emailVerified: true } });
   if (!user) return "Usuario no encontrado";
   if (cfg.requireVerifiedEmail && !user.emailVerified) return "Necesitas verificar tu email para apostar";
@@ -110,15 +130,28 @@ async function betsTodayBetween(db: Db, a: string, b: string, now: Date): Promis
   });
 }
 
-/** The bet the table actually carries: 0 when bets are off or the pair isn't eligible today. */
+/**
+ * Why these two players can't start another bet table today (Spanish reason), or null:
+ * ECONOMY.tableBets.maxBetsPerDayPerOpponent bet tables per pair per economy day (both kinds).
+ */
+export async function betPairLimitReason(a: string, b: string, db: Db = prisma, now = new Date()): Promise<string | null> {
+  const max = ECONOMY.tableBets.maxBetsPerDayPerOpponent;
+  if ((await betsTodayBetween(db, a, b, now)) < max) return null;
+  return `Ya jugaste ${max} mesas con apuesta contra este rival hoy`;
+}
+
+/**
+ * The bet the table actually carries: 0 when bets are off for its kind, the pair isn't eligible
+ * today or the bet is over a Lucky Duel table's cap (createRoom already refuses those).
+ */
 async function effectiveBet(tx: Db, input: OpenMatchInput, now: Date): Promise<number> {
-  if (input.mode === "friendly" || input.betAmount <= 0 || !ECONOMY.tableBets.enabled) return 0;
+  const gameMode = input.gameMode ?? "standard";
+  if (input.mode === "friendly" || input.betAmount <= 0 || !tableBetsEnabledFor(gameMode)) return 0;
+  if (gameMode === "lucky-duel" && input.betAmount > ECONOMY.tableBets.luckyDuel.maxBet) return 0;
   for (const id of [input.player1Id, input.player2Id]) {
-    if (await betIneligibilityReason(id, tx)) return 0;
+    if (await betIneligibilityReason(id, tx, gameMode)) return 0;
   }
-  if ((await betsTodayBetween(tx, input.player1Id, input.player2Id, now)) >= ECONOMY.tableBets.maxBetsPerDayPerOpponent) {
-    return 0;
-  }
+  if (await betPairLimitReason(input.player1Id, input.player2Id, tx, now)) return 0;
   return input.betAmount;
 }
 
@@ -268,7 +301,7 @@ function aiWinReason(result: AiRecordedResult, luckyDuel: boolean, quickVictory:
 
 /**
  * Settle a match exactly once: pay the pot to the winner (or refund both stakes when there is
- * no result or the game ended before turn 3), and — only for a counted game — record win/loss
+ * no result, a draw, or a standard table's game ended before turn 3), and — only for a counted game — record win/loss
  * stats (normal and draft), grant XP, match coins and mission progress. A vs-AI Lucky Duel also
  * settles its stake and streak bonus (whether it counted or not). Returns null when the match
  * doesn't exist or was already settled, so callers can fire it from every end path.
@@ -345,11 +378,14 @@ async function settleMatchTx(tx: Db, matchId: string, input: SettleInput, now: D
   const verified = new Map<string, boolean>();
   for (const p of players) verified.set(p, (await hasVerifiedEmail(p, tx)) ?? false);
 
-  // Table bet: pot to the winner (only if the game reached the payout turn), else stakes back
+  // Table bet: pot to the winner (only if the game reached the payout turn), else stakes back.
+  // No house cut: the winner gets both stakes. A Lucky Duel pays on any turn (one Knock Out
+  // decides it, like the vs-AI stake below); its draw or a game without a result refunds both
   const bet = match.betAmount;
   const coinsDelta = new Map<string, number>(players.map((p) => [p, 0]));
   if (bet > 0 && !isAi) {
-    const reachedPayoutTurn = input.kind === "multiplayer" && input.turnNumber >= ECONOMY.tableBets.minTurnForPayout;
+    const reachedPayoutTurn =
+      input.kind === "multiplayer" && (luckyDuel || input.turnNumber >= ECONOMY.tableBets.minTurnForPayout);
     if (winnerId && reachedPayoutTurn) {
       await creditBalance(winnerId, "coins", bet * 2, "bet_win", `Apuesta ganada: ${bet * 2} monedas del pozo`, tx);
       for (const p of players) coinsDelta.set(p, p === winnerId ? bet : -bet);

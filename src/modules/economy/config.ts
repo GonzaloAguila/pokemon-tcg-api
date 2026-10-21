@@ -284,13 +284,28 @@ export const ECONOMY = {
     deckRank: { S: 15, A: 11, B: 8, C: 6, D: 4.5, E: 3.5 },
   },
 
-  /** Table bets are off. The settlement code stays; flip `enabled` to bring them back. */
+  /**
+   * Table bets. `enabled` is for standard tables (off: the server forces their bet to 0; flip it
+   * to bring them back). Lucky Duel tables have their own switch and a flat cap (`luckyDuel`).
+   * The eligibility rules (minOnlineGames, requireVerifiedEmail, maxBetsPerDayPerOpponent) apply
+   * to both kinds of table; minTurnForPayout only to standard ones.
+   */
   tableBets: {
+    /** Standard tables. */
     enabled: false,
     minOnlineGames: 20,
     requireVerifiedEmail: true,
     maxBetsPerDayPerOpponent: 3,
-    /** Below this turn a bet is refunded instead of paid out. */
+    /** Below this turn a standard table's bet is refunded instead of paid out (not Lucky Duel). */
     minTurnForPayout: 3,
+    /**
+     * Lucky Duel tables: bets from 0 to `maxBet` coins whatever the creator's title (owner,
+     * 2026-10-21). One Knock Out decides a Lucky Duel, so its pot is paid on any turn (a draw or a
+     * game without a result refunds both stakes).
+     */
+    luckyDuel: {
+      enabled: true,
+      maxBet: 100,
+    },
   },
 };

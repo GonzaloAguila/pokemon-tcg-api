@@ -478,30 +478,39 @@ describe("POST /api/matches/ai/:matchId/finish: a Lucky Duel vs the AI", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Table bets at Lucky Duel tables (owner ruling: like any table; a draw refunds both stakes)
+// Table bets at Lucky Duel tables (owner rulings: a draw refunds both stakes; 2026-10-21: Lucky
+// Duel tables take bets of 0–100 coins while standard tables stay without bets)
 // ---------------------------------------------------------------------------
 
-describe("Lucky Duel tables with a bet (bets enabled)", () => {
+describe("Lucky Duel tables with a bet (standard table bets off)", () => {
   beforeEach(() => {
-    ECONOMY.tableBets.enabled = true;
-  });
-  afterEach(() => {
-    ECONOMY.tableBets.enabled = false;
+    expect(ECONOMY.tableBets.enabled).toBe(false);
+    expect(ECONOMY.tableBets.luckyDuel).toEqual({ enabled: true, maxBet: 100 });
   });
 
-  /** A player allowed to bet: verified email and 20 online games (title "joven", max bet 50). */
+  /** A player allowed to bet: verified email and 20 online games (title "joven", max bet 50 at standard tables). */
   async function veteran(coinsAmount = 100) {
     const user = await createUser({ coins: coinsAmount });
     await prisma.userStats.create({ data: { userId: user.id, normalWins: 10, normalLosses: 10 } });
     return user;
   }
-  async function betTable(bet = 20) {
-    const t = await luckyTable({ bet, players: [await veteran(), await veteran()] });
+  async function betTable(bet = 20, start = 100) {
+    const t = await luckyTable({ bet, players: [await veteran(start), await veteran(start)] });
     expect(roomManager.getRoom(t.roomId)!.config).toMatchObject({ mode: "lucky-duel", betAmount: bet });
     expect(t.list.rooms.find((r) => r.id === t.roomId)).toMatchObject({ mode: "lucky-duel", betAmount: bet });
-    expect((await getBalances(t.p1.id)).coins).toBe(100 - bet);
-    expect((await getBalances(t.p2.id)).coins).toBe(100 - bet);
+    // Both stakes are taken when the game starts
+    expect((await getBalances(t.p1.id)).coins).toBe(start - bet);
+    expect((await getBalances(t.p2.id)).coins).toBe(start - bet);
+    expect((await prisma.match.findUniqueOrThrow({ where: { id: roomManager.getRoom(t.roomId)!.matchId! } })).betAmount).toBe(bet);
     return t;
+  }
+  /** `user` opens a Lucky Duel table with `bet`: its roomId, or the error message. */
+  async function tryCreate(user: User, bet: number): Promise<{ roomId?: string; error?: string; socket: ClientSocket }> {
+    const socket = await server.connect(tokenFor(user));
+    const created = nextEvent<{ roomId: string }>(socket, "roomCreated").then((r) => ({ roomId: r.roomId }));
+    const failed = nextEvent<{ message: string }>(socket, "error").then((e) => ({ error: e.message }));
+    socket.emit("createRoom", { mode: "lucky-duel", betAmount: bet });
+    return { ...(await Promise.race([created, failed])), socket };
   }
   const coins = async (userId: string) => (await getBalances(userId)).coins;
   const betRows = async (userId: string) =>
@@ -579,5 +588,138 @@ describe("Lucky Duel tables with a bet (bets enabled)", () => {
     expect((await over).winner).toBe("player2");
     await eventually(async () => expect(await coins(t.p2.id)).toBe(120 + ECONOMY.matchCoins.online.win + 50));
     expect(await coins(t.p1.id)).toBe(80 + ECONOMY.matchCoins.online.loss);
+  });
+
+  it("createRoom takes bets of 0, 50 and 100 coins whatever the title, and refuses 101", async () => {
+    for (const bet of [0, 50, 100]) {
+      // A veteran's title ("joven") caps standard tables at 50: Lucky Duel's cap is 100 for everyone
+      const r = await tryCreate(await veteran(1000), bet);
+      expect(r.error).toBeUndefined();
+      expect(roomManager.getRoom(r.roomId!)!.config).toMatchObject({ mode: "lucky-duel", betAmount: bet });
+      roomManager.forceDeleteRoom(r.roomId!);
+    }
+    const rich = await veteran(1000);
+    const over = await tryCreate(rich, 101);
+    expect(over.error).toBe("Las mesas Lucky Duel permiten apostar hasta 100 monedas");
+    expect(roomManager.findWaitingRoomsByUser(rich.id)).toEqual([]);
+  });
+
+  it("a standard table's bet is still forced to 0", async () => {
+    const user = await veteran(1000);
+    const s = await server.connect(tokenFor(user));
+    s.emit("createRoom", { deckId: "brushfire", prizeCount: 6, betAmount: 50, friendly: false });
+    const { roomId } = await nextEvent<{ roomId: string }>(s, "roomCreated");
+    expect(roomManager.getRoom(roomId)!.config).toMatchObject({ mode: "standard", betAmount: 0 });
+    roomManager.forceDeleteRoom(roomId);
+  });
+
+  it("a friendly Lucky Duel table carries no bet", async () => {
+    const s = await server.connect(tokenFor(await veteran(1000)));
+    s.emit("createRoom", { mode: "lucky-duel", betAmount: 50, friendly: true });
+    const { roomId } = await nextEvent<{ roomId: string }>(s, "roomCreated");
+    expect(roomManager.getRoom(roomId)!.config.betAmount).toBe(0);
+    roomManager.forceDeleteRoom(roomId);
+  });
+
+  it("the creator must cover the bet and be eligible", async () => {
+    expect((await tryCreate(await veteran(99), 100)).error).toMatch(/No tienes suficientes monedas para apostar 100/);
+    const unverified = await createUser({ coins: 1000 }, { emailVerified: false });
+    await prisma.userStats.create({ data: { userId: unverified.id, normalWins: 10, normalLosses: 10 } });
+    expect((await tryCreate(unverified, 50)).error).toMatch(/verificar tu email/);
+    expect((await tryCreate(await createUser({ coins: 1000 }, { stats: true }), 50)).error).toMatch(/partidas online para apostar/);
+  });
+
+  it("a joiner who can't cover the bet can't take the seat (nobody is charged)", async () => {
+    const creator = await veteran(200);
+    const r = await tryCreate(creator, 100);
+    const poor = await veteran(99);
+    const sp = await server.connect(tokenFor(poor));
+    sp.emit("joinRoom", { roomId: r.roomId });
+    expect((await nextEvent<{ message: string }>(sp, "error")).message).toBe(
+      "No tienes suficientes monedas para la apuesta de esta mesa (100 monedas)",
+    );
+    expect(roomManager.getRoom(r.roomId!)).toMatchObject({ status: "waiting", player2Id: null });
+    expect(await coins(creator.id)).toBe(200);
+    expect(await coins(poor.id)).toBe(99);
+    roomManager.forceDeleteRoom(r.roomId!);
+  });
+
+  it("a pair that used up today's bet tables can't start another one", async () => {
+    const creator = await veteran(1000);
+    const joiner = await veteran(1000);
+    const now = new Date();
+    for (let i = 0; i < ECONOMY.tableBets.maxBetsPerDayPerOpponent; i++) {
+      await prisma.match.create({
+        data: { mode: "normal", gameMode: "lucky-duel", status: "finished", player1Id: creator.id, player2Id: joiner.id, betAmount: 10, startedAt: now, settledAt: now },
+      });
+    }
+    const r = await tryCreate(creator, 50);
+    const sj = await server.connect(tokenFor(joiner));
+    sj.emit("joinRoom", { roomId: r.roomId });
+    expect((await nextEvent<{ message: string }>(sj, "error")).message).toBe(
+      `Ya jugaste ${ECONOMY.tableBets.maxBetsPerDayPerOpponent} mesas con apuesta contra este rival hoy`,
+    );
+    expect(roomManager.getRoom(r.roomId!)).toMatchObject({ status: "waiting", player2Id: null });
+    roomManager.forceDeleteRoom(r.roomId!);
+  });
+
+  it("a Knock Out on turn 1 pays the whole pot to the winner (no turn rule, no house cut)", async () => {
+    const t = await betTable(100, 200);
+    await revealBoth(t);
+    const room = roomManager.getRoom(t.roomId)!;
+    const state = room.gameState!;
+    expect(state.turnNumber).toBeLessThan(ECONOMY.tableBets.minTurnForPayout);
+    // The Active of the player whose turn it is: Poisoned one hit from a Knock Out (checkup)
+    const turnKey = state.isPlayerTurn ? "playerActivePokemon" : "opponentActivePokemon";
+    const active = state[turnKey]!;
+    const abra = ALL_CARDS.find((c) => c.id === "base-set-043-abra")!;
+    room.gameState = {
+      ...state,
+      [turnKey]: { ...active, pokemon: { ...abra, id: active.pokemon.id } as typeof active.pokemon, currentDamage: 20, statusConditions: ["poisoned"], attachedEnergy: [] },
+    };
+    const [turnSocket, winnerSocket] = state.isPlayerTurn ? [t.s1, t.s2] : [t.s2, t.s1];
+    const [winner, loser] = state.isPlayerTurn ? [t.p2, t.p1] : [t.p1, t.p2];
+    const settled = Promise.all([nextEvent<Any>(winnerSocket, "matchSettled", 8000), nextEvent<Any>(turnSocket, "matchSettled", 8000)]);
+    const over = nextEvent<Any>(t.s1, "gameOver");
+    turnSocket.emit("action", { roomId: t.roomId, action: act("endTurn") });
+    expect((await over).winner).toBe(state.isPlayerTurn ? "player2" : "player1");
+    const [won, lost] = await settled;
+    // Too short to count (no match coins): only the pot moves
+    expect(won).toMatchObject({ outcome: "win", betAmount: 100, coinsDelta: 100, counted: false, coins: 300 });
+    expect(lost).toMatchObject({ outcome: "loss", betAmount: 100, coinsDelta: -100, counted: false, coins: 100 });
+    expect(await betRows(winner.id)).toEqual([["bet_stake", -100], ["bet_win", 200]]);
+    expect(await betRows(loser.id)).toEqual([["bet_stake", -100]]);
+    expect(await prisma.match.findUniqueOrThrow({ where: { id: room.matchId! } })).toMatchObject({ status: "finished", winnerId: winner.id, betAmount: 100 });
+  });
+
+  it("a surrender before the reveal forfeits the stake to the other player", async () => {
+    const t = await betTable(100, 200);
+    const settled = nextEvent<Any>(t.s2, "matchSettled", 8000);
+    const over = nextEvent<Any>(t.s2, "gameOver");
+    t.s1.emit("action", { roomId: t.roomId, action: act("surrender") });
+    expect((await over).winner).toBe("player2");
+    expect(await settled).toMatchObject({ outcome: "win", coinsDelta: 100, coins: 300 });
+    expect(await coins(t.p1.id)).toBe(100);
+  });
+
+  it("leaving on turn 1 forfeits the pot like at any bet table", async () => {
+    const t = await betTable(50);
+    await revealBoth(t);
+    expect(roomManager.getRoom(t.roomId)!.gameState!.turnNumber).toBeLessThan(ECONOMY.tableBets.minTurnForPayout);
+    const over = nextEvent<Any>(t.s2, "gameOver");
+    t.s1.emit("leaveRoom", { roomId: t.roomId });
+    expect((await over).winner).toBe("player2");
+    await eventually(async () => expect(await coins(t.p2.id)).toBe(150));
+    expect(await coins(t.p1.id)).toBe(50);
+  });
+
+  it("a game closed without a result (admin) refunds both stakes", async () => {
+    const t = await betTable(100, 100);
+    roomManager.forceDeleteRoom(t.roomId);
+    await eventually(async () => {
+      expect(await coins(t.p1.id)).toBe(100);
+      expect(await coins(t.p2.id)).toBe(100);
+    });
+    expect(await prisma.match.findFirstOrThrow({ where: { roomId: t.roomId } })).toMatchObject({ status: "abandoned" });
   });
 });

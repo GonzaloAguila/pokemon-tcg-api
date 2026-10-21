@@ -59,8 +59,16 @@ Conventions (unchanged):
 9. **Odds panel** in Sobres, Ruleta and Tragamonedas: `GET /api/economy/odds`.
 10. **Single player**: call `POST /api/matches/ai` when a game vs AI starts and
     `POST /api/matches/ai/:matchId/finish { result, turnNumber }` when it ends; toast the rewards.
-11. **Lobby**: table bets are **off**. Hide the bet selector (the server forces 0). Keep the code
-    behind `config.tableBets.enabled` / `status.tableBetsEnabled`.
+11. **Lobby**: standard table bets are **off**. Hide their bet selector (the server forces 0). Keep the code
+    behind `config.tableBets.enabled` / `status.tableBetsEnabled`. **Lucky Duel tables take bets**
+    (2026-10-21): show the selector when `config.tableBets.luckyDuel.enabled` /
+    `status.luckyDuelTableBetsEnabled`, from 0 to `config.tableBets.luckyDuel.maxBet` (100) whatever
+    the title (the server refuses more: "Las mesas Lucky Duel permiten apostar hasta 100 monedas").
+    Same eligibility (verified email, `minOnlineGames`), the creator/joiner must cover it, friendly
+    tables carry none, at most `maxBetsPerDayPerOpponent` bet tables per pair per day (join refused:
+    "Ya jugaste 3 mesas con apuesta contra este rival hoy"). Both stakes are charged at the start; the
+    winner gets 2 × bet on any turn (no `minTurnForPayout`, no house cut); a draw or a game without a
+    result refunds both.
 12. **Unverified email** (section 11): `status.emailVerified === false` → show "Verificá tu email"
     on the daily pack, missions, battle pass, unopened packs, Fichas de canje and milestones
     instead of their actions; treat a 403 `EMAIL_NOT_VERIFIED` from any economy call the same way.
@@ -136,7 +144,7 @@ Returns the config as JSON (no functions). Shape (abridged):
   "market": { "cardPrices": { "rare": 150, "uncommon": 50, "common": 20, "mystery": 100 } },
   "packs": { "price": 200, "boosterIds": ["base-set-booster", "jungle-booster", "fossil-booster", "team-rocket-booster"] },
   "rareCandy": { "toCoins": 2000, "toCoupons": 50, "maxCoinConversionsPerWeek": 2 },
-  "tableBets": { "enabled": false, "minOnlineGames": 20, "requireVerifiedEmail": true, "maxBetsPerDayPerOpponent": 3, "minTurnForPayout": 3 }
+  "tableBets": { "enabled": false, "minOnlineGames": 20, "requireVerifiedEmail": true, "maxBetsPerDayPerOpponent": 3, "minTurnForPayout": 3, "luckyDuel": { "enabled": true, "maxBet": 100 } }
 }
 ```
 
@@ -171,7 +179,8 @@ Returns the config as JSON (no functions). Shape (abridged):
   "rareCandy": { "coinConversionsThisWeek": 1, "maxCoinConversionsPerWeek": 2 },
   "exchangeTokens": 0,
   "unopenedPacks": 2,
-  "tableBetsEnabled": false
+  "tableBetsEnabled": false,
+  "luckyDuelTableBetsEnabled": true
 }
 ```
 

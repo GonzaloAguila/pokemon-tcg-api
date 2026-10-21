@@ -103,7 +103,9 @@ export const socketSchemas = {
     prizeCount: optional(z.number().int().min(4).max(MAX_PRIZES)),
     // Lobby slider max is 1000 (legend tier); createRoom also caps it by the creator's title
     // (maxBetForTitle). Charged to both players when the game starts (match-settlement.ts).
-    // Lucky Duel tables take bets like any table (a draw refunds both stakes).
+    // Lucky Duel tables: capped at ECONOMY.tableBets.luckyDuel.maxBet (100) whatever the title;
+    // their pot is paid on any turn and a draw refunds both stakes. Standard tables: forced to 0
+    // while ECONOMY.tableBets.enabled is off.
     betAmount: optional(z.number().int().min(0).max(1000)),
     reservedUserId: optional(z.string().max(64)),
     friendly: optional(z.boolean()),
