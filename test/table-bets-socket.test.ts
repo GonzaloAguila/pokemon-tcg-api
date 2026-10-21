@@ -83,14 +83,40 @@ describe("table bets are off (default)", () => {
     expect((await prisma.match.findFirstOrThrow({ where: { roomId } })).betAmount).toBe(0);
   });
 
-  it("a surrender in the mulligan doesn't count as a win (no stats, coins or XP)", async () => {
-    const { b, sa, sb, roomId } = await startBetGame(0);
+  it("a surrender in the mulligan by a new account doesn't count as a win (no stats, coins or XP for the winner)", async () => {
+    const { a, b, sa, sb, roomId } = await startBetGame(0);
+    // Not established (ECONOMY.antiFarming.forfeit.establishedMinOnlineGames)
+    await prisma.userStats.update({ where: { userId: a.id }, data: { normalWins: 1, normalLosses: 1 } });
     const settled = nextEvent<Record<string, unknown>>(sb, "matchSettled");
     surrender(sa, roomId);
-    expect(await settled).toMatchObject({ outcome: "win", counted: false, rewardCoins: 0, xpGained: 0, missionsCompleted: [] });
+    expect(await settled).toMatchObject({
+      outcome: "win",
+      counted: false,
+      earlyForfeit: true,
+      forfeitBlockedBy: "forfeiter_not_established",
+      rewardCoins: 0,
+      xpGained: 0,
+      missionsCompleted: [],
+    });
     const stats = await prisma.userStats.findUniqueOrThrow({ where: { userId: b.id } });
     expect(stats).toMatchObject({ normalWins: 10, normalLosses: 10, currentStreak: 0 });
     expect(await coins(b.id)).toBe(100);
+    // The forfeiter's loss is recorded anyway
+    await eventually(async () => {
+      expect(await prisma.userStats.findUniqueOrThrow({ where: { userId: a.id } })).toMatchObject({ normalLosses: 2 });
+    });
+  });
+
+  it("a surrender in the mulligan by an established account pays the winner a counted win", async () => {
+    const { a, b, sa, sb, roomId } = await startBetGame(0);
+    const settled = nextEvent<Record<string, unknown>>(sb, "matchSettled");
+    const loserSettled = nextEvent<Record<string, unknown>>(sa, "matchSettled");
+    surrender(sa, roomId);
+    expect(await settled).toMatchObject({ outcome: "win", counted: true, earlyForfeit: true, rewardCoins: ECONOMY.matchCoins.online.win });
+    expect(await loserSettled).toMatchObject({ outcome: "loss", earlyForfeit: true, rewardCoins: 0, xpGained: 0 });
+    expect(await prisma.userStats.findUniqueOrThrow({ where: { userId: b.id } })).toMatchObject({ normalWins: 11, currentStreak: 1 });
+    expect(await prisma.userStats.findUniqueOrThrow({ where: { userId: a.id } })).toMatchObject({ normalLosses: 11 });
+    expect(await coins(a.id)).toBe(100);
   });
 
   it("a game played past turn 3 for 2+ minutes counts: stats, match coins and missions", async () => {
@@ -138,9 +164,12 @@ describe("table bets over the socket (re-enabled with the flag)", () => {
     const { a, b, sa, sb, roomId } = await startBetGame(20);
     const settled = nextEvent<Record<string, unknown>>(sb, "matchSettled");
     surrender(sa, roomId);
-    expect(await settled).toMatchObject({ outcome: "win", coinsDelta: 0, counted: false });
+    // The stakes go back (standard tables pay from minTurnForPayout); the early forfeit of an
+    // established account still counts as a win (match coins + the win mission)
+    expect(await settled).toMatchObject({ outcome: "win", coinsDelta: 0, counted: true, earlyForfeit: true });
     expect(await coins(a.id)).toBe(100);
-    expect(await coins(b.id)).toBe(100);
+    const winMission = ECONOMY.missions.daily.find((m) => m.id === "win_game")!.rewardCoins;
+    expect(await coins(b.id)).toBe(100 + ECONOMY.matchCoins.online.win + winMission);
   });
 
   it("an inexperienced or unverified creator can't open a bet table", async () => {

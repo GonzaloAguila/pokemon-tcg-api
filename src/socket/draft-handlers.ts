@@ -316,13 +316,13 @@ async function chargeWithdrawPenalty(userId: string): Promise<number> {
   });
 }
 
-/** End a draft game in progress: `winnerId` wins it (stats + XP settled once). */
+/** End a draft game in progress (the other player forfeited it): `winnerId` wins it (stats + XP settled once). */
 function endDraftGame(io: Server, gameRoomManager: GameRoomManager, gameRoomId: string, winnerId: string, reason: string): void {
   const gameRoom = gameRoomManager.getRoom(gameRoomId);
   if (!gameRoom || gameRoom.resultSettled) return;
   gameRoom.status = "finished";
   const winnerSide = winnerId === gameRoom.player1Id ? "player1" : "player2";
-  settleRoomResult(io, gameRoom, winnerSide, reason, { isDraft: true });
+  settleRoomResult(io, gameRoom, winnerSide, reason, { isDraft: true, forfeit: true });
   io.to(gameRoomId).emit("gameOver", { winner: winnerSide, reason });
 }
 

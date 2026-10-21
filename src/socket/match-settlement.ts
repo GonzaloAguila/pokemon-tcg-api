@@ -50,6 +50,9 @@ export async function openRoomMatch(room: GameRoom, mode: MultiplayerMode): Prom
  * refund when `winner` is null. `"draw"` (Lucky Duel: both Actives Knocked Out at once) is a
  * played game without a winner: no stats or streak change, the loser's XP / match coins for
  * both (settleMatch). Runs in the background; each player gets `matchSettled`.
+ * `forfeit`: the loser gave the game up (surrender, leave, disconnect timeout, turn-timer kick,
+ * setup timeout, no-show, draft forfeit): before the anti-farming threshold it is an early
+ * forfeit (ECONOMY.antiFarming.forfeit).
  * Must be called while the room still knows both players (before leaveRoom clears a seat).
  */
 export function settleRoomResult(
@@ -57,8 +60,8 @@ export function settleRoomResult(
   room: GameRoom | undefined,
   winner: PlayerKey | "draw" | null,
   reason: string,
-  // The mode (draft or not) comes from the match row; kept for the existing callers
-  _options: { isDraft?: boolean } = {},
+  // The mode (draft or not) comes from the match row; isDraft is kept for the existing callers
+  options: { isDraft?: boolean; forfeit?: boolean } = {},
 ): void {
   // Adventure battles never settle a match (adventure-room.ts applies their result to the run)
   if (!room || room.resultSettled || room.adventure) return;
@@ -83,6 +86,7 @@ export function settleRoomResult(
     // A Lucky Duel also says so in its reason (the row's gameMode was set when it opened)
     reason: room.config.mode === "lucky-duel" ? `Lucky Duel: ${reason}` : reason,
     turnNumber: room.gameState?.turnNumber ?? 0,
+    ...(options.forfeit && winner !== "draw" && winnerId ? { forfeit: true } : {}),
     ...(room.config.mode === "lucky-duel" && room.luckyDuelStarters ? { luckyDuel: luckyDuelStarters(room) } : {}),
   })
     .then((result) => {
@@ -114,6 +118,10 @@ function notifySettlement(io: Server | null, roomId: string, result: SettlementR
       rewardCoins: p.rewardCoins,
       rewardCoinsCapped: p.rewardCoinsCapped,
       missionsCompleted: p.missionsCompleted,
+      earlyForfeit: p.earlyForfeit,
+      forfeitBlockedBy: p.forfeitBlockedBy,
+      pairCap: p.pairCap,
+      betRefundedByPairCap: p.betRefundedByPairCap,
       emailVerified: p.emailVerified,
       coins: p.coins,
       xpGained: p.xpGained,

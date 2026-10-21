@@ -348,7 +348,7 @@ async function settleNoShow(io: Server, room: GameRoom): Promise<void> {
     console.error(`[noShow] Could not open the match of room ${room.id}:`, err);
   }
   room.status = "finished";
-  settleRoomResult(io, room, "player2", `no-show: ${reason}`);
+  settleRoomResult(io, room, "player2", `no-show: ${reason}`, { forfeit: true });
   const payload = {
     roomId: room.id,
     mode: room.config.mode,
@@ -495,6 +495,8 @@ function stateFor(room: GameRoom, state: GameState, viewer: Viewer) {
  * `"draw"` (Lucky Duel: both Actives Knocked Out at once): `gameOver { winner: null, reason }`
  * and a settled draw (no winner, no loser).
  * `settlementReason` is what the match row stores (defaults to the reason shown to players).
+ * `forfeit` (kick, disconnect / setup timeout, leaving) and `surrendered` both settle the game as
+ * a forfeit by the loser (ECONOMY.antiFarming.forfeit); only `forfeit` goes to the draft report.
  */
 function finishRoomGame(
   io: Server,
@@ -503,6 +505,7 @@ function finishRoomGame(
   reason: string,
   forfeit: boolean,
   settlementReason: string = reason,
+  surrendered = false,
 ): void {
   const room = roomManager.getRoom(roomId);
   // An adventure battle: its result goes to the run (adventure-room.ts), never to a match
@@ -516,7 +519,7 @@ function finishRoomGame(
   io.to(roomId).emit("gameOver", { winner: winnerSide, reason });
 
   const draftInfo = draftRoomManager.getDraftInfoForGameRoom(roomId);
-  settleRoomResult(io, room, winner, settlementReason, { isDraft: !!draftInfo });
+  settleRoomResult(io, room, winner, settlementReason, { isDraft: !!draftInfo, forfeit: forfeit || surrendered });
   reportDraftGame(io, roomId, winnerSide, forfeit);
 }
 
@@ -787,7 +790,17 @@ function broadcastActionResult(io: Server, roomId: string, actionType: string, r
   // finishRoomGame settles the result (stats, XP, bet) and the draft standing once
   if (result.gameOver) {
     if (result.draw) finishRoomGame(io, roomId, "draw", result.winReason ?? "Empate", false, "Empate");
-    else finishRoomGame(io, roomId, result.winner ?? null, result.winReason ?? "Fin de la partida", false, describeGameEnd(result.gameState));
+    else {
+      finishRoomGame(
+        io,
+        roomId,
+        result.winner ?? null,
+        result.winReason ?? "Fin de la partida",
+        false,
+        describeGameEnd(result.gameState),
+        actionType === "surrender",
+      );
+    }
   }
 }
 
