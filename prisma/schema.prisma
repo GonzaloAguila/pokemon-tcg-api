@@ -145,6 +145,9 @@ model User {
   tradesReceived   Trade[]           @relation("TradeTo")
   cardLocks        CardLock[]
   progress         UserProgress[]
+  adventureRuns     AdventureRun[]
+  adventureProgress AdventureProgress[]
+  starterUnlocks    UserStarterUnlock[]
 
   @@index([providerId, provider])
   @@map("users")
@@ -594,6 +597,88 @@ model UserProgress {
   @@unique([userId, track, itemId])
   @@index([userId, track])
   @@map("user_progress")
+}
+
+// Modo Aventura (modules/adventure). A run of one adventure (content/adventures/<id>.json): its
+// deck, hearts, treasures and phase. At most one `active` run per user: partial unique index
+// adventure_runs_one_active (migration SQL only, Prisma can't declare it).
+model AdventureRun {
+  id               String    @id @default(uuid())
+  userId           String
+  adventureId      String
+  adventureVersion Int
+  difficulty       String // "normal" | "hard"
+  starterId        String
+  status           String // "active" | "won" | "lost" | "abandoned"
+  phase            String // "pre_battle" | "in_battle" | "choosing_treasure" | "finished"
+  currentBattle    Int       @default(1) // 1..10
+  attempt          Int       @default(1) // tries of currentBattle (part of the battle's RNG seed)
+  hearts           Int
+  maxHearts        Int
+  heartsLost       Int       @default(0)
+  deck             Json // [{ cardId, qty }]
+  passives         String[]
+  treasuresTaken   String[]
+  treasuresSkipped Int       @default(0)
+  pendingOffer     String[] // treasure ids offered after a victory; empty = none
+  offTypeUsed      Boolean   @default(false) // a battle was started with a card off the starter's type (monotype achievement)
+  seed             String // server secret (128 random bits, hex), never sent to the client
+  battle           Json? // live battle snapshot { roomId, state, rngState, aiPlan, humanActions }
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  finishedAt       DateTime?
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  battles          AdventureBattleResult[]
+
+  @@index([userId, status])
+  @@map("adventure_runs")
+}
+
+// One finished battle of a run (history, achievements, abuse checks).
+model AdventureBattleResult {
+  id          String       @id @default(uuid())
+  runId       String
+  battleIndex Int
+  attempt     Int
+  victory     Boolean
+  reason      String // "prizes" | "no-pokemon" | "deck-out" | "surrender"
+  turns       Int
+  startedAt   DateTime
+  endedAt     DateTime     @default(now())
+  run         AdventureRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, battleIndex, attempt])
+  @@map("adventure_battle_results")
+}
+
+// Permanent per-user, per-adventure record of won runs (read by the "adventure" achievements).
+model AdventureProgress {
+  id                    String   @id @default(uuid())
+  userId                String
+  adventureId           String
+  clearsNormal          Int      @default(0)
+  clearsHard            Int      @default(0)
+  clearedStartersNormal String[]
+  clearedStartersHard   String[]
+  runsPlayed            Int      @default(0)
+  flawlessClears        Int      @default(0)
+  puristClears          Int      @default(0)
+  monotypeClears        Int      @default(0)
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, adventureId])
+  @@map("adventure_progress")
+}
+
+// Starters unlocked by an adventure reward (type starter_unlock, e.g. Pikachu after a hard clear).
+model UserStarterUnlock {
+  userId    String
+  starterId String
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, starterId])
+  @@map("user_starter_unlocks")
 }
 
 // Daily / weekly mission progress (period = economy day or economy week).

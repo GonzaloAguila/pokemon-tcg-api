@@ -146,3 +146,15 @@ tries to create every table again and fails with P3018, as above.
 - `npm run db:push` remains fine for throwaway databases. The test suite still resets
   `ptcg_test` with `db push --force-reset`. `test/migrations.test.ts` catches a schema edit
   that has no migration.
+- Partial indexes (`CREATE UNIQUE INDEX … WHERE …`) can't be declared in `schema.prisma`: write
+  them by hand at the end of the migration (Prisma's diff ignores them, so `migrations.test.ts`
+  stays green). `db push` doesn't create them, so `test/global-setup.ts` runs every such statement
+  found in `prisma/migrations` after resetting the test database.
+- When the local dev DB was built with `db push` (no `_prisma_migrations` rows), `migrate dev`
+  wants to reset it. Generate the SQL without touching it instead:
+  `npx prisma migrate diff --from-migrations prisma/migrations --to-schema-datamodel prisma/schema.prisma --shadow-database-url <throwaway db> --script > prisma/migrations/<ts>_<name>/migration.sql`.
+
+`20261021000000_adventure_mode` (2026-10-21, branch feat/adventure-mode): new tables
+`adventure_runs`, `adventure_battle_results`, `adventure_progress`, `user_starter_unlocks` (FKs
+to `users` / `adventure_runs`, `ON DELETE CASCADE`) and the partial unique index
+`adventure_runs_one_active` (one `active` run per user). Additive only.

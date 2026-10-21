@@ -36,4 +36,6 @@ export type ClaimKind =
   /** key: "v1" (tutorial reward, modules/progress) */
   | "tutorial"
   /** key: "<draft room id>:<room createdAt ms>" (a finished draft's prizes, socket/draft-payout.ts) */
-  | "draft_prize";
+  | "draft_prize"
+  /** key: "<adventureId>:<difficulty>" (an adventure's unique reward, modules/adventure) */
+  | "adventure";

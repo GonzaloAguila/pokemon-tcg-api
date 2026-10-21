@@ -20,10 +20,12 @@ describe("prisma migrations", () => {
   it("replaying prisma/migrations produces exactly schema.prisma", () => {
     if (!/127\.0\.0\.1|localhost/.test(TEST_DATABASE_URL)) throw new Error("refusing a non-local database");
     const adminUrl = withDatabase(TEST_DATABASE_URL, "postgres");
-    const shadowUrl = withDatabase(TEST_DATABASE_URL, "ptcg_shadow");
+    // Shadow named after the test database, so sessions on different test databases never share it
+    const shadowDb = `${new URL(TEST_DATABASE_URL).pathname.slice(1)}_shadow`;
+    const shadowUrl = withDatabase(TEST_DATABASE_URL, shadowDb);
     // Separate calls: CREATE/DROP DATABASE can't share an implicit transaction
-    sql(adminUrl, "DROP DATABASE IF EXISTS ptcg_shadow;");
-    sql(adminUrl, "CREATE DATABASE ptcg_shadow;");
+    sql(adminUrl, `DROP DATABASE IF EXISTS ${shadowDb};`);
+    sql(adminUrl, `CREATE DATABASE ${shadowDb};`);
     try {
       const out = execSync(
         `npx prisma migrate diff --from-migrations prisma/migrations --to-schema-datamodel prisma/schema.prisma --shadow-database-url "${shadowUrl}" --script --exit-code`,
@@ -34,7 +36,7 @@ describe("prisma migrations", () => {
       const e = err as { status?: number; stdout?: string };
       throw new Error(`schema.prisma and prisma/migrations differ (exit ${e.status}). Missing SQL:\n${e.stdout}`);
     } finally {
-      sql(adminUrl, "DROP DATABASE IF EXISTS ptcg_shadow;");
+      sql(adminUrl, `DROP DATABASE IF EXISTS ${shadowDb};`);
     }
   }, 120_000);
 });
