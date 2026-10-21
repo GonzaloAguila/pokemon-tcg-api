@@ -22,7 +22,13 @@ import { economyRouter } from "../src/modules/economy/index.js";
 import * as battlePass from "../src/modules/battle-pass/battle-pass.service.js";
 import * as marketService from "../src/modules/market/market.service.js";
 import * as achievements from "../src/modules/achievements/achievements.service.js";
-import { STANDARD_BOOSTER_IDS, openPack, getPackOdds } from "../src/modules/boosters/boosters.service.js";
+import {
+  SECOND_RARE_CHANCE,
+  STANDARD_BOOSTER_IDS,
+  TRAINER_BOOSTER_ID,
+  openPack,
+  getPackOdds,
+} from "../src/modules/boosters/boosters.service.js";
 import { registerUser } from "../src/modules/auth/auth.service.js";
 import { handleOAuthCallback } from "../src/modules/auth/oauth.service.js";
 import { usersRouter } from "../src/modules/users/index.js";
@@ -547,13 +553,32 @@ describe("odds", () => {
   it("pack odds come from the generator: Base ~66.5% holo, other sets always a holo", () => {
     const base = getPackOdds("base-set-booster")!;
     expect(base.price).toBe(ECONOMY.packs.price);
-    // 0.33 + 0.67 * 16/32 in the rare slot, plus the 1% uncommon upgrades into rare ∪ holo
+    // 0.665 in the rare slot, plus the 1% uncommon upgrades and the second rare into rare ∪ holo
     expect(base.holoChance).toBeGreaterThan(0.665);
-    expect(base.holoChance).toBeLessThan(0.68);
+    expect(base.holoChance).toBeLessThan(0.72);
     for (const id of ["jungle-booster", "fossil-booster", "team-rocket-booster"]) {
       expect(getPackOdds(id)!.holoChance).toBe(1);
     }
     expect(getPackOdds("base-set-theme-pack")).toBeNull();
+  });
+
+  it("boosters hold no basic Energy: 1 rare, 4 uncommons (the 4th a second rare with SECOND_RARE_CHANCE), 6 commons", () => {
+    const n = 3000;
+    let secondRare = 0;
+    for (const packId of [...STANDARD_BOOSTER_IDS, TRAINER_BOOSTER_ID]) {
+      for (let i = 0; i < 50; i++) {
+        const cards = openPack(packId).cards;
+        expect(cards).toHaveLength(11);
+        expect(cards.some((c) => isBasicEnergy(c.card))).toBe(false);
+      }
+    }
+    for (let i = 0; i < n; i++) {
+      const rares = openPack("gym-challenge-booster").cards.filter((c) => c.card.rarity === "rare" || c.card.rarity === "rare-holo");
+      if (rares.length >= 2) secondRare++;
+    }
+    // SECOND_RARE_CHANCE plus the 3 uncommons' 1% upgrades
+    const expected = 1 - (1 - SECOND_RARE_CHANCE) * 0.99 ** 3;
+    expect(Math.abs(secondRare / n - expected)).toBeLessThan(0.025);
   });
 
   it("matches a simulation of openPack", () => {

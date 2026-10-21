@@ -100,7 +100,7 @@ router.post(
           opened.push(await boosterService.openPackForUser(tx, userId, packId, { reason: "pack_purchase", label: "Sobre comprado" }));
         }
         return opened;
-      });
+      }, { timeout: 20_000, maxWait: 5_000 }); // up to 10 packs: ~120 queries, Prisma's default 5 s isn't enough under load
 
       res.json({ ...packs[0], packs });
     } catch (error) {

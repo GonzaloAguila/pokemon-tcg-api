@@ -1,11 +1,11 @@
 /**
  * Gym Challenge released (game-core 0.9.0 cleared `inDevelopment`): a booster like Gym Heroes'
- * (layout, price, image), 9 Pokémon of the set + 2 basic Energy, the catalog serves its 122
+ * (layout, price, image), 11 Pokémon of the set (no basic Energy), the catalog serves its 122
  * cards, its supported Trainers come in the Trainer booster, drafts / Fichas de canje / set
  * milestones include it and the Gym Leader decks that use it are playable in multiplayer.
  */
 import { afterAll, describe, expect, it } from "vitest";
-import { CARD_SETS, isBasicEnergy, isSetInDevelopment } from "@gonzaloaguila/game-core";
+import { CARD_SETS, isSetInDevelopment } from "@gonzaloaguila/game-core";
 import { prisma } from "../src/lib/prisma.js";
 import { catalogRouter } from "../src/modules/catalog/index.js";
 import { boostersRouter } from "../src/modules/boosters/index.js";
@@ -50,14 +50,14 @@ describe("Gym Challenge released", () => {
       setId: "gym-challenge",
       image: "/packs/gym-challenge/booster.png",
       cardCount: 11,
-      energyCount: 2,
+      energyCount: 0,
       available: true,
     });
     expect(pack.price).toBe(gh.price);
     expect(pack.slots).toEqual(gh.slots);
   });
 
-  it("opens 11 cards: 9 Pokémon of the set by slot rarity + 2 basic Energy, never a Trainer", () => {
+  it("opens 11 Pokémon of the set by slot rarity: no basic Energy, never a Trainer", () => {
     let holos = 0;
     for (let i = 0; i < 300; i++) {
       const { cards } = openPack("gym-challenge-booster");
@@ -65,11 +65,9 @@ describe("Gym Challenge released", () => {
       const bySlot = (slot: string) => cards.filter((c) => c.slotType === slot);
       const rare = cards.filter((c) => c.slotType === "rare" || c.slotType === "rare-holo");
       expect(rare.length).toBeGreaterThanOrEqual(1);
-      expect(rare.length + bySlot("uncommon").length).toBe(4);
-      expect(bySlot("common")).toHaveLength(5);
-      expect(bySlot("energy")).toHaveLength(2);
-      expect(bySlot("energy").every((c) => isBasicEnergy(c.card))).toBe(true);
-      const setCards = cards.filter((c) => c.slotType !== "energy");
+      expect(rare.length + bySlot("uncommon").length).toBe(5);
+      expect(bySlot("common")).toHaveLength(6);
+      const setCards = cards;
       expect(setCards.every((c) => c.card.set === "Gym Challenge" && c.card.kind === "pokemon")).toBe(true);
       for (const c of bySlot("common")) expect(rarityOf.get(c.card.id)).toBe("common");
       for (const c of bySlot("uncommon")) expect(rarityOf.get(c.card.id)).toBe("uncommon");

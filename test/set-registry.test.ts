@@ -20,7 +20,7 @@ describe("set registry consumers", () => {
     expect(searchCards("x").length).toBeLessThanOrEqual(ALL_CARDS.length);
   });
 
-  it("every standard booster opens 9 cards of its set plus 2 basic Energy", () => {
+  it("every standard booster opens 11 cards of its set, no basic Energy", () => {
     expect(STANDARD_BOOSTER_IDS).toEqual([
       "base-set-booster",
       "jungle-booster",
@@ -43,10 +43,8 @@ describe("set registry consumers", () => {
       const setName = CARD_SETS.find((s) => s.id === pack.setId)!.name;
       const result = openPack(packId);
       expect(result.cards).toHaveLength(11);
-      const energy = result.cards.filter((c) => c.slotType === "energy");
-      expect(energy).toHaveLength(2);
-      expect(energy.every((c) => isBasicEnergy(c.card))).toBe(true);
-      expect(result.cards.filter((c) => c.slotType !== "energy").every((c) => c.card.set === setName)).toBe(true);
+      expect(result.cards.some((c) => isBasicEnergy(c.card))).toBe(false);
+      expect(result.cards.every((c) => c.card.set === setName)).toBe(true);
     }
   });
 
@@ -58,7 +56,7 @@ describe("set registry consumers", () => {
 
     const pack = getPackById("fossil-booster")!;
     const jungle = getPackById("jungle-booster")!;
-    expect(pack).toMatchObject({ name: "Fossil Booster", setId: "fossil", image: "/packs/fossil/booster.png", cardCount: 11, energyCount: 2 });
+    expect(pack).toMatchObject({ name: "Fossil Booster", setId: "fossil", image: "/packs/fossil/booster.png", cardCount: 11, energyCount: 0 });
     expect(pack.price).toBe(jungle.price);
     expect(pack.slots).toEqual(jungle.slots);
 
@@ -66,12 +64,10 @@ describe("set registry consumers", () => {
       const { cards } = openPack("fossil-booster");
       expect(cards).toHaveLength(11);
       const bySlot = (pred: (slot: string) => boolean) => cards.filter((c) => pred(c.slotType));
-      // 1 rare (holo or not), 3 uncommon (1% upgraded to rare), 5 common, 2 basic Energy
+      // 1 rare (holo or not), 4 uncommon (upgrades to rare: 1% x3, the 4th SECOND_RARE_CHANCE), 6 common
       expect(bySlot((s) => s === "rare" || s === "rare-holo").length).toBeGreaterThanOrEqual(1);
-      expect(bySlot((s) => s === "common")).toHaveLength(5);
-      expect(bySlot((s) => s === "energy")).toHaveLength(2);
-      expect(cards.filter((c) => c.slotType !== "energy").every((c) => c.card.set === "Fossil")).toBe(true);
-      expect(cards.filter((c) => c.slotType === "energy").every((c) => isBasicEnergy(c.card))).toBe(true);
+      expect(bySlot((s) => s === "common")).toHaveLength(6);
+      expect(cards.every((c) => c.card.set === "Fossil")).toBe(true);
     }
 
     const fossilIds = new Set(CARD_SETS.find((s) => s.id === "fossil")!.cards.map((c) => c.id));
@@ -92,7 +88,7 @@ describe("set registry consumers", () => {
       setId: "team-rocket",
       image: "/packs/team-rocket/booster.png",
       cardCount: 11,
-      energyCount: 2,
+      energyCount: 0,
       available: true,
     });
     expect(pack.price).toBe(jungle.price);
@@ -106,11 +102,8 @@ describe("set registry consumers", () => {
       const rare = bySlot((s) => s === "rare" || s === "rare-holo");
       expect(rare.length).toBeGreaterThanOrEqual(1);
       for (const c of rare) rares.add(c.card.id);
-      expect(bySlot((s) => s === "common")).toHaveLength(5);
-      expect(bySlot((s) => s === "energy")).toHaveLength(2);
-      expect(cards.filter((c) => c.slotType !== "energy").every((c) => c.card.set === "Team Rocket")).toBe(true);
-      // Like Fossil: the set has no basic Energy, the Energy slots are Base Set basic Energy
-      expect(cards.filter((c) => c.slotType === "energy").every((c) => isBasicEnergy(c.card))).toBe(true);
+      expect(bySlot((s) => s === "common")).toHaveLength(6);
+      expect(cards.every((c) => c.card.set === "Team Rocket")).toBe(true);
     }
     // Dark Raichu (#83, the secret rare) is in the rare pool; 200 packs see most of the 18 rares
     const rarePool = CARD_SETS.find((s) => s.id === "team-rocket")!.cards.filter((c) => c.rarity === "rare-holo").map((c) => c.id);
@@ -136,7 +129,7 @@ describe("set registry consumers", () => {
       setId: "gym-heroes",
       image: "/packs/gym-heroes/booster.png",
       cardCount: 11,
-      energyCount: 2,
+      energyCount: 0,
       available: true,
     });
     expect(pack.price).toBe(base.price);
@@ -150,20 +143,17 @@ describe("set registry consumers", () => {
       const { cards } = openPack("gym-heroes-booster");
       expect(cards).toHaveLength(11);
       const bySlot = (slot: string) => cards.filter((c) => c.slotType === slot);
-      // 1 rare slot (holo or not; the uncommons' 1% upgrade may add one), 3 uncommon slots, 5 commons, 2 basic Energy
+      // 1 rare slot (holo or not; the uncommons' upgrades may add one), 4 uncommon slots, 6 commons
       const rare = cards.filter((c) => c.slotType === "rare" || c.slotType === "rare-holo");
       expect(rare.length).toBeGreaterThanOrEqual(1);
-      expect(rare.length + bySlot("uncommon").length).toBe(4);
-      expect(bySlot("common")).toHaveLength(5);
-      expect(bySlot("energy")).toHaveLength(2);
-      // The 9 set cards are Gym Heroes Pokémon of their slot's rarity (Trainers only come in the Trainer booster)
-      const setCardsPulled = cards.filter((c) => c.slotType !== "energy");
+      expect(rare.length + bySlot("uncommon").length).toBe(5);
+      expect(bySlot("common")).toHaveLength(6);
+      // The 11 cards are Gym Heroes Pokémon of their slot's rarity (Trainers only come in the Trainer booster)
+      const setCardsPulled = cards;
       expect(setCardsPulled.every((c) => c.card.set === "Gym Heroes" && c.card.kind === "pokemon")).toBe(true);
       for (const c of bySlot("common")) expect(rarityOf.get(c.card.id)).toBe("common");
       for (const c of bySlot("uncommon")) expect(rarityOf.get(c.card.id)).toBe("uncommon");
       for (const c of rare) expect(["rare", "rare-holo"]).toContain(rarityOf.get(c.card.id));
-      // The Energy slots are Base Set basic Energy (the set's own basic Energy aren't separate catalog cards)
-      expect(bySlot("energy").every((c) => isBasicEnergy(c.card))).toBe(true);
       holos += rare.filter((c) => rarityOf.get(c.card.id) === "rare-holo").length;
       plainRares += rare.filter((c) => rarityOf.get(c.card.id) === "rare").length;
     }

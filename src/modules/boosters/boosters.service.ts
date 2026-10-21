@@ -40,8 +40,15 @@ const packTypes: Map<string, BoosterPackType> = new Map();
 // =============================================================================
 
 /**
- * Standard 11-card booster: 1 rare slot (33% holo, otherwise rare ∪ holo), 3 uncommons
- * (1% each to upgrade to the rare pool), 5 commons, 2 distinct basic Energy.
+ * Chance that a booster's fourth uncommon is a second rare (rare ∪ holo pool), in every booster.
+ * The owner dropped basic Energy from boosters (2026-10-21): cheap in the market and a wasted slot.
+ */
+export const SECOND_RARE_CHANCE = 0.1;
+
+/**
+ * Standard 11-card booster: 1 rare slot (66.5% holo, otherwise a non-holo rare), 3 uncommons
+ * (1% each to upgrade to the rare pool), 1 uncommon that is a second rare with SECOND_RARE_CHANCE,
+ * 6 commons. No basic Energy.
  * Every set listed here gets one; adding a set's booster = one entry (the cards come from
  * game-core's set registry).
  */
@@ -52,7 +59,8 @@ const packTypes: Map<string, BoosterPackType> = new Map();
 const STANDARD_BOOSTER_SLOTS: BoosterPackType["slots"] = [
   { rarity: "rare", count: 1, holoChance: 0.665, nonHoloWhenNotHolo: true },
   { rarity: "uncommon", count: 3, upgradeChance: 0.01 },
-  { rarity: "common", count: 5 },
+  { rarity: "uncommon", count: 1, upgradeChance: SECOND_RARE_CHANCE },
+  { rarity: "common", count: 6 },
 ];
 
 interface SetBoosterDef {
@@ -136,7 +144,7 @@ function initializeDefaultPacks(): void {
       setId: set.id,
       cardCount: 11,
       slots: STANDARD_BOOSTER_SLOTS,
-      energyCount: 2,
+      energyCount: 0,
       price: ECONOMY.packs.price,
       available: true,
     });
@@ -145,7 +153,8 @@ function initializeDefaultPacks(): void {
 
 /**
  * Trainers-only booster, sold in the market only: 11 Trainers of every set (1 rare slot with
- * 33% holo, 4 uncommons, 6 commons), no Energy. Not a STANDARD_BOOSTER_ID, so the daily free
+ * 33% holo, 4 uncommons — the fourth a second rare with SECOND_RARE_CHANCE —, 6 commons), no
+ * Energy. Not a STANDARD_BOOSTER_ID, so the daily free
  * pack, the welcome packs and prize packs keep giving set boosters.
  */
 export const TRAINER_BOOSTER_ID = "trainer-booster";
@@ -160,7 +169,8 @@ const TRAINER_BOOSTER: BoosterPackType = {
   cardCount: 11,
   slots: [
     { rarity: "rare", count: 1, holoChance: 0.33 },
-    { rarity: "uncommon", count: 4, upgradeChance: 0.01 },
+    { rarity: "uncommon", count: 3, upgradeChance: 0.01 },
+    { rarity: "uncommon", count: 1, upgradeChance: SECOND_RARE_CHANCE },
     { rarity: "common", count: 6 },
   ],
   energyCount: 0,
@@ -216,11 +226,14 @@ const ALL_TRAINERS: Card[] = RELEASED_CARDS.filter((card) => card.kind === "trai
 
 /**
  * Cards a pack draws from: every playable Trainer for the Trainer booster; for a set booster its
- * set in game-core's registry without the Trainers (they only come in the Trainer booster).
+ * set in game-core's registry without the Trainers (they only come in the Trainer booster) and
+ * without basic Energy (Base Set prints them as commons; boosters never give them).
  */
 function setCards(pack: Pick<BoosterPackType, "setId" | "trainersOnly">): Card[] {
   if (pack.trainersOnly) return ALL_TRAINERS;
-  return (getSetById(pack.setId)?.cards ?? []).filter((card) => card.kind !== "trainer" && isOpenableCard(card));
+  return (getSetById(pack.setId)?.cards ?? []).filter(
+    (card) => card.kind !== "trainer" && !isBasicEnergy(card) && isOpenableCard(card),
+  );
 }
 
 /**
@@ -252,7 +265,7 @@ function getCardsByRarity(pack: Pick<BoosterPackType, "setId" | "trainersOnly">,
  * Sets without basic Energy (Jungle) use the first registry set that has them (Base Set).
  */
 function getEnergyCards(pack: Pick<BoosterPackType, "setId" | "trainersOnly">): Card[] {
-  const energy = setCards(pack).filter(isBasicEnergy);
+  const energy = (pack.trainersOnly ? [] : (getSetById(pack.setId)?.cards ?? [])).filter(isBasicEnergy);
   if (energy.length > 0) return energy;
   return CARD_SETS.map((set) => set.cards.filter(isBasicEnergy)).find((cards) => cards.length > 0) ?? [];
 }
