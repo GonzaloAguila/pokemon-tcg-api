@@ -54,6 +54,14 @@ export const AVAILABLE_CARD_BACKS: CosmeticItem[] = [
   { itemId: "pokeball", name: "Poké Ball", imageUrl: "/card-backs/card-back-pokeball.jpg" },
 ];
 
+/**
+ * Card backs won in Modo Aventura (an adventure's unique reward, content/adventures): never sold
+ * nor won elsewhere; admins can grant them. Frontend CARD_BACKS entries with source "adventure".
+ */
+export const ADVENTURE_CARD_BACKS: CosmeticItem[] = [
+  { itemId: "cardback-bosque-verde", name: "Bosque Verde", imageUrl: "/card-backs/card-back-bosque-verde.jpg" },
+];
+
 /** Event playmats (frontend PLAYMAT_COLLECTION, source "event"): not sold nor won, only granted. */
 export const ADMIN_ONLY_PLAYMATS: CosmeticItem[] = [
   { itemId: "halloween-forest", name: "Bosque Embrujado", imageUrl: "/bg/bg-halloween-forest.jpg" },

@@ -7,6 +7,7 @@
 import { RELEASED_SETS } from "../../lib/released-sets.js";
 import {
   ADMIN_ONLY_COINS,
+  ADVENTURE_CARD_BACKS,
   ALL_VARIANTS,
   AVAILABLE_AVATARS,
   AVAILABLE_CARD_BACKS,
@@ -36,6 +37,7 @@ export const GRANTABLE_COSMETICS: Record<CosmeticType, ReadonlySet<string>> = {
   coin: new Set([...AVAILABLE_COINS.map((c) => c.itemId), ...ADMIN_ONLY_COINS]),
   cardBack: new Set([
     ...AVAILABLE_CARD_BACKS.map((c) => c.itemId),
+    ...ADVENTURE_CARD_BACKS.map((c) => c.itemId),
     ...RELEASED_SETS.map((set) => ECONOMY.setMilestones.cardBackId(set.id)),
   ]),
   avatar: new Set(AVAILABLE_AVATARS.map((a) => a.itemId).filter((id) => !FREE_AVATAR_IDS.has(id))),

@@ -3,6 +3,7 @@
  * express (design §5.4). Problems are Spanish sentences, all reported at once.
  */
 import { isLimitedInDeck, isPokemonCard, ALL_CARDS } from "@gonzaloaguila/game-core";
+import { ADVENTURE_CARD_BACKS } from "../../prizes/catalog.js";
 import type { CardEntry } from "../engine-types.js";
 import { adventureCardProblem, cardOf, isBasicPokemonCard } from "./cards.js";
 import { adventureSchema, type AdventureBattle, type AdventureContent } from "./schema.js";
@@ -12,6 +13,8 @@ export type ValidationResult = { ok: true; adventure: Adventure } | { ok: false;
 
 export const BATTLE_COUNT = 10;
 const POKEMON_NAMES = new Set(ALL_CARDS.filter(isPokemonCard).map((c) => c.name));
+/** Card backs an adventure may grant (prizes/catalog.ts). */
+const ADVENTURE_CARD_BACK_IDS = new Set(ADVENTURE_CARD_BACKS.map((c) => c.itemId));
 
 const deckSize = (deck: readonly CardEntry[]) => deck.reduce((n, e) => n + e.qty, 0);
 
@@ -194,6 +197,9 @@ export function validateAdventure(raw: unknown): ValidationResult {
 
   for (const [difficulty, reward] of Object.entries(adventure.rewards)) {
     if (reward.type === "card") checkCards(problems, `Recompensa ${difficulty}`, [reward.cardId]);
+    if (reward.type === "cosmetic" && !ADVENTURE_CARD_BACK_IDS.has(reward.id)) {
+      problems.push(`Recompensa ${difficulty}: dorso de carta desconocido ${reward.id}`);
+    }
   }
 
   return problems.length > 0 ? { ok: false, problems } : { ok: true, adventure };

@@ -604,7 +604,8 @@ describe("Leyenda Viviente with the Lucky Duel achievements", () => {
     const u = await createUser({}, { stats: true });
     const list = await listAchievements(u.id);
     const meta = list.find((a) => a.id === "legend-50")!;
-    const active = list.filter((a) => a.status === "active" && a.id !== "legend-50");
+    // Adventure achievements are active but never count for Leyenda Viviente (owner Q5)
+    const active = list.filter((a) => a.status === "active" && a.id !== "legend-50" && !a.id.startsWith("adventure-"));
     expect(meta.progressTarget).toBe(active.length);
     for (const id of ["lucky-first-turn", "lucky-streak-10", "lucky-magikarp", "lucky-scyther-electabuzz"]) {
       expect(active.map((a) => a.id)).toContain(id);

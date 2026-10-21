@@ -3,6 +3,8 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "../../lib/prisma.js";
 import * as usersService from "../users/users.service.js";
 import { Errors } from "../../middleware/error-handler.js";
+import { getAdventures } from "../adventure/content/load.js";
+import type { AchievementCondition } from "../adventure/content/schema.js";
 
 // ---------------------------------------------------------------------------
 // Tier rewards
@@ -39,6 +41,11 @@ const TIER_REWARDS: Record<string, { coins: number; coupons: number }> = {
 //                        they started, turn 2 if the rival did).
 //   "lucky-win-with"   — a won Lucky Duel whose drawn Basic's name contains `starter` (and, with
 //                        `against`, whose rival's drawn Basic's name contains it).
+//
+// Modo Aventura achievements come from the adventure files (content/adventures/*.json,
+// `achievements[]`, checker "adventure"): their `condition` is read from the user's
+// AdventureProgress row of that adventure (won runs only; abandoned runs count nothing). They
+// don't count for "Leyenda Viviente" (owner Q5: adding them must not raise everyone's target).
 // ---------------------------------------------------------------------------
 
 type CheckerType =
@@ -52,7 +59,8 @@ type CheckerType =
   | "manual"
   | "lucky-streak"
   | "lucky-first-turn"
-  | "lucky-win-with";
+  | "lucky-win-with"
+  | "adventure";
 export type AchievementStatus = "active" | "retired" | "unavailable";
 
 interface AchievementDef {
@@ -66,6 +74,9 @@ interface AchievementDef {
   /** "lucky-win-with": part of the name of the player's drawn Basic, and of the rival's. */
   starter?: string;
   against?: string;
+  /** "adventure": the adventure and the condition from its file. */
+  adventureId?: string;
+  condition?: AchievementCondition;
 }
 
 const RAW_DEFS: Omit<AchievementDef, "status">[] = [
@@ -139,6 +150,26 @@ const RAW_DEFS: Omit<AchievementDef, "status">[] = [
 /** Replaced by the per-set milestones (economy v2). */
 const RETIRED_IDS = new Set(["gold-30", "legend-48", "gold-35", "platinum-43"]);
 
+/** The achievements of every adventure file (allStarters: one step per starter). */
+function adventureDefs(): AchievementDef[] {
+  return [...getAdventures().values()].flatMap((adventure) =>
+    adventure.achievements.map((a) => ({
+      id: a.id,
+      name: a.name,
+      description: a.description,
+      tier: a.tier,
+      progressTarget: a.condition.type === "allStarters" ? adventure.starters.length : 1,
+      checker: "adventure" as const,
+      status: "active" as const,
+      adventureId: adventure.id,
+      condition: a.condition,
+    })),
+  );
+}
+
+/** Whether an achievement counts for "Leyenda Viviente": every obtainable one except adventures'. */
+const countsForMeta = (d: AchievementDef) => d.status === "active" && d.checker !== "meta" && d.checker !== "adventure";
+
 const ACHIEVEMENT_DEFS: AchievementDef[] = (() => {
   const defs: AchievementDef[] = RAW_DEFS.map((d) => ({
     ...d,
@@ -146,12 +177,49 @@ const ACHIEVEMENT_DEFS: AchievementDef[] = (() => {
   }));
   // "Leyenda Viviente": every other achievement that can actually be obtained
   const meta = defs.find((d) => d.checker === "meta")!;
-  meta.progressTarget = defs.filter((d) => d.status === "active" && d.checker !== "meta").length;
-  return defs;
+  meta.progressTarget = defs.filter(countsForMeta).length;
+  return [...defs, ...adventureDefs()];
 })();
 
 /** Ids that count for "Leyenda Viviente". */
-const META_IDS = new Set(ACHIEVEMENT_DEFS.filter((d) => d.status === "active" && d.checker !== "meta").map((d) => d.id));
+const META_IDS = new Set(ACHIEVEMENT_DEFS.filter(countsForMeta).map((d) => d.id));
+
+interface AdventureProgressRow {
+  adventureId: string;
+  clearsNormal: number;
+  clearsHard: number;
+  clearedStartersNormal: string[];
+  clearedStartersHard: string[];
+  flawlessClears: number;
+  puristClears: number;
+  monotypeClears: number;
+}
+
+/** Progress of an "adventure" achievement from the user's AdventureProgress row. */
+function adventureProgress(def: AchievementDef, row: AdventureProgressRow | undefined): number {
+  const condition = def.condition;
+  if (!row || !condition) return 0;
+  switch (condition.type) {
+    case "clear":
+      if (condition.difficulty === "normal") return row.clearsNormal;
+      if (condition.difficulty === "hard") return row.clearsHard;
+      return row.clearsNormal + row.clearsHard;
+    case "flawless":
+      return row.flawlessClears;
+    case "purist":
+      return row.puristClears;
+    case "monotype":
+      return row.monotypeClears;
+    case "allStarters": {
+      const starters =
+        condition.difficulty === "hard" ? row.clearedStartersHard
+        : condition.difficulty === "normal" ? row.clearedStartersNormal
+        : [...row.clearedStartersNormal, ...row.clearedStartersHard];
+      const known = new Set(getAdventures().get(row.adventureId)?.starters.map((s) => s.id) ?? []);
+      return new Set(starters.filter((id) => known.has(id))).size;
+    }
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Public interfaces
@@ -237,7 +305,7 @@ export async function listEarnedAchievements(userId: string) {
 
 export async function checkAndUpdateProgress(userId: string): Promise<ClaimableAchievement[]> {
   // Load all needed data in parallel
-  const [user, stats, distinctCardCount, existingAchievements] = await Promise.all([
+  const [user, stats, distinctCardCount, existingAchievements, adventureRows] = await Promise.all([
     prisma.user.findUnique({
       where: { id: userId },
       select: { level: true },
@@ -264,12 +332,15 @@ export async function checkAndUpdateProgress(userId: string): Promise<ClaimableA
       where: { userId },
       select: { achievementId: true, progress: true, unlockedAt: true },
     }),
+    prisma.adventureProgress.findMany({ where: { userId } }),
   ]);
 
-  if (!user || !stats) return [];
+  if (!user) return [];
+  // An account without a UserStats row (signup always creates one) only progresses adventures
+  const adventureById = new Map(adventureRows.map((row) => [row.adventureId, row]));
 
-  const totalWins = stats.normalWins + stats.rankedWins + stats.draftWins;
-  const totalLosses = stats.normalLosses + stats.rankedLosses + stats.draftLosses;
+  const totalWins = stats ? stats.normalWins + stats.rankedWins + stats.draftWins : 0;
+  const totalLosses = stats ? stats.normalLosses + stats.rankedLosses + stats.draftLosses : 0;
   const totalGames = totalWins + totalLosses;
 
   // Build a map of existing achievement state
@@ -285,6 +356,7 @@ export async function checkAndUpdateProgress(userId: string): Promise<ClaimableA
     if (def.status !== "active") continue;
     // Claimed ones never change (skip their queries)
     if (existingMap.get(def.id)?.unlockedAt) continue;
+    if (!stats && def.checker !== "adventure") continue;
 
     // Calculate current progress
     let currentProgress = 0;
@@ -296,7 +368,7 @@ export async function checkAndUpdateProgress(userId: string): Promise<ClaimableA
         currentProgress = totalGames;
         break;
       case "stats-streak":
-        currentProgress = stats.bestStreak;
+        currentProgress = stats!.bestStreak;
         break;
       case "collection":
         currentProgress = distinctCardCount;
@@ -308,7 +380,10 @@ export async function checkAndUpdateProgress(userId: string): Promise<ClaimableA
         currentProgress = claimedCount;
         break;
       case "lucky-streak":
-        currentProgress = stats.luckyDuelBestStreak;
+        currentProgress = stats!.luckyDuelBestStreak;
+        break;
+      case "adventure":
+        currentProgress = adventureProgress(def, adventureById.get(def.adventureId!));
         break;
       case "lucky-first-turn":
       case "lucky-win-with":

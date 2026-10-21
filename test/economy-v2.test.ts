@@ -453,7 +453,8 @@ describe("achievements cleanup", () => {
     const list = await achievements.listAchievements(user.id);
     expect(list.filter((a) => a.status === "unavailable")).toHaveLength(30);
     expect(list.filter((a) => a.status === "retired")).toHaveLength(4);
-    const active = list.filter((a) => a.status === "active" && a.id !== "legend-50");
+    // Adventure achievements are active but never count for Leyenda Viviente (owner Q5)
+    const active = list.filter((a) => a.status === "active" && a.id !== "legend-50" && !a.id.startsWith("adventure-"));
     expect(list.find((a) => a.id === "legend-50")?.progressTarget).toBe(active.length);
     await expect(achievements.claimAchievement(user.id, "bronze-3")).rejects.toMatchObject({ statusCode: 400 });
   });
