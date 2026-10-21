@@ -127,6 +127,8 @@ const starterSchema = z
     energyType: z.enum(["grass", "fire", "water", "lightning", "psychic", "fighting"]),
     line: z.object({ basic: cardId, stage1: cardId, stage2: cardId }).strict(),
     deck: deckSchema,
+    /** Playable only with a UserStarterUnlock row (reward type starter_unlock, e.g. Pikachu). */
+    requiresUnlock: z.boolean().optional(),
   })
   .strict();
 

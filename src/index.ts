@@ -36,6 +36,7 @@ import { loadCardValues } from "./modules/trades/card-values.js";
 import { refundUnsettledMatches } from "./modules/matches/matches.service.js";
 import { cleanupOldMessages } from "./modules/chat/chat.service.js";
 import { getAdventures } from "./modules/adventure/content/load.js";
+import { adventureRouter } from "./modules/adventure/index.js";
 
 // Load environment variables
 dotenv.config();
@@ -92,6 +93,7 @@ app.use(
     "/api/economy",
     "/api/progress/tutorial",
     "/api/progress/puzzles",
+    "/api/adventure",
   ],
   economyRateLimiter,
 );
@@ -120,6 +122,7 @@ app.use("/api", tradesRouter);
 app.use("/api", progressRouter);
 app.use("/api", presenceRouter);
 app.use("/api", playersRouter);
+app.use("/api", adventureRouter);
 // app.use("/api/matchmaking", matchmakingRouter);
 
 // Error handler

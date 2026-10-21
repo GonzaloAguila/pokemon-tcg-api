@@ -16,7 +16,8 @@ export type CardChangeReason =
   | "trade"
   | "trade_revert"
   | "draft"
-  | "admin_adjustment";
+  | "admin_adjustment"
+  | "adventure_reward";
 
 /** `quantity` > 0 received, < 0 given away. */
 export interface CardChange {
