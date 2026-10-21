@@ -1,4 +1,4 @@
-import { LUCKY_DUEL_BASICS } from "@gonzaloaguila/game-core";
+import { CardRarity, LUCKY_DUEL_BASICS, getSetById } from "@gonzaloaguila/game-core";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "../../lib/prisma.js";
 import * as usersService from "../users/users.service.js";
@@ -54,6 +54,13 @@ const TIER_REWARDS: Record<string, { coins: number; coupons: number }> = {
 //                    computed over every check-in ever, so it never goes down.
 //   "login-days"   — User.loginDays (+1 per economy day on a verified check-in).
 //
+// Collection achievements:
+//   "collection"      — distinct cards of any set the user owns (UserCard.quantity > 0).
+//   "holo-collection" — distinct Base Set Rare Holo cards the user owns ("Holo Completo": the 16
+//                       holos of game-core's catalog, BASE_SET_HOLO_IDS). Re-checked after every
+//                       card gain that can complete it: packs, trades, market, Fichas de canje,
+//                       wheel/slots card prizes, battle pass, drafts, adventures.
+//
 // Modo Aventura achievements come from the adventure files (content/adventures/*.json,
 // `achievements[]`, checker "adventure"): their `condition` is read from the user's
 // AdventureProgress row of that adventure (won runs only; abandoned runs count nothing). They
@@ -65,6 +72,7 @@ type CheckerType =
   | "stats-games"
   | "stats-streak"
   | "collection"
+  | "holo-collection"
   | "coins"
   | "level"
   | "meta"
@@ -95,6 +103,11 @@ interface AchievementDef {
   /** An exclusive cosmetic granted with the reward on claim (adventure achievements). */
   cosmetic?: AchievementCosmetic;
 }
+
+/** Catalog ids of the Base Set Rare Holo cards ("Holo Completo": 16 in game-core's catalog). */
+export const BASE_SET_HOLO_IDS: readonly string[] = (getSetById("base-set")?.cards ?? [])
+  .filter((card) => card.rarity === CardRarity.RareHolo)
+  .map((card) => card.id);
 
 const RAW_DEFS: Omit<AchievementDef, "status">[] = [
   // Bronze (15)
@@ -143,7 +156,7 @@ const RAW_DEFS: Omit<AchievementDef, "status">[] = [
   // Platinum (8)
   { id: "platinum-38", name: "Racha de 20",        description: "Gana 20 partidas online seguidas", tier: "platinum", progressTarget: 20, checker: "stats-streak" },
   { id: "platinum-39", name: "Quinientos",         description: "Gana 500 partidas online", tier: "platinum", progressTarget: 500, checker: "stats-wins" },
-  { id: "platinum-40", name: "Holo Completo",      description: "Consigue todas las cartas holo", tier: "platinum", progressTarget: 16, checker: "manual" },
+  { id: "platinum-40", name: "Holo Completo",      description: `Consigue las ${BASE_SET_HOLO_IDS.length} cartas holo de Base Set`, tier: "platinum", progressTarget: BASE_SET_HOLO_IDS.length, checker: "holo-collection" },
   { id: "platinum-41", name: "Año Activo",         description: "Entra 100 días distintos", tier: "platinum", progressTarget: 100, checker: "login-days" },
   { id: "platinum-42", name: "Élite",              description: "Alcanza el top 100 del ranking", tier: "platinum", progressTarget: 1, checker: "manual" },
   { id: "platinum-43", name: "Millonario",         description: "Retirado: ya no se premia acumular monedas", tier: "platinum", progressTarget: 25000, checker: "coins" },
@@ -342,7 +355,7 @@ export async function checkAndUpdateProgress(userId: string): Promise<ClaimableA
     });
 
   // Load all needed data in parallel
-  const [user, stats, distinctCardCount, existingAchievements, adventureRows, packsOpened, longestLoginStreak] = await Promise.all([
+  const [user, stats, distinctCardCount, existingAchievements, adventureRows, packsOpened, longestLoginStreak, holoCount] = await Promise.all([
     prisma.user.findUnique({
       where: { id: userId },
       select: { level: true, loginDays: true },
@@ -369,6 +382,9 @@ export async function checkAndUpdateProgress(userId: string): Promise<ClaimableA
     prisma.adventureProgress.findMany({ where: { userId } }),
     pending("packs-opened").then((needed) => (needed ? countPacksOpened(userId) : 0)),
     pending("login-streak").then((needed) => (needed ? longestCheckInStreakOf(userId) : 0)),
+    pending("holo-collection").then((needed) =>
+      needed ? prisma.userCard.count({ where: { userId, quantity: { gt: 0 }, cardDefId: { in: [...BASE_SET_HOLO_IDS] } } }) : 0,
+    ),
   ]);
 
   if (!user) return [];
@@ -408,6 +424,9 @@ export async function checkAndUpdateProgress(userId: string): Promise<ClaimableA
         break;
       case "collection":
         currentProgress = distinctCardCount;
+        break;
+      case "holo-collection":
+        currentProgress = holoCount;
         break;
       case "level":
         currentProgress = user.level;
@@ -473,8 +492,8 @@ export async function checkAndUpdateProgress(userId: string): Promise<ClaimableA
 }
 
 /**
- * Check the user's achievements without waiting (after a check-in or opening packs): errors are
- * logged, never thrown to the caller.
+ * Check the user's achievements without waiting (after a check-in, opening packs or another card
+ * gain): errors are logged, never thrown to the caller.
  */
 export function refreshProgressInBackground(userId: string, trigger: string): void {
   checkAndUpdateProgress(userId).catch((error) => console.error(`[achievements] check after ${trigger} failed for ${userId}:`, error));
@@ -485,7 +504,7 @@ export function refreshProgressInBackground(userId: string, trigger: string): vo
 // ---------------------------------------------------------------------------
 
 /** Checkers that don't read UserStats (they progress for an account without that row too). */
-const CHECKERS_WITHOUT_STATS = new Set<CheckerType>(["adventure", "packs-opened", "login-streak", "login-days"]);
+const CHECKERS_WITHOUT_STATS = new Set<CheckerType>(["adventure", "packs-opened", "login-streak", "login-days", "holo-collection"]);
 
 /** card_transactions reasons of an opened pack (one row per pack). */
 const PACK_OPENING_REASONS: CardChangeReason[] = ["pack_purchase", "daily_pack", "stored_pack", "prize_pack"];

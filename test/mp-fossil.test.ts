@@ -156,7 +156,7 @@ describe.each(["p1", "p2"] as const)("Fossil in multiplayer as %s", (actor) => {
     expect(t.mine().playerBench.map((p) => p.pokemon.id)).toEqual(["fossil-h"]);
     expect(t.mine().playerBench[0].pokemon.types).toEqual([]);
 
-    await expectRejected(t, t.actAs(opp, "discardFromPlay", { pokemonId: "fossil-h" }), /Not your turn/);
+    await expectRejected(t, t.actAs(opp, "discardFromPlay", { pokemonId: "fossil-h" }), /No es tu turno/);
     expect((await t.act("discardFromPlay", { pokemonId: "fossil-h" })).success).toBe(true);
     expect(t.mine().playerBench).toEqual([]);
     expect(t.mine().playerDiscard.map((c) => c.name)).toEqual(["Mysterious Fossil"]);
@@ -172,7 +172,7 @@ describe.each(["p1", "p2"] as const)("Fossil in multiplayer as %s", (actor) => {
     expect((await t.act("discardFromPlay", { pokemonId: "fossil-a" })).success).toBe(true);
     expect(t.mine().playerActivePokemon).toBeNull();
     expect(t.mine().playerNeedsToPromote).toBe(true);
-    await expectRejected(t, t.actAs(opp, "promote", { benchIndex: 0 }), /No promotion needed/);
+    await expectRejected(t, t.actAs(opp, "promote", { benchIndex: 0 }), /No necesitas promover un Pokémon/);
 
     expect((await t.act("promote", { benchIndex: 0 })).success).toBe(true);
     expect(t.mine().playerActivePokemon?.pokemon.id).toBe("pika-b");
@@ -350,7 +350,7 @@ describe.each(["p1", "p2"] as const)("Fossil in multiplayer as %s", (actor) => {
     expect(t.mine().playerPrizes).toHaveLength(prizesBefore - 1);
     expect(t.mine().isPlayerTurn).toBe(true);
 
-    await expectRejected(t, t.act("promote", { benchIndex: 0 }), /No promotion needed/);
+    await expectRejected(t, t.act("promote", { benchIndex: 0 }), /No necesitas promover un Pokémon/);
     expect((await t.actAs(opp, "promote", { benchIndex: 1 })).success).toBe(true);
     const after = t.mine();
     expect(after.opponentActivePokemon?.pokemon.id).toBe("charm");

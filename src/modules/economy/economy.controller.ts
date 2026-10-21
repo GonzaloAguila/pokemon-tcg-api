@@ -135,7 +135,12 @@ router.post(
   "/economy/exchange",
   requireAuth,
   requireVerifiedEmail,
-  wrap((req) => economyService.redeemExchangeToken(req.user!.userId, parseBody(exchangeSchema, req.body).cardDefId)),
+  wrap(async (req) => {
+    const result = await economyService.redeemExchangeToken(req.user!.userId, parseBody(exchangeSchema, req.body).cardDefId);
+    // The chosen card can complete a collection achievement ("Holo Completo")
+    refreshProgressInBackground(req.user!.userId, "exchange token");
+    return result;
+  }),
 );
 
 // Set milestones

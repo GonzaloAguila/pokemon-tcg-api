@@ -147,7 +147,7 @@ describe.each(["p1", "p2"] as const)("multiplayer engine actions as %s", (actor)
 
     await expectRejected(t, t.act("playBasicToBench", { cardId: "raichu-h" }), "Solo puedes poner en juego Pokémon Básicos");
     await expectRejected(t, t.act("playBasicToActive", { cardId: "raichu-h" }), /Básicos/);
-    await expectRejected(t, t.actAs(other(actor), "playBasicToBench", { cardId: "pika-h" }), "Not your turn");
+    await expectRejected(t, t.actAs(other(actor), "playBasicToBench", { cardId: "pika-h" }), "No es tu turno");
   });
 
   it("attaches one Energy per turn to any own Pokémon (by id)", async () => {
@@ -358,7 +358,7 @@ describe.each(["p1", "p2"] as const)("multiplayer engine actions as %s", (actor)
     expect(t.masked(other(actor)).pendingDeckSearch).toBeUndefined();
     expect(t.masked("spectator").pendingDeckSearch).toBeUndefined();
 
-    await expectRejected(t, t.actAs(other(actor), "deckSearch", { cardId: "bell-d" }), "Not your turn");
+    await expectRejected(t, t.actAs(other(actor), "deckSearch", { cardId: "bell-d" }), "No es tu turno");
     const search = await t.act("deckSearch", { cardId: "bell-d" });
     expect(search.success, search.error).toBe(true);
     expect(t.mine().playerBench.map((p) => p.pokemon.id)).toEqual(["bell-d"]);
@@ -373,7 +373,7 @@ describe.each(["p1", "p2"] as const)("multiplayer engine actions as %s", (actor)
     expect(t.masked(actor).pendingPeek?.revealedCards.map((c) => c.id)).toEqual(["top-card"]);
     expect(t.masked(other(actor)).pendingPeek).toBeUndefined();
     expect(t.masked("spectator").pendingPeek).toBeUndefined();
-    await expectRejected(t, t.actAs(other(actor), "clearPeek"), "Not your turn");
+    await expectRejected(t, t.actAs(other(actor), "clearPeek"), "No es tu turno");
     expect((await t.act("clearPeek")).success).toBe(true);
   });
 

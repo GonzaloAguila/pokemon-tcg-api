@@ -14,6 +14,7 @@ import { z } from "zod";
 import { requireAuth, requireVerifiedEmail, optionalAuth } from "../../middleware/auth.js";
 import { Errors } from "../../middleware/error-handler.js";
 import * as battlePassService from "./battle-pass.service.js";
+import { refreshProgressInBackground } from "../achievements/achievements.service.js";
 
 const router = Router();
 
@@ -134,6 +135,8 @@ router.post(
         day,
         parsed.data.track,
       );
+      // An unowned holo can complete "Holo Completo"
+      if (result.granted.type === "card") refreshProgressInBackground(req.user!.userId, "battle pass card");
       res.json(result);
     } catch (err) {
       next(err);

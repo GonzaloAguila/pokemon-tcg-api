@@ -3,6 +3,7 @@ import { z } from "zod";
 import { requireAuth, requireVerifiedEmail } from "../../middleware/auth.js";
 import { Errors } from "../../middleware/error-handler.js";
 import * as marketService from "./market.service.js";
+import { refreshProgressInBackground } from "../achievements/achievements.service.js";
 
 const router = Router();
 
@@ -48,6 +49,8 @@ router.post(
     try {
       const { cardDefId } = parseBody(buyCardSchema, req.body);
       const result = await marketService.buyDailyCard(req.user!.userId, cardDefId);
+      // A new card can complete a collection achievement ("Holo Completo")
+      refreshProgressInBackground(req.user!.userId, "card purchase");
       res.json(result);
     } catch (err) {
       next(err);

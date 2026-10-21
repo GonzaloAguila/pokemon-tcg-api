@@ -2,6 +2,7 @@ import { Router, type Request, type Response, type NextFunction } from "express"
 import { requireAuth, requireVerifiedEmail } from "../../middleware/auth.js";
 import * as wheelService from "./wheel.service.js";
 import { refreshProgressInBackground } from "../achievements/achievements.service.js";
+import { prizeGivesCards } from "../prizes/prizes.js";
 
 const router = Router();
 
@@ -17,8 +18,8 @@ router.post(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const result = await wheelService.spinWheel(req.user!.userId);
-      // A free pack was opened ("Primer Sobre")
-      if (result.packResult) refreshProgressInBackground(req.user!.userId, "wheel pack");
+      // A free pack was opened ("Primer Sobre"), or a card won ("Holo Completo")
+      if (result.packResult || prizeGivesCards(result.prize)) refreshProgressInBackground(req.user!.userId, "wheel prize");
       res.json(result);
     } catch (err) {
       next(err);

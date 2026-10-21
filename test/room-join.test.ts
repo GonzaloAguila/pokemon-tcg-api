@@ -23,6 +23,6 @@ describe("joinRoom seats", () => {
     const after = await manager.joinRoom(room.id, "rival", "socket-b");
 
     expect(after.player2Id).toBe("rival");
-    await expect(manager.joinRoom(room.id, "third", "socket-c")).rejects.toThrow("Room is full");
+    await expect(manager.joinRoom(room.id, "third", "socket-c")).rejects.toThrow("La mesa está llena");
   });
 });

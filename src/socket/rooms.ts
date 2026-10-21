@@ -38,6 +38,7 @@ import {
   startPlayingPhase,
   promoteActivePokemon,
   takePrize,
+  prizesOwed,
   getDeckById,
   decks,
   isPokemonCard,
@@ -692,6 +693,19 @@ function pokemonIdAt(state: GameState, targetIndex: number | undefined): string 
   return pokemon?.pokemon.id;
 }
 
+/**
+ * A takePrize with no Prize owed: a double click (Prizes owed are a count, game-core prizesOwed;
+ * each takePrize takes one until it is 0), or a click on a stale board / after the game ended.
+ * Nothing to do: handlers.ts answers it without an error toast (code only).
+ */
+export const NO_PRIZE_OWED_CODE = "NO_PRIZE_OWED";
+const noPrizeOwed = (): ActionResult => ({ success: false, code: NO_PRIZE_OWED_CODE, error: "No tienes premios por tomar" });
+
+/** Runtime errors (bugs) carry English internals: the player gets a Spanish line instead. */
+const ACTION_FAILED = "No se pudo realizar la acción";
+const isProgrammingError = (error: unknown) =>
+  error instanceof TypeError || error instanceof RangeError || error instanceof ReferenceError || error instanceof SyntaxError;
+
 /** The Spanish reason of a game-core IllegalActionError (illegal move), else null. */
 function illegalReason(error: unknown): string | null {
   if (error instanceof IllegalActionError) return error.reason;
@@ -702,6 +716,8 @@ function illegalReason(error: unknown): string | null {
 export interface ActionResult {
   success: boolean;
   error?: string;
+  /** Stable code of some rejections (NO_PRIZE_OWED_CODE). */
+  code?: string;
   gameState?: GameState;
   gameOver?: boolean;
   winner?: "player1" | "player2";
@@ -1134,7 +1150,7 @@ export class GameRoomManager {
     engineRandom: () => number;
     coinSource: CoinSource;
   }): GameRoom {
-    if (this.rooms.has(input.roomId)) throw new Error(`Room ${input.roomId} already exists`);
+    if (this.rooms.has(input.roomId)) throw new Error(`La sala ${input.roomId} ya existe`);
     const room = this.createRoom(input.roomId, { mode: "adventure", friendly: true, reservedUserId: input.userId });
     room.config.prizeCount = input.gameState.playerPrizes.length;
     room.status = "playing";
@@ -1197,7 +1213,7 @@ export class GameRoomManager {
 
     // Check if room is full
     if (room.player1Id && room.player2Id) {
-      throw new Error("Room is full");
+      throw new Error("La mesa está llena");
     }
 
     // Taking a seat at a lobby table closes your waiting tables, but only if nobody sat at one of
@@ -1401,14 +1417,14 @@ export class GameRoomManager {
    */
   async setPlayerReady(roomId: string, socketId: string): Promise<GameRoom> {
     const room = this.rooms.get(roomId);
-    if (!room) throw new Error("Room not found");
+    if (!room) throw new RoomNotFoundError();
 
     if (room.player1SocketId === socketId) {
       room.player1Ready = true;
     } else if (room.player2SocketId === socketId) {
       room.player2Ready = true;
     } else {
-      throw new Error("Player not in room");
+      throw new Error("No juegas en esta mesa");
     }
 
     return room;
@@ -1419,7 +1435,7 @@ export class GameRoomManager {
    */
   setPlayerDeck(roomId: string, socketId: string, deckId: string): void {
     const room = this.rooms.get(roomId);
-    if (!room) throw new Error("Room not found");
+    if (!room) throw new RoomNotFoundError();
 
     if (room.player1SocketId === socketId) {
       room.player1DeckId = deckId;
@@ -1440,10 +1456,10 @@ export class GameRoomManager {
     resolvedDecks?: { player1Cards: GameCard[]; player2Cards: GameCard[] },
   ): Promise<GameState> {
     const room = this.rooms.get(roomId);
-    if (!room) throw new Error("Room not found");
+    if (!room) throw new RoomNotFoundError();
 
     if (!room.player1Id || !room.player2Id) {
-      throw new Error("Need two players to start");
+      throw new Error("Faltan jugadores para empezar la partida");
     }
 
     room.status = "playing";
@@ -1520,9 +1536,9 @@ export class GameRoomManager {
    */
   async startLuckyDuelGame(roomId: string): Promise<GameState> {
     const room = this.rooms.get(roomId);
-    if (!room) throw new Error("Room not found");
+    if (!room) throw new RoomNotFoundError();
     if (!room.player1Id || !room.player2Id) {
-      throw new Error("Need two players to start");
+      throw new Error("Faltan jugadores para empezar la partida");
     }
 
     room.status = "playing";
@@ -1549,9 +1565,9 @@ export class GameRoomManager {
     prizeCount = 6,
   ): Promise<GameState> {
     const room = this.rooms.get(roomId);
-    if (!room) throw new Error("Room not found");
+    if (!room) throw new RoomNotFoundError();
     if (!room.player1Id || !room.player2Id) {
-      throw new Error("Need two players to start");
+      throw new Error("Faltan jugadores para empezar la partida");
     }
 
     room.status = "playing";
@@ -1622,17 +1638,17 @@ export class GameRoomManager {
     request: CoinFlipRequest,
   ): { success: true; results: Coin[]; result: Coin; flippedBy?: Flipper[] } | { success: false; error: string } {
     const room = this.rooms.get(roomId);
-    if (!room?.gameState) return { success: false, error: "Game not started" };
+    if (!room?.gameState) return { success: false, error: "La partida todavía no empezó" };
     if (room.status === "finished" || room.gameState.gamePhase === "GAME_OVER") {
       return { success: false, error: "La partida ya terminó" };
     }
     const key = room.player1SocketId === socketId ? "player1" : room.player2SocketId === socketId ? "player2" : null;
-    if (!key) return { success: false, error: "Not a player in this room" };
+    if (!key) return { success: false, error: "No juegas en esta mesa" };
     if (isLuckyDuelFaceDown(room.gameState)) return { success: false, error: LUCKY_DUEL_FACE_DOWN_ERROR };
     const isMyTurn = key === "player1" ? room.gameState.isPlayerTurn : !room.gameState.isPlayerTurn;
     // Chaos Gym's accepted offer: the offered player flips its Trainer's coins out of turn
     const playsChaosOffer = chaosOfferPlayer(room.gameState) === key && request.purpose === "trainer";
-    if (!isMyTurn && !playsChaosOffer) return { success: false, error: "Not your turn" };
+    if (!isMyTurn && !playsChaosOffer) return { success: false, error: "No es tu turno" };
     if (pendingTrainerChoiceOf(room.gameState)) return { success: false, error: "Primero hay que resolver la carta de Entrenador" };
 
     const view = key === "player1" ? room.gameState : swapSides(room.gameState);
@@ -1741,12 +1757,14 @@ export class GameRoomManager {
     const action = parsed.action;
 
     const room = this.rooms.get(roomId);
-    if (!room) return { success: false, error: "Room not found" };
-    if (!room.gameState) return { success: false, error: "Game not started" };
+    if (!room) return { success: false, error: "La partida ya no existe" };
+    if (!room.gameState) return { success: false, error: "La partida todavía no empezó" };
     const flip = this.coinsOf(room);
     // A finished game takes no more actions: no surrender after the end (a second gameOver
-    // with the other winner), no promotion of the loser, no farming wins on a dead room
+    // with the other winner), no promotion of the loser, no farming wins on a dead room. A
+    // takePrize here is a double click on the last Prize: answered quietly.
     if (room.status === "finished" || room.gameState.gamePhase === "GAME_OVER") {
+      if (action.type === "takePrize") return noPrizeOwed();
       return { success: false, error: "La partida ya terminó" };
     }
 
@@ -1755,7 +1773,13 @@ export class GameRoomManager {
     const isPlayer2 = "side" in from ? from.side === "player2" : room.player2SocketId === from.socketId;
 
     if (!isPlayer1 && !isPlayer2) {
-      return { success: false, error: "Not a player in this room" };
+      return { success: false, error: "No juegas en esta mesa" };
+    }
+
+    // No Prize owed (a double click, a stale board): nothing to do, answered before any
+    // pending-state rejection could turn it into an error toast
+    if (action.type === "takePrize" && prizesOwed(room.gameState, isPlayer1 ? "player" : "opponent") === 0) {
+      return noPrizeOwed();
     }
 
     // Lucky Duel: while both Actives are face down only getting ready (or surrendering) is
@@ -1833,7 +1857,7 @@ export class GameRoomManager {
     if (!isMyTurn && !playsChaosOffer && !turnFreeActions.includes(action.type)) {
       // Allow setup actions during MULLIGAN/SETUP phase regardless of turn
       if (!isSetupPhase || !setupActions.includes(action.type)) {
-        return { success: false, error: "Not your turn" };
+        return { success: false, error: "No es tu turno" };
       }
     }
 
@@ -2068,9 +2092,10 @@ export class GameRoomManager {
 
         case "takePrize": {
           const prizeIndex = action.payload.prizeIndex;
-          if (!actorView.playerCanTakePrize) {
-            return { success: false, error: "Cannot take a prize now" };
-          }
+          // Prizes owed are a count: one per takePrize until it is 0 (checked above too)
+          if (prizesOwed(actorView, "player") === 0) return noPrizeOwed();
+          // A stale index (a Prize the board still showed): the engine would ignore it silently
+          if (prizeIndex >= actorView.playerPrizes.length) return { success: false, error: "Ese premio ya no está: elige otro" };
           newState = executeForPlayer((state) => takePrize(state, prizeIndex, true, false));
           // Taking the last thing the paused turn waited for ends it (finishPausedTurn)
           ({ state: newState, eventsNeutralizedTo } = this.finishTurnAfter(newState, eventsNeutralizedTo, actorKey));
@@ -2083,7 +2108,7 @@ export class GameRoomManager {
           // discarded Active Mysterious Fossil or Cowardice (the side whose turn it is).
           const benchIndex = action.payload.benchIndex;
           if (!actorView.playerNeedsToPromote) {
-            return { success: false, error: "No promotion needed" };
+            return { success: false, error: "No necesitas promover un Pokémon" };
           }
           newState = executeForPlayer((state) => promoteActivePokemon(state, benchIndex));
           // After an attack (or the between-turns checkup) the turn ends once both Actives are
@@ -2205,7 +2230,7 @@ export class GameRoomManager {
 
         case "clearPeek": {
           // Only the side that peeked (whose turn it is) owns pendingPeek
-          if (!actorView.isPlayerTurn) return { success: false, error: "Not your turn" };
+          if (!actorView.isPlayerTurn) return { success: false, error: "No es tu turno" };
           newState = executeForPlayer((state) => clearPendingPeek(state));
           break;
         }
@@ -2456,7 +2481,7 @@ export class GameRoomManager {
         default: {
           // Unreachable: parseGameAction only lets known action types through.
           const unknownType: never = action;
-          return { success: false, error: `Unknown action type: ${(unknownType as { type: string }).type}` };
+          return { success: false, error: `Acción desconocida: ${(unknownType as { type: string }).type}` };
         }
       }
 
@@ -2536,7 +2561,7 @@ export class GameRoomManager {
         return { success: false, error: reason };
       }
       console.error(`[Room ${roomId}] Action error:`, error);
-      return { success: false, error: (error as Error).message };
+      return { success: false, error: isProgrammingError(error) ? ACTION_FAILED : (error as Error).message };
     }
   }
 
@@ -3077,17 +3102,17 @@ export class GameRoomManager {
    */
   requestKick(roomId: string, socketId: string): { success: boolean; winner?: "player1" | "player2"; error?: string } {
     const room = this.rooms.get(roomId);
-    if (!room) return { success: false, error: "Room not found" };
+    if (!room) return { success: false, error: "La partida ya no existe" };
     if (room.adventure) return { success: false, error: "No hay tiempo límite en el Modo Aventura" };
     if (room.status !== "playing" || !room.gameState) {
-      return { success: false, error: "Game is not in progress" };
+      return { success: false, error: "La partida no está en curso" };
     }
 
     // Determine which player is requesting the kick
     const isPlayer1 = room.player1SocketId === socketId;
     const isPlayer2 = room.player2SocketId === socketId;
     if (!isPlayer1 && !isPlayer2) {
-      return { success: false, error: "Not a player in this room" };
+      return { success: false, error: "No juegas en esta mesa" };
     }
 
     // Only the player the game is waiting on can be kicked (awaitedSide): the side whose turn
@@ -3105,7 +3130,7 @@ export class GameRoomManager {
 
     // Check if turn timer has expired
     if (!room.turnStartedAt) {
-      return { success: false, error: "Timer not initialized" };
+      return { success: false, error: "El reloj de la partida no está listo" };
     }
     const elapsed = (Date.now() - room.turnStartedAt) / 1000;
     if (elapsed < room.turnTimerDuration) {

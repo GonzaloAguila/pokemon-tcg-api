@@ -157,7 +157,7 @@ describe("watching a table", () => {
     // Not a seat: joining it is refused too
     const joinRefused = nextEvent<any>(sv, "error");
     sv.emit("joinRoom", { roomId: t.roomId, deckId: "brushfire" });
-    expect((await joinRefused).message).toBe("Room is full");
+    expect((await joinRefused).message).toBe("La mesa está llena");
 
     expect(room.status).toBe("playing");
     expect(JSON.stringify(room.gameState)).toBe(before);

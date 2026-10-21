@@ -327,7 +327,7 @@ describe.each(["p1", "p2"] as const)("Gym Challenge in multiplayer as %s", (acto
   it("Psychic Control: the borrowed Trainer can be given up (declineBorrowedTrainer); not by the other player", async () => {
     const t = setupGame(actor, { myHand: [gc("Sabrina's Psychic Control", "pc")], theirDiscard: [cardAs("Bill", "their-bill")] }, ["heads"]);
     expect((await t.act("playTrainer", { cardId: "pc", selections: [["their-bill"]] })).success).toBe(true);
-    await expectRejected(t, t.actAs(opp, "declineBorrowedTrainer"), /Not your turn/);
+    await expectRejected(t, t.actAs(opp, "declineBorrowedTrainer"), /No es tu turno/);
     expect((await t.act("declineBorrowedTrainer")).success).toBe(true);
     expect(t.mine().pendingBorrowedTrainer).toBeUndefined();
   });
@@ -367,7 +367,7 @@ describe.each(["p1", "p2"] as const)("Gym Challenge in multiplayer as %s", (acto
       expect(JSON.stringify(masked)).not.toContain("hidden-gastly");
     }
 
-    await expectRejected(t, t.actAs(opp, "flipFaceDown", { pokemonId: placeholder.pokemon.id }), /Not your turn/);
+    await expectRejected(t, t.actAs(opp, "flipFaceDown", { pokemonId: placeholder.pokemon.id }), /No es tu turno/);
     const flipped = await t.act("flipFaceDown", { pokemonId: placeholder.pokemon.id });
     expect(flipped.success, flipped.error).toBe(true);
     expect(t.masked(opp).opponentBench[0].pokemon.name).toBe("Sabrina's Gastly");
@@ -470,7 +470,7 @@ describe.each(["p1", "p2"] as const)("Gym Challenge in multiplayer as %s", (acto
     const res = await t.act("stadiumAction", { selections: [["my-gastly"], ["my-gastly-e0"]] });
     expect(res.success, res.error).toBe(true);
     expect(t.mine().playerHand.map((c) => c.id)).toEqual(["my-gastly-e0"]);
-    await expectRejected(t, t.actAs(opp, "stadiumAction", { selections: [["my-gastly"], ["my-gastly-e0"]] }), /Not your turn/);
+    await expectRejected(t, t.actAs(opp, "stadiumAction", { selections: [["my-gastly"], ["my-gastly-e0"]] }), /No es tu turno/);
   });
   it("Shapeshift: usePower attaches an Evolution card; the attack comes from getAvailableAttacks (the copied card's)", async () => {
     const raichu = byName("Raichu");

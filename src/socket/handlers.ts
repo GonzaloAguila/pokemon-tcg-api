@@ -9,6 +9,7 @@ import {
 import type { GameState } from "@gonzaloaguila/game-core";
 import {
   GameRoomManager,
+  NO_PRIZE_OWED_CODE,
   NoShowClaimError,
   OwnTableTakenError,
   PrivateTableError,
@@ -141,7 +142,7 @@ async function resolveDeckCards(deckId: string | null): Promise<GameCard[] | nul
  */
 async function resolveAndStartGame(roomManager: GameRoomManager, roomId: string) {
   const room = roomManager.getRoom(roomId);
-  if (!room) throw new Error("Room not found");
+  if (!room) throw new RoomNotFoundError();
 
   // Lucky Duel: no decks to resolve, the server draws both (random Basic + deck around it)
   if (room.config.mode === "lucky-duel") return roomManager.startLuckyDuelGame(roomId);
@@ -989,7 +990,7 @@ export function setupSocketHandlers(io: Server): void {
 
           console.log(`🗑️ Room ${roomId} deleted`);
         } else {
-          socket.emit("error", { message: "Cannot delete room" });
+          socket.emit("error", { message: "No puedes cerrar esta mesa" });
         }
       } catch (error) {
         socket.emit("error", { message: (error as Error).message });
@@ -1306,7 +1307,13 @@ export function setupSocketHandlers(io: Server): void {
         adventureRooms.afterHumanAction(roomId, action as { type: string; payload?: unknown }, result);
 
         if (!result.success) {
-          socket.emit("actionResult", { success: false, error: result.error });
+          // A takePrize with no Prize owed (double click): no error to show, the code only
+          socket.emit(
+            "actionResult",
+            result.code === NO_PRIZE_OWED_CODE
+              ? { success: false, code: result.code }
+              : { success: false, error: result.error, ...(result.code ? { code: result.code } : {}) },
+          );
           return;
         }
 
@@ -1450,7 +1457,7 @@ export function setupSocketHandlers(io: Server): void {
         const result = roomManager.requestKick(roomId, socket.id);
 
         if (!result.success || !result.winner) {
-          socket.emit("error", { message: result.error || "Cannot kick" });
+          socket.emit("error", { message: result.error || "No se puede expulsar al rival" });
           return;
         }
 

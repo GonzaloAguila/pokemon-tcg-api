@@ -8,6 +8,7 @@ import * as usersService from "../users/users.service.js";
 import { FREE_AVATAR_IDS, type Db } from "../users/users.service.js";
 import { recordCardChange, type CardChange } from "../users/card-ledger.js";
 import { revalidateDecks } from "../trades/trades.service.js";
+import { refreshProgressInBackground } from "../achievements/achievements.service.js";
 import { SENT_MESSAGE_FILTER } from "../messaging/messaging.service.js";
 import { COSMETIC_TYPE_LABELS, GRANTABLE_COSMETICS, type CosmeticType } from "./grantable-cosmetics.js";
 import { startOfEconomyDay, startOfEconomyWeek } from "../economy/economy-time.js";
@@ -664,6 +665,8 @@ export async function adjustCards(
       console.error("[admin] deck revalidation failed:", err),
     );
   }
+  // Cards given can complete a collection achievement ("Holo Completo")
+  if (outcome.results.length > outcome.removed.length) refreshProgressInBackground(userId, "admin card grant");
   return { results: outcome.results };
 }
 

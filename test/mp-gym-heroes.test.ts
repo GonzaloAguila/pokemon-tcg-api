@@ -169,7 +169,7 @@ describe.each(["p1", "p2"] as const)("Gym Heroes in multiplayer as %s", (actor) 
       stadium: { card: gh("Celadon City Gym", "celadon"), playedBy: "opponent" },
     });
     expect(t.manager.requestCoinFlip(t.room.id, SOCKET[actor], { purpose: "stadium" })).toMatchObject({ success: false, error: /no lanza monedas/ });
-    await expectRejected(t, t.actAs(opp, "stadiumAction", { selections: [["oddish"], ["oddish-e0"]] }), /Not your turn/);
+    await expectRejected(t, t.actAs(opp, "stadiumAction", { selections: [["oddish"], ["oddish-e0"]] }), /No es tu turno/);
     await expectRejected(t, t.act("stadiumAction", { selections: [["their-active"]] }), /./);
     const res = await t.act("stadiumAction", { selections: [["oddish"], ["oddish-e0"]] });
     expect(res.success, res.error).toBe(true);

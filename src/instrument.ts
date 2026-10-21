@@ -11,6 +11,9 @@ dotenv.config();
 
 const dsn = process.env.SENTRY_DSN;
 
+/** Express layer types Sentry would otherwise open a span for (see expressIntegration below). */
+export const EXPRESS_LAYER_TYPES: ("middleware" | "router" | "request_handler")[] = ["middleware", "router", "request_handler"];
+
 const SENSITIVE_KEY = /^(body|password|passwordHash|token|accessToken|refreshToken|authorization|cookie|cookies|headers)$/i;
 
 /** console.error arguments are sent whole: drop request bodies, tokens and headers nested in them. */
@@ -30,7 +33,15 @@ Sentry.init({
   beforeSend: (event) => ({ ...event, extra: event.extra && (scrub(event.extra) as typeof event.extra) }),
   // Console lines (any level) would ride along as breadcrumbs, unscrubbed
   beforeBreadcrumb: (breadcrumb) => (breadcrumb.category === "console" ? null : breadcrumb),
-  integrations: [Sentry.captureConsoleIntegration({ levels: ["error"] })],
+  integrations: [
+    Sentry.captureConsoleIntegration({ levels: ["error"] }),
+    // No per-layer spans: tracing is off (tracesSampleRate 0), and each span adds a
+    // res.once("finish") listener. A request crosses every router mounted on /api (~25, see
+    // index.ts) and those layers are open at the same time (each router calls next()
+    // synchronously), so the response got ~30 listeners → MaxListenersExceededWarning in pm2.
+    // Error capture and transaction names don't depend on these spans.
+    Sentry.expressIntegration({ ignoreLayersType: EXPRESS_LAYER_TYPES }),
+  ],
   dataCollection: {
     userInfo: false,
     cookies: false,

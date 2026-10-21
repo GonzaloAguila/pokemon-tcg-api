@@ -117,6 +117,17 @@ describe("bug 10: a waiting room whose creator left the lobby", () => {
   });
 });
 
+describe("a takePrize with no Prize owed (double click)", () => {
+  it("is answered with the NO_PRIZE_OWED code and no error text (no toast)", async () => {
+    const g = await startGame();
+    g.s1.emit("action", { roomId: g.roomId, action: { type: "takePrize", payload: { prizeIndex: 0 } } });
+    expect(await nextEvent<any>(g.s1, "actionResult")).toEqual({ success: false, code: "NO_PRIZE_OWED" });
+    // Other rejections still carry their Spanish reason
+    g.s2.emit("action", { roomId: g.roomId, action: { type: "promote", payload: { benchIndex: 0 } } });
+    expect(await nextEvent<any>(g.s2, "actionResult")).toEqual({ success: false, error: "No necesitas promover un Pokémon" });
+  });
+});
+
 describe("bug 1: game states carry awaitingUserId", () => {
   it("gameStart and gameState include the awaited player's user id", async () => {
     const g = await startGame();

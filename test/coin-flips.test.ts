@@ -36,7 +36,7 @@ describe("server-rolled coins for Trainers and powers (requestCoinFlip)", () => 
   it("only the player whose turn it is can request them, for a card that flips", () => {
     const manager = new GameRoomManager();
     const room = roomWithGame(manager);
-    expect(manager.requestCoinFlip(room.id, "s2", { purpose: "trainer", cardId: "pb" })).toEqual({ success: false, error: "Not your turn" });
+    expect(manager.requestCoinFlip(room.id, "s2", { purpose: "trainer", cardId: "pb" })).toEqual({ success: false, error: "No es tu turno" });
     expect(manager.requestCoinFlip(room.id, "intruder", { purpose: "trainer", cardId: "pb" }).success).toBe(false);
     expect(manager.requestCoinFlip(room.id, "s1", { purpose: "trainer", cardId: "bill" })).toEqual({ success: false, error: "Esta carta no lanza monedas" });
     expect(manager.requestCoinFlip(room.id, "s1", { purpose: "trainer", cardId: "ghost" })).toEqual({ success: false, error: "La carta no está en tu mano" });

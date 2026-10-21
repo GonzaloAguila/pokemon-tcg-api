@@ -451,8 +451,9 @@ describe("achievements cleanup", () => {
   it("manual achievements are flagged unavailable; Leyenda Viviente only needs the obtainable ones", async () => {
     const user = await createUser();
     const list = await achievements.listAchievements(user.id);
-    // 30 manual ones, minus the first batch activated on 2026-10-21 (achievements-activity.test.ts)
-    expect(list.filter((a) => a.status === "unavailable")).toHaveLength(24);
+    // 30 manual ones, minus the first batch activated on 2026-10-21 and Holo Completo
+    // (achievements-activity.test.ts)
+    expect(list.filter((a) => a.status === "unavailable")).toHaveLength(23);
     expect(list.filter((a) => a.status === "retired")).toHaveLength(4);
     // Adventure achievements are active but never count for Leyenda Viviente (owner Q5)
     const active = list.filter((a) => a.status === "active" && a.id !== "legend-50" && !a.id.startsWith("adventure-"));

@@ -16,6 +16,7 @@ import { snapshotRoomCosmetics } from "./room-cosmetics.js";
 import { prisma } from "../lib/prisma.js";
 import * as usersService from "../modules/users/users.service.js";
 import { recordCardChange } from "../modules/users/card-ledger.js";
+import { refreshProgressInBackground } from "../modules/achievements/achievements.service.js";
 import { lockUsers } from "../modules/users/xp.service.js";
 import { draftSchemas, parsePayload } from "./schemas.js";
 import { requireSocketUser } from "./session-guard.js";
@@ -385,6 +386,8 @@ export async function creditDraftedCards(room: DraftRoom): Promise<void> {
       }
     }, { timeout: 15_000, maxWait: 10_000 });
     console.log(`🎴 Draft ${room.id}: drafted cards credited to ${alive.size} players`);
+    // The drafted cards can complete a collection achievement ("Holo Completo")
+    for (const userId of alive) refreshProgressInBackground(userId, "drafted cards");
   } catch (err) {
     console.error(`[draft] Could not credit the drafted cards of room ${room.id}:`, err);
   }

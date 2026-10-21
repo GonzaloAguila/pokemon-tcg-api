@@ -2,12 +2,15 @@
  * Activity achievements (first batch activated 2026-10-21, data already stored): "Primer Sobre"
  * (packs-opened), "Semana Activa" / "Mes Dedicado" (login-streak over check-in economy days),
  * "Año Activo" (login-days = User.loginDays), "Sin Derrotas" / "Invencible" (stats-streak), and the
- * check-in / pack-opening routes that re-check achievements without a match.
+ * check-in / pack-opening routes that re-check achievements without a match. "Holo Completo"
+ * (holo-collection: the 16 Base Set Rare Holo cards owned) and the card gains that re-check it.
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { prisma } from "../src/lib/prisma.js";
 import * as achievements from "../src/modules/achievements/achievements.service.js";
-import { longestDayStreak } from "../src/modules/achievements/achievements.service.js";
+import { BASE_SET_HOLO_IDS, longestDayStreak } from "../src/modules/achievements/achievements.service.js";
+import { prizeGivesCards, type ResolvedPrize } from "../src/modules/prizes/prizes.js";
+import { CardRarity, findCardById } from "@gonzaloaguila/game-core";
 import * as economy from "../src/modules/economy/economy.service.js";
 import { grantPacks } from "../src/modules/economy/pack-inventory.js";
 import { economyRouter } from "../src/modules/economy/index.js";
@@ -42,7 +45,7 @@ async function storedProgress(userId: string, achievementId: string) {
 }
 
 describe("definitions", () => {
-  it("the first batch is active (with what it measures); Holo Completo stays unavailable", async () => {
+  it("the first batch and Holo Completo are active (with what they measure)", async () => {
     const user = await createUser();
     const list = await achievements.listAchievements(user.id);
     const byId = new Map(list.map((a) => [a.id, a]));
@@ -52,7 +55,8 @@ describe("definitions", () => {
     expect(byId.get("platinum-41")).toMatchObject({ status: "active", progressTarget: 100, description: "Entra 100 días distintos" });
     expect(byId.get("platinum-44")).toMatchObject({ status: "active", progressTarget: 30, description: "Gana 30 partidas online seguidas" });
     expect(byId.get("legend-49")).toMatchObject({ status: "active", progressTarget: 100, description: "Gana 100 partidas online seguidas" });
-    expect(byId.get("platinum-40")).toMatchObject({ status: "unavailable" });
+    expect(byId.get("platinum-40")).toMatchObject({ status: "active", progressTarget: 16, description: "Consigue las 16 cartas holo de Base Set" });
+    expect(byId.get("platinum-40")!.reward).toEqual({ coins: 1500, coupons: 10 });
     // Their rewards are the tier's, like any active achievement
     expect(byId.get("bronze-5")!.reward).toEqual({ coins: 200, coupons: 0 });
   });
@@ -187,6 +191,67 @@ describe("stats-streak: Sin Derrotas (30) and Invencible (100)", () => {
     expect(claimable).toEqual(expect.arrayContaining(["silver-16", "gold-28", "platinum-38", "platinum-44"]));
     expect(claimable).not.toContain("legend-49");
     expect(await storedProgress(user.id, "legend-49")).toBe(30);
+  });
+});
+
+describe("holo-collection: Holo Completo", () => {
+  async function own(userId: string, cards: [string, number][]) {
+    await prisma.userCard.createMany({ data: cards.map(([cardDefId, quantity]) => ({ userId, cardDefId, quantity })) });
+  }
+
+  it("the 16 Base Set Rare Holo cards of game-core's catalog", () => {
+    expect(BASE_SET_HOLO_IDS).toHaveLength(16);
+    for (const id of BASE_SET_HOLO_IDS) {
+      expect(id).toMatch(/^base-set-0(0[1-9]|1[0-6])-/);
+      expect(findCardById(id)?.rarity).toBe(CardRarity.RareHolo);
+    }
+  });
+
+  it("counts distinct owned Base Set holos only (not other rarities, other sets' holos or 0 copies)", async () => {
+    const user = await createUser(); // no UserStats row: this checker doesn't need one
+    await own(user.id, [
+      [BASE_SET_HOLO_IDS[0], 3], // copies count once
+      [BASE_SET_HOLO_IDS[1], 1],
+      [BASE_SET_HOLO_IDS[2], 0], // none left
+      ["base-set-058-pikachu", 4], // common
+      ["base-set-017-beedrill", 1], // Base Set rare, not holo
+      ["jungle-001-clefable", 1], // a Jungle holo
+    ]);
+    await achievements.checkAndUpdateProgress(user.id);
+    expect(await progressOf(user.id, "platinum-40")).toMatchObject({ progress: 2, claimable: false });
+  });
+
+  it("all 16 make it claimable with the platinum reward", async () => {
+    const user = await createUser({}, { stats: true });
+    await own(user.id, BASE_SET_HOLO_IDS.map((id) => [id, 1]));
+    const claimable = await achievements.checkAndUpdateProgress(user.id);
+    expect(claimable.map((c) => c.achievementId)).toContain("platinum-40");
+    expect(await achievements.claimAchievement(user.id, "platinum-40")).toEqual({ achievementId: "platinum-40", coins: 1500, coupons: 10, cosmetic: null });
+  });
+
+  it("counts for Leyenda Viviente (now 26 achievements)", async () => {
+    const user = await createUser();
+    const meta = (await achievements.listAchievements(user.id)).find((a) => a.id === "legend-50")!;
+    expect(meta.progressTarget).toBe(26);
+  });
+
+  it("wheel / slots prizes with a card (also inside a jackpot) re-check the achievements", () => {
+    const card: ResolvedPrize = { type: "card", cardDefId: BASE_SET_HOLO_IDS[0] } as ResolvedPrize;
+    expect(prizeGivesCards(card)).toBe(true);
+    expect(prizeGivesCards({ type: "jackpot", prizes: [{ type: "coins", amount: 1000 } as ResolvedPrize, card] })).toBe(true);
+    expect(prizeGivesCards({ type: "jackpot", prizes: [{ type: "coins", amount: 1000 } as ResolvedPrize] })).toBe(false);
+    expect(prizeGivesCards({ type: "nothing" })).toBe(false);
+  });
+
+  it("redeeming the 16th holo with Fichas de canje completes it without a match", async () => {
+    const user = await createUser({}, { stats: true });
+    await prisma.user.update({ where: { id: user.id }, data: { exchangeTokens: 2 } });
+    await own(user.id, BASE_SET_HOLO_IDS.slice(1).map((id) => [id, 1]));
+    const res = await http.request("POST", "/api/economy/exchange", { token: tokenFor(user), body: { cardDefId: BASE_SET_HOLO_IDS[0] } });
+    expect(res.status).toBe(200);
+    await vi.waitFor(async () => {
+      expect(await storedProgress(user.id, "platinum-40")).toBe(16);
+    });
   });
 });
 

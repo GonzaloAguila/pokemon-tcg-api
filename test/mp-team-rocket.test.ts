@@ -171,7 +171,7 @@ describe.each(["p1", "p2"] as const)("Team Rocket in multiplayer as %s", (actor)
 
     // Nothing else moves; the opponent can't answer
     await expectRejected(t, t.act("endTurn"), /Primero hay que resolver el Poder Pokémon/);
-    await expectRejected(t, t.actAs(opp, "resolvePowerChoice", { selection: basics.slice(0, 1) }), /Not your turn/);
+    await expectRejected(t, t.actAs(opp, "resolvePowerChoice", { selection: basics.slice(0, 1) }), /No es tu turno/);
     await expectRejected(t, t.act("resolvePowerChoice", { selection: ["not-an-option"] }), /./);
 
     expect((await t.act("resolvePowerChoice", { selection: basics.slice(0, 2) })).success).toBe(true);

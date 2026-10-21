@@ -160,6 +160,11 @@ export function resolveRandomOverlay(): ResolvedPrize {
 // Granting (inside the caller's transaction)
 // ---------------------------------------------------------------------------
 
+/** Whether a prize puts a card in the collection (a card, or a jackpot with one). */
+export function prizeGivesCards(prize: ResolvedPrize): boolean {
+  return prize.type === "card" || (prize.type === "jackpot" && prize.prizes.some(prizeGivesCards));
+}
+
 export interface GrantResult {
   packResult?: PackOpeningResult;
 }

@@ -25,6 +25,7 @@ import { recordCardChange, type CardChangeReason } from "../users/card-ledger.js
 import { lockUsers } from "../users/xp.service.js";
 import { validateDeckForUser, type DeckCardEntry } from "../decks/decks.service.js";
 import { cardTradeValue } from "./card-values.js";
+import { refreshProgressInBackground } from "../achievements/achievements.service.js";
 
 export { cardTradeValue } from "./card-values.js";
 
@@ -338,6 +339,9 @@ export async function executeTrade(a: TradeParty, b: TradeParty, now = new Date(
   await Promise.all([revalidateDecks(a.userId, aCards), revalidateDecks(b.userId, bCards)]).catch((err) =>
     console.error("[trades] deck revalidation failed:", err),
   );
+  // The cards each one received can complete a collection achievement ("Holo Completo")
+  if (bCards.length > 0) refreshProgressInBackground(a.userId, "trade");
+  if (aCards.length > 0) refreshProgressInBackground(b.userId, "trade");
   return tradeId;
 }
 
@@ -430,5 +434,8 @@ export async function revertTrade(adminId: string, tradeId: string, now = new Da
     revalidateDecks(pre.toUserId, done.offered as TradeCard[]),
     revalidateDecks(pre.fromUserId, done.requested as TradeCard[]),
   ]).catch((err) => console.error("[trades] deck revalidation after revert failed:", err));
+  // Each side got back what it had given (a collection achievement may now be complete)
+  refreshProgressInBackground(pre.fromUserId, "trade revert");
+  refreshProgressInBackground(pre.toUserId, "trade revert");
   return prisma.trade.findUniqueOrThrow({ where: { id: tradeId }, select: tradeSelect });
 }
