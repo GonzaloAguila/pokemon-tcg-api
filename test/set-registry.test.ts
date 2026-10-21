@@ -21,13 +21,21 @@ describe("set registry consumers", () => {
   });
 
   it("every standard booster opens 9 cards of its set plus 2 basic Energy", () => {
-    expect(STANDARD_BOOSTER_IDS).toEqual(["base-set-booster", "jungle-booster", "fossil-booster", "team-rocket-booster", "gym-heroes-booster"]);
+    expect(STANDARD_BOOSTER_IDS).toEqual([
+      "base-set-booster",
+      "jungle-booster",
+      "fossil-booster",
+      "team-rocket-booster",
+      "gym-heroes-booster",
+      "gym-challenge-booster",
+    ]);
     expect(getAllPacks().map((p) => p.id)).toEqual([
       "base-set-booster",
       "jungle-booster",
       "fossil-booster",
       "team-rocket-booster",
       "gym-heroes-booster",
+      "gym-challenge-booster",
       "trainer-booster", // market-only, see trainer-booster.test.ts
     ]);
     for (const packId of STANDARD_BOOSTER_IDS) {

@@ -71,12 +71,12 @@ Conventions (unchanged):
     bought by its listed id `"mystery"` (no change if you send `offer.cardDefId`).
 15. Rare Candy → coins: max 2 per week; show `status.rareCandy` and the error toast.
 16. Profile: new fields `exchangeTokens`, `loginDays`.
-17. New cosmetics ids to add to the frontend catalogs: card backs `set-base-set`, `set-jungle`,
-    `set-fossil`, `set-team-rocket` (75% milestone) and medals/titles `title-maestro-base-set`,
-    `title-maestro-jungle`, `title-maestro-fossil`, `title-maestro-team-rocket`,
-    `title-maestro-coleccionista` (they arrive in `profile.medals[].medalId`). The 100% holo
-    variants are existing skin ids (`charizard-holo-sparkle`, `scyther-holo-sparkle`,
-    `dragonite-holo-sparkle`, `dark-dragonite-holo-sparkle`).
+17. New cosmetics ids to add to the frontend catalogs: card backs `set-<setId>` (75% milestone)
+    and medals/titles `title-maestro-<setId>` for every released set (`base-set`, `jungle`, `fossil`,
+    `team-rocket`, `gym-heroes`, `gym-challenge`), plus `title-maestro-coleccionista` (they arrive in
+    `profile.medals[].medalId`). The 100% holo variants are existing skin ids
+    (`charizard-holo-sparkle`, `scyther-holo-sparkle`, `dragonite-holo-sparkle`,
+    `dark-dragonite-holo-sparkle`, `blaine-s-moltres-holo-sparkle`, `blaine-s-charizard-holo-sparkle`).
 
 ---
 

@@ -1,6 +1,6 @@
 /**
  * Sets players can see and get. game-core registers a set as soon as its cards are cataloged and
- * flags it `inDevelopment` until its effects are done (Gym Challenge while it is being built);
+ * flags it `inDevelopment` until its effects are done (Gym Challenge until game-core 0.9.0);
  * such a set is never sold, listed, granted, drafted or accepted in a deck, so production keeps
  * behaving as before until the engine release clears the flag.
  */

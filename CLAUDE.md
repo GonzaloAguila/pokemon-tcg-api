@@ -1,6 +1,6 @@
 # CLAUDE.md — pokemon-tcg-api
 
-Backend for **Nostalgic TCG** (browser Pokémon TCG, Base Set + Jungle; Fossil and Team Rocket integrated on `feature/fossil-team-rocket`, not deployed). Express + Socket.io + Prisma/PostgreSQL. Serves REST for accounts/economy/collection and runs authoritative multiplayer games and drafts over Socket.io.
+Backend for **Nostalgic TCG** (browser Pokémon TCG: Base Set, Jungle, Fossil, Team Rocket, Gym Heroes and Gym Challenge). Express + Socket.io + Prisma/PostgreSQL. Serves REST for accounts/economy/collection and runs authoritative multiplayer games and drafts over Socket.io.
 
 ## Related repos (all siblings under `D:/Proyectos/`)
 
