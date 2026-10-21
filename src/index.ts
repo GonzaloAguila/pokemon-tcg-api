@@ -35,9 +35,13 @@ import { emotesRouter } from "./modules/emotes/index.js";
 import { loadCardValues } from "./modules/trades/card-values.js";
 import { refundUnsettledMatches } from "./modules/matches/matches.service.js";
 import { cleanupOldMessages } from "./modules/chat/chat.service.js";
+import { getAdventures } from "./modules/adventure/content/load.js";
 
 // Load environment variables
 dotenv.config();
+
+// Adventure content (content/adventures/*.json): an invalid file stops the boot, every problem listed
+getAdventures();
 
 const corsOrigin = process.env.CORS_ORIGIN
   ? process.env.CORS_ORIGIN.split(",").map((s) => s.trim())
