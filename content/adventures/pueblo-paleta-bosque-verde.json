@@ -481,9 +481,9 @@
     }
   ],
   "difficulties": {
-    "normal": { "description": "La aventura clásica: 3 corazones, rivales a tu medida y los tesoros de siempre." },
+    "normal": { "description": "La aventura clásica: rivales a tu medida y los tesoros de siempre." },
     "hard": {
-      "description": "2 corazones, rivales con mazos evolucionados y reglas de jefe, y tesoros más poderosos pero arriesgados.",
+      "description": "Rivales con mazos evolucionados y reglas de jefe, y tesoros más poderosos pero arriesgados.",
       "hearts": 2,
       "treasurePools": {
         "tier1": ["h1-cazador", "h1-emboscada", "h1-apuesta", "t1-evolucion", "h1-tijera", "t1-moneda", "h1-kangaskhan"],
