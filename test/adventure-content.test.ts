@@ -80,6 +80,14 @@ describe("validator", () => {
     );
   });
 
+  it("requires a known rarity on every treasure and the offer weights", () => {
+    expect(problemsOf((a) => delete a.treasures[0].rarity)).toEqual([expect.stringMatching(/^treasures\.0\.rarity: /)]);
+    expect(problemsOf((a) => (a.treasures[6].rarity = "legendary"))).toEqual([expect.stringMatching(/^treasures\.6\.rarity: /)]);
+    expect(problemsOf((a) => delete a.treasureOffer)).toEqual([expect.stringMatching(/^treasureOffer: /)]);
+    expect(problemsOf((a) => (a.treasureOffer.rarityWeights.epic = 0))).toEqual([expect.stringMatching(/^treasureOffer\.rarityWeights\.epic: /)]);
+    expect(problemsOf((a) => delete a.treasureOffer.maxPassives)).toEqual([expect.stringMatching(/^treasureOffer\.maxPassives: /)]);
+  });
+
   it("rejects a pool with a missing treasure", () => {
     expect(problemsOf((a) => a.treasurePools.tier2.push("t2-nada"))).toContain("Pool tier2: tesoro desconocido t2-nada");
   });

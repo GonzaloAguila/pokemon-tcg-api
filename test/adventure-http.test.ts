@@ -201,10 +201,26 @@ describe("POST /api/adventure/runs/:id/treasure", () => {
         id: "t1-evolucion",
         name: "Pack de evolución",
         description: "+1 básico y +1 Stage 1 de tu inicial",
+        rarity: "rare",
         kind: "cards",
         cards: [{ cardId: "base-set-044-bulbasaur", qty: 1 }, { cardId: "base-set-030-ivysaur", qty: 1 }],
       },
     ]);
+  });
+
+  it("a live run's offer from the previous content (Arranque rápido after battle 2) still shows and can be taken", async () => {
+    const { token } = await player();
+    const run = (await startRun(token)).body;
+    await setRun(run.id, { phase: "choosing_treasure", currentBattle: 2, adventureVersion: 1, pendingOffer: ["t1-energia", "t1-bill", "t1-moneda"] });
+    const view = await app.request("GET", `/api/adventure/runs/${run.id}`, { token });
+    expect(view.body.offer.map((t: { id: string; rarity: string }) => [t.id, t.rarity])).toEqual([
+      ["t1-energia", "epic"],
+      ["t1-bill", "common"],
+      ["t1-moneda", "common"],
+    ]);
+    const taken = await app.request("POST", `/api/adventure/runs/${run.id}/treasure`, { token, body: { treasureId: "t1-energia" } });
+    expect(taken.status).toBe(200);
+    expect(taken.body).toMatchObject({ currentBattle: 3, passives: ["start_attached_energy"], treasuresTaken: ["t1-energia"] });
   });
 });
 
@@ -322,6 +338,9 @@ describe("GET /api/adventures", () => {
     expect(res.body.starters.map((s: { id: string; locked: boolean }) => [s.id, s.locked])).toEqual([
       ["charmander", false], ["squirtle", false], ["bulbasaur", false],
     ]);
+    const treasures = res.body.treasures as { id: string; rarity: string }[];
+    expect(treasures.every((t) => ["common", "rare", "epic"].includes(t.rarity))).toBe(true);
+    expect(treasures.find((t) => t.id === "t1-energia")?.rarity).toBe("epic");
     expect((await app.request("GET", "/api/adventures/nope", { token })).status).toBe(404);
   });
 

@@ -14,6 +14,8 @@ import {
   startBattle,
 } from "../src/modules/adventure/run-logic.js";
 import { RunPhaseError, RunRuleError, type RunState } from "../src/modules/adventure/run-logic.types.js";
+import type { TreasureRarity } from "../src/modules/adventure/content/schema.js";
+import type { Adventure } from "../src/modules/adventure/content/validate.js";
 
 const adventure = getAdventure("pueblo-paleta-bosque-verde")!;
 const SEED = "0123456789abcdef0123456789abcdef";
@@ -48,7 +50,7 @@ describe("newRun", () => {
     const run = fresh();
     expect(run).toMatchObject({
       adventureId: "pueblo-paleta-bosque-verde",
-      adventureVersion: 1,
+      adventureVersion: 2,
       status: "active",
       phase: "pre_battle",
       currentBattle: 1,
@@ -96,15 +98,163 @@ describe("offers", () => {
   it("excludes passives already owned and card treasures that would pass 40 cards", () => {
     const run = { ...fresh(), passives: ["lucky_coin" as const] };
     expect(offerCandidates(run, adventure, 1)).not.toContain("t1-moneda");
-    expect(offerCandidates(run, adventure, 1)).toContain("t1-energia");
+    expect(offerCandidates(run, adventure, 6)).toContain("t1-energia");
+    expect(offerCandidates({ ...run, passives: ["start_attached_energy"] }, adventure, 6)).not.toContain("t1-energia");
 
     const full = { ...fresh(), deck: [...fresh().deck.filter((e) => e.cardId !== FIRE), { cardId: FIRE, qty: 27 }] }; // 40 cards
     expect(size(full)).toBe(40);
     const candidates = offerCandidates(full, adventure, 1);
-    expect(candidates.sort()).toEqual(["t1-energia", "t1-moneda"]);
+    expect(candidates.sort()).toEqual(["t1-moneda"]);
 
     const at39 = { ...full, deck: full.deck.map((e) => (e.cardId === FIRE ? { ...e, qty: 26 } : e)) };
     expect(offerCandidates(at39, adventure, 1)).not.toContain("t1-pociones"); // +2 → 41
+  });
+});
+
+describe("offers by rarity", () => {
+  const SEEDS = Array.from({ length: 1500 }, (_, i) => `rarity-seed-${i}`);
+  const kindOf = (id: string) => adventure.treasures.find((t) => t.id === id)!.kind;
+  const rarityOf = (id: string) => adventure.treasures.find((t) => t.id === id)!.rarity;
+  /** The adventure with some content edits (never mutates the loaded one). */
+  const variant = (edit: (a: Adventure) => void): Adventure => {
+    const copy = structuredClone(adventure);
+    edit(copy);
+    return copy;
+  };
+  const setRarity = (a: Adventure, id: string, rarity: TreasureRarity) => {
+    a.treasures.find((t) => t.id === id)!.rarity = rarity;
+  };
+
+  it("every treasure has a rarity; Arranque rápido is epic and in the battles 6–9 pool only", () => {
+    for (const t of adventure.treasures) expect(["common", "rare", "epic"]).toContain(t.rarity);
+    expect(rarityOf("t1-energia")).toBe("epic");
+    expect(adventure.treasurePools.tier1).not.toContain("t1-energia");
+    expect(adventure.treasurePools.major).not.toContain("t1-energia");
+    expect(adventure.treasurePools.tier2).toContain("t1-energia");
+    expect(adventure.treasureOffer).toEqual({ rarityWeights: { common: 6, rare: 3, epic: 1 }, maxPassives: 1 });
+  });
+
+  it("Arranque rápido is never offered before battle 6, and is offered sometimes in 6–9", () => {
+    let later = 0;
+    for (const seed of SEEDS) {
+      const run = { ...fresh(), seed };
+      for (const battle of [1, 2, 3, 4, 5]) expect(generateOffer(run, adventure, battle)).not.toContain("t1-energia");
+      for (const battle of [6, 7, 8, 9]) if (generateOffer(run, adventure, battle).includes("t1-energia")) later++;
+    }
+    expect(later).toBeGreaterThan(0);
+  });
+
+  it("commons are offered more often than rares, rares more than epics (weights 6/3/1)", () => {
+    for (const battle of [1, 6]) {
+      const seen = new Map<string, number>();
+      for (const seed of SEEDS) for (const id of generateOffer({ ...fresh(), seed }, adventure, battle)) seen.set(id, (seen.get(id) ?? 0) + 1);
+      const pool = battle === 1 ? adventure.treasurePools.tier1 : adventure.treasurePools.tier2;
+      const mean = (rarity: string) => {
+        const ids = pool.filter((id) => rarityOf(id) === rarity);
+        return ids.reduce((n, id) => n + (seen.get(id) ?? 0), 0) / ids.length;
+      };
+      expect(mean("common")).toBeGreaterThan(mean("rare"));
+      if (battle === 6) expect(mean("rare")).toBeGreaterThan(mean("epic"));
+    }
+  });
+
+  it("the weights come from the content: an epic-heavy table offers epics first", () => {
+    const epicHeavy = variant((a) => {
+      a.treasureOffer.rarityWeights = { common: 1, rare: 1, epic: 1000 };
+      setRarity(a, "t2-oak", "epic");
+    });
+    const withOak = SEEDS.slice(0, 300).filter((seed) => generateOffer({ ...fresh(), seed }, epicHeavy, 6).includes("t2-oak")).length;
+    expect(withOak).toBeGreaterThan(290);
+  });
+
+  it("at most one passive per offer and at least one card treasure, in every battle", () => {
+    for (const seed of SEEDS.slice(0, 500)) {
+      const run = { ...fresh(), seed };
+      for (const battle of [1, 2, 3, 4, 5, 6, 7, 8, 9]) {
+        const offer = generateOffer(run, adventure, battle);
+        expect(offer).toHaveLength(3);
+        expect(new Set(offer).size).toBe(3);
+        expect(offer.filter((id) => kindOf(id) === "passive").length).toBeLessThanOrEqual(1);
+        expect(offer.some((id) => kindOf(id) === "cards")).toBe(true);
+      }
+      // Battle 5: Corazón extra and Atajo never together
+      const major = generateOffer(run, adventure, 5);
+      expect(major.includes("m-corazon") && major.includes("m-atajo")).toBe(false);
+    }
+  });
+
+  it("keeps a slot for a card treasure even when passives may fill the offer", () => {
+    const passiveHeavy = variant((a) => {
+      a.treasurePools.tier2 = ["t2-mano", "t1-energia", "m-corazon", "m-atajo", "t2-oak"];
+      a.treasureOffer = { rarityWeights: { common: 1000, rare: 1000, epic: 1 }, maxPassives: 3 };
+      for (const id of ["t2-mano", "t1-energia", "m-corazon", "m-atajo"]) setRarity(a, id, "common");
+      setRarity(a, "t2-oak", "epic");
+    });
+    for (const seed of SEEDS.slice(0, 200)) {
+      const offer = generateOffer({ ...fresh(), seed }, passiveHeavy, 6);
+      expect(offer).toHaveLength(3);
+      expect(offer).toContain("t2-oak");
+      expect(offer.filter((id) => kindOf(id) === "passive")).toHaveLength(2);
+    }
+  });
+
+  it("is deterministic per run seed and battle, and varies across seeds", () => {
+    const run = runAtBattle(7);
+    for (const battle of [1, 5, 6, 9]) expect(generateOffer(run, adventure, battle)).toEqual(generateOffer({ ...run }, adventure, battle));
+    expect(generateOffer({ ...fresh(), seed: "fixed-seed" }, adventure, 6)).toEqual(generateOffer({ ...fresh(), seed: "fixed-seed" }, adventure, 6));
+    const offers = new Set(SEEDS.slice(0, 50).map((seed) => generateOffer({ ...fresh(), seed }, adventure, 6).join()));
+    expect(offers.size).toBeGreaterThan(10);
+  });
+
+  it("prefers treasures the run hasn't taken; a taken card treasure only fills a slot nothing else can", () => {
+    const run = { ...fresh(), treasuresTaken: ["t2-oak", "t2-superpocion"] };
+    for (const seed of SEEDS.slice(0, 300)) {
+      const offer = generateOffer({ ...run, seed }, adventure, 6);
+      expect(offer).not.toContain("t2-oak");
+      expect(offer).not.toContain("t2-superpocion");
+    }
+    // Both passives owned, every card treasure but two already taken: the two fresh ones + one repeat
+    const cards = adventure.treasurePools.tier2.filter((id) => kindOf(id) === "cards");
+    const almostAll = {
+      ...fresh(),
+      passives: ["opening_hand_plus_1" as const, "start_attached_energy" as const],
+      treasuresTaken: cards.filter((id) => id !== "t2-plus" && id !== "t2-dce"),
+    };
+    for (const seed of SEEDS.slice(0, 100)) {
+      const offer = generateOffer({ ...almostAll, seed }, adventure, 6);
+      expect(offer).toHaveLength(3);
+      expect(offer).toEqual(expect.arrayContaining(["t2-plus", "t2-dce"]));
+    }
+  });
+
+  it("falls back to fewer treasures when there are fewer candidates", () => {
+    const full = { ...fresh(), deck: [...fresh().deck.filter((e) => e.cardId !== FIRE), { cardId: FIRE, qty: 27 }] }; // 40 cards
+    expect(generateOffer(full, adventure, 1)).toEqual(["t1-moneda"]); // a lone passive is still offered
+    expect(generateOffer({ ...full, passives: ["lucky_coin"] }, adventure, 1)).toEqual([]);
+    const late = generateOffer(full, adventure, 6); // only the two passives fit; one per offer
+    expect(late).toHaveLength(1);
+    expect(["t2-mano", "t1-energia"]).toContain(late[0]);
+    const major = generateOffer(full, adventure, 5); // Corazón extra or Atajo
+    expect(major).toHaveLength(1);
+    // A victory with nothing to offer goes straight to the next battle
+    const lonely = { ...full, passives: ["lucky_coin" as const] };
+    expect(applyBattleResult(startBattle(lonely, adventure), adventure, { victory: true }).run).toMatchObject({ phase: "pre_battle", currentBattle: 2 });
+  });
+
+  it("live runs keep working: every treasure id of content version 1 still resolves", () => {
+    const V1_IDS = [
+      "t1-evolucion", "t1-pociones", "t1-bill", "t1-tactica", "t1-pikachu", "t1-moneda", "t1-energia",
+      "m-final", "m-corazon", "m-atajo", "m-profesor",
+      "t2-oak", "t2-superpocion", "t2-plus", "t2-removal", "t2-bandada", "t2-defensa", "t2-dce", "t2-mano",
+    ];
+    const ids = new Set(adventure.treasures.map((t) => t.id));
+    for (const id of V1_IDS) expect(ids.has(id)).toBe(true);
+    // An offer stored under version 1 with Arranque rápido after battle 2 can still be taken
+    const won = applyBattleResult(startBattle(runAtBattle(2), adventure), adventure, { victory: true }).run;
+    const run = chooseTreasure({ ...won, adventureVersion: 1, pendingOffer: ["t1-energia", "t1-bill", "t1-moneda"] }, adventure, { treasureId: "t1-energia" });
+    expect(run).toMatchObject({ currentBattle: 3, passives: ["start_attached_energy"], treasuresTaken: ["t1-energia"] });
+    expect(adventure.version).toBe(2);
+    expect(fresh().adventureVersion).toBe(2);
   });
 });
 

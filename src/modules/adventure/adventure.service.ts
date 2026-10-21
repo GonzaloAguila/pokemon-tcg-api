@@ -131,7 +131,7 @@ function treasureView(adventure: Adventure, state: RunState, id: string) {
   const treasure = adventure.treasures.find((t) => t.id === id);
   if (!treasure) return null;
   const starter = adventure.starters.find((s) => s.id === state.starterId)!;
-  const base = { id: treasure.id, name: treasure.name, description: treasure.description, kind: treasure.kind };
+  const base = { id: treasure.id, name: treasure.name, description: treasure.description, rarity: treasure.rarity, kind: treasure.kind };
   return treasure.kind === "cards"
     ? { ...base, cards: logic.resolveTreasureCards(treasure, starter) }
     : { ...base, passive: treasure.passive };

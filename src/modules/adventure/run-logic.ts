@@ -8,7 +8,7 @@ import { adventureCardProblem, cardOf, isBasicPokemonCard } from "./content/card
 import type { AdventureStarter, AdventureTreasure, Difficulty } from "./content/schema.js";
 import type { Adventure } from "./content/validate.js";
 import type { AdventureGameConfig, CardEntry } from "./engine-types.js";
-import { seededShuffle } from "./rng.js";
+import { seededRandom } from "./rng.js";
 import {
   RunPhaseError,
   RunRuleError,
@@ -160,9 +160,49 @@ export function offerCandidates(run: RunState, adventure: Adventure, battleIndex
   });
 }
 
-/** Up to 3 distinct candidates, always the same for the same run seed and battle. */
+/**
+ * The candidates in a random order weighted by rarity (`treasureOffer.rarityWeights`): weighted
+ * sampling without replacement (Efraimidis–Spirakis: key = -ln(u) / weight, smallest first),
+ * driven by `rng` in pool order so the same seed always gives the same order.
+ */
+function weightedOrder(ids: readonly string[], adventure: Adventure, rng: () => number): string[] {
+  const weights = adventure.treasureOffer.rarityWeights;
+  return ids
+    .map((id) => ({ id, key: -Math.log(1 - rng()) / weights[treasureById(adventure, id).rarity] }))
+    .sort((a, b) => a.key - b.key)
+    .map((e) => e.id);
+}
+
+/**
+ * Up to 3 distinct candidates, always the same for the same run seed and battle (the offer is
+ * stored in `pendingOffer`, so reloading never rerolls it). Drawn by rarity weight, with:
+ * at most `treasureOffer.maxPassives` passives; at least one card treasure whenever a candidate
+ * has one; treasures the run hasn't taken yet first (a card treasure already taken only fills a
+ * slot nothing else can).
+ */
 export function generateOffer(run: RunState, adventure: Adventure, battleIndex: number): string[] {
-  return seededShuffle(offerCandidates(run, adventure, battleIndex), `${run.seed}:${battleIndex}`).slice(0, OFFER_SIZE);
+  const candidates = offerCandidates(run, adventure, battleIndex);
+  const rng = seededRandom(`${run.seed}:${battleIndex}`);
+  const taken = new Set(run.treasuresTaken);
+  const ordered = weightedOrder(candidates, adventure, rng);
+  const queue = [...ordered.filter((id) => !taken.has(id)), ...ordered.filter((id) => taken.has(id))];
+  const isPassive = (id: string) => treasureById(adventure, id).kind === "passive";
+  const { maxPassives } = adventure.treasureOffer;
+
+  const offer: string[] = [];
+  let passives = 0;
+  for (const [i, id] of queue.entries()) {
+    if (offer.length === OFFER_SIZE) break;
+    if (isPassive(id)) {
+      if (passives >= maxPassives) continue;
+      // Keep the last slot for a card treasure if the offer has none yet and one is left
+      const lastSlot = offer.length === OFFER_SIZE - 1;
+      if (lastSlot && offer.every(isPassive) && queue.slice(i + 1).some((other) => !isPassive(other))) continue;
+      passives++;
+    }
+    offer.push(id);
+  }
+  return offer;
 }
 
 /** Victory → take one of the offered treasures, or skip; then the next battle. */

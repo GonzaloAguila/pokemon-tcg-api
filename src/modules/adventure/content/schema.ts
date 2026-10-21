@@ -82,10 +82,28 @@ const battleSchema = z
   })
   .strict();
 
+/** How rare a treasure is: weights its chance in an offer (`treasureOffer.rarityWeights`) and its tag. */
+export const TREASURE_RARITIES = ["common", "rare", "epic"] as const;
+export type TreasureRarity = (typeof TREASURE_RARITIES)[number];
+const rarity = z.enum(TREASURE_RARITIES);
+
 const treasureSchema = z.discriminatedUnion("kind", [
-  z.object({ id, name: text, description: text, kind: z.literal("cards"), cards: z.array(treasureCardSchema).min(1).max(10) }).strict(),
-  z.object({ id, name: text, description: text, kind: z.literal("passive"), passive: passiveSchema }).strict(),
+  z
+    .object({ id, name: text, description: text, rarity, kind: z.literal("cards"), cards: z.array(treasureCardSchema).min(1).max(10) })
+    .strict(),
+  z.object({ id, name: text, description: text, rarity, kind: z.literal("passive"), passive: passiveSchema }).strict(),
 ]);
+
+const weight = z.number().int().min(1).max(1000);
+/** How offers are drawn from a battle's pool (run-logic `generateOffer`). */
+const treasureOfferSchema = z
+  .object({
+    /** Relative chance of each rarity among an offer's candidates. */
+    rarityWeights: z.object({ common: weight, rare: weight, epic: weight }).strict(),
+    /** Most passive treasures in one offer. */
+    maxPassives: z.number().int().min(0).max(3),
+  })
+  .strict();
 
 const rewardSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("cosmetic"), cosmeticType: z.literal("cardBack"), id, name: text }).strict(),
@@ -153,6 +171,7 @@ export const adventureSchema = z
     battles: z.array(battleSchema).min(1).max(20),
     treasurePools: z.object({ tier1: z.array(id), major: z.array(id), tier2: z.array(id) }).strict(),
     treasures: z.array(treasureSchema).min(1).max(100),
+    treasureOffer: treasureOfferSchema,
     rewards: z.object({ normal: rewardSchema, hard: rewardSchema }).strict(),
     achievements: z.array(achievementSchema).max(30),
   })

@@ -1,6 +1,6 @@
 {
   "id": "pueblo-paleta-bosque-verde",
-  "version": 1,
+  "version": 2,
   "name": "De Pueblo Paleta al Bosque Verde",
   "description": "Elige tu inicial y abre camino por la Ruta 1, Ciudad Verde, la Ruta 22 y el Bosque Verde hasta las puertas de Ciudad Plateada, donde te espera tu rival.",
   "rules": {
@@ -326,15 +326,20 @@
     }
   ],
   "treasurePools": {
-    "tier1": ["t1-evolucion", "t1-pociones", "t1-bill", "t1-tactica", "t1-pikachu", "t1-moneda", "t1-energia"],
+    "tier1": ["t1-evolucion", "t1-pociones", "t1-bill", "t1-tactica", "t1-pikachu", "t1-moneda"],
     "major": ["m-final", "m-corazon", "m-atajo", "m-profesor"],
-    "tier2": ["t2-oak", "t2-superpocion", "t2-plus", "t2-removal", "t2-bandada", "t2-defensa", "t2-dce", "t2-mano"]
+    "tier2": ["t2-oak", "t2-superpocion", "t2-plus", "t2-removal", "t2-bandada", "t2-defensa", "t2-dce", "t2-mano", "t1-energia"]
+  },
+  "treasureOffer": {
+    "rarityWeights": { "common": 6, "rare": 3, "epic": 1 },
+    "maxPassives": 1
   },
   "treasures": [
     {
       "id": "t1-evolucion",
       "name": "Pack de evolución",
       "description": "+1 básico y +1 Stage 1 de tu inicial",
+      "rarity": "rare",
       "kind": "cards",
       "cards": [{ "ref": "starter.basic", "qty": 1 }, { "ref": "starter.stage1", "qty": 1 }]
     },
@@ -342,6 +347,7 @@
       "id": "t1-pociones",
       "name": "Botiquín",
       "description": "+2 Potion",
+      "rarity": "rare",
       "kind": "cards",
       "cards": [{ "cardId": "base-set-094-potion", "qty": 2 }]
     },
@@ -349,6 +355,7 @@
       "id": "t1-bill",
       "name": "Investigación",
       "description": "+2 Bill",
+      "rarity": "common",
       "kind": "cards",
       "cards": [{ "cardId": "base-set-091-bill", "qty": 2 }]
     },
@@ -356,6 +363,7 @@
       "id": "t1-tactica",
       "name": "Táctica",
       "description": "+1 Switch y +1 Gust of Wind",
+      "rarity": "common",
       "kind": "cards",
       "cards": [{ "cardId": "base-set-095-switch", "qty": 1 }, { "cardId": "base-set-093-gust-of-wind", "qty": 1 }]
     },
@@ -363,6 +371,7 @@
       "id": "t1-pikachu",
       "name": "Compañero eléctrico",
       "description": "+2 Pikachu y +2 energías Rayo",
+      "rarity": "rare",
       "kind": "cards",
       "cards": [{ "cardId": "base-set-058-pikachu", "qty": 2 }, { "cardId": "base-set-100-lightning-energy", "qty": 2 }]
     },
@@ -370,6 +379,7 @@
       "id": "t1-moneda",
       "name": "Moneda de la suerte",
       "description": "La primera moneda que lanzas en cada batalla sale cara",
+      "rarity": "common",
       "kind": "passive",
       "passive": "lucky_coin"
     },
@@ -377,6 +387,7 @@
       "id": "t1-energia",
       "name": "Arranque rápido",
       "description": "Al empezar cada batalla, tu Pokémon activo recibe 1 energía básica de tu mazo",
+      "rarity": "epic",
       "kind": "passive",
       "passive": "start_attached_energy"
     },
@@ -384,6 +395,7 @@
       "id": "m-final",
       "name": "Evolución final",
       "description": "+1 Stage 2 y +1 Stage 1 de tu inicial",
+      "rarity": "epic",
       "kind": "cards",
       "cards": [{ "ref": "starter.stage2", "qty": 1 }, { "ref": "starter.stage1", "qty": 1 }]
     },
@@ -391,6 +403,7 @@
       "id": "m-corazon",
       "name": "Corazón extra",
       "description": "+1 corazón ahora y +1 al máximo",
+      "rarity": "epic",
       "kind": "passive",
       "passive": "extra_heart"
     },
@@ -398,6 +411,7 @@
       "id": "m-atajo",
       "name": "Atajo",
       "description": "Juegas cada batalla con 1 premio menos",
+      "rarity": "epic",
       "kind": "passive",
       "passive": "prize_minus_one"
     },
@@ -405,6 +419,7 @@
       "id": "m-profesor",
       "name": "Mochila del profesor",
       "description": "+1 Professor Oak y +1 Computer Search",
+      "rarity": "epic",
       "kind": "cards",
       "cards": [{ "cardId": "base-set-088-professor-oak", "qty": 1 }, { "cardId": "base-set-071-computer-search", "qty": 1 }]
     },
@@ -412,6 +427,7 @@
       "id": "t2-oak",
       "name": "Profesor Oak",
       "description": "+1 Professor Oak",
+      "rarity": "common",
       "kind": "cards",
       "cards": [{ "cardId": "base-set-088-professor-oak", "qty": 1 }]
     },
@@ -419,6 +435,7 @@
       "id": "t2-superpocion",
       "name": "Super botiquín",
       "description": "+2 Super Potion",
+      "rarity": "common",
       "kind": "cards",
       "cards": [{ "cardId": "base-set-090-super-potion", "qty": 2 }]
     },
@@ -426,6 +443,7 @@
       "id": "t2-plus",
       "name": "Golpe extra",
       "description": "+2 PlusPower",
+      "rarity": "common",
       "kind": "cards",
       "cards": [{ "cardId": "base-set-084-pluspower", "qty": 2 }]
     },
@@ -433,6 +451,7 @@
       "id": "t2-removal",
       "name": "Sabotaje",
       "description": "+2 Energy Removal",
+      "rarity": "rare",
       "kind": "cards",
       "cards": [{ "cardId": "base-set-092-energy-removal", "qty": 2 }]
     },
@@ -440,6 +459,7 @@
       "id": "t2-bandada",
       "name": "Bandada",
       "description": "+2 Pidgey y +1 Pidgeotto",
+      "rarity": "rare",
       "kind": "cards",
       "cards": [{ "cardId": "base-set-057-pidgey", "qty": 2 }, { "cardId": "base-set-022-pidgeotto", "qty": 1 }]
     },
@@ -447,6 +467,7 @@
       "id": "t2-defensa",
       "name": "Defensa",
       "description": "+2 Defender",
+      "rarity": "common",
       "kind": "cards",
       "cards": [{ "cardId": "base-set-080-defender", "qty": 2 }]
     },
@@ -454,6 +475,7 @@
       "id": "t2-dce",
       "name": "Energía doble",
       "description": "+2 Double Colorless Energy",
+      "rarity": "rare",
       "kind": "cards",
       "cards": [{ "cardId": "base-set-096-double-colorless-energy", "qty": 2 }]
     },
@@ -461,6 +483,7 @@
       "id": "t2-mano",
       "name": "Mano preparada",
       "description": "Empiezas cada batalla con 8 cartas en la mano",
+      "rarity": "common",
       "kind": "passive",
       "passive": "opening_hand_plus_1"
     }
