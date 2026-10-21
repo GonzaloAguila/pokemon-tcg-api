@@ -343,7 +343,12 @@ describe.each(["p1", "p2"] as const)("Fossil in multiplayer as %s", (actor) => {
     expect(res.success).toBe(true);
     expect(t.mine().opponentActivePokemon).toBeNull();
     expect(t.mine().opponentNeedsToPromote).toBe(true);
+    // game-core 0.10.2: the Prize is owed and picked by hand (mid-turn: the turn goes on)
+    expect(t.mine().playerCanTakePrize).toBe(true);
+    expect(t.mine().playerPrizes).toHaveLength(prizesBefore);
+    expect((await t.act("takePrize", { prizeIndex: 0 })).success).toBe(true);
     expect(t.mine().playerPrizes).toHaveLength(prizesBefore - 1);
+    expect(t.mine().isPlayerTurn).toBe(true);
 
     await expectRejected(t, t.act("promote", { benchIndex: 0 }), /No promotion needed/);
     expect((await t.actAs(opp, "promote", { benchIndex: 1 })).success).toBe(true);

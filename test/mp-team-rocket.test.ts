@@ -229,7 +229,10 @@ describe.each(["p1", "p2"] as const)("Team Rocket in multiplayer as %s", (actor)
     const after = t.mine();
     expect(after.playerBench.map((p) => p.pokemon.id)).toEqual([]);
     expect(after.playerDiscard.map((c) => c.id)).toContain("my-active");
-    expect(after.opponentPrizes.length + (after.opponentCanTakePrize ? 1 : 0)).toBe(5);
+    // game-core 0.10.2: the Dugtrio's owner is owed the Prize and picks it by hand
+    expect(after.opponentCanTakePrize).toBe(true);
+    expect(after.opponentPrizesOwed).toBe(1);
+    expect(after.opponentPrizes).toHaveLength(6);
   });
 
   it("Knock Down: the attack's coin is flipped by the defending player (flippedBy)", async () => {
