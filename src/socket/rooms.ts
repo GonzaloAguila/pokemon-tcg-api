@@ -754,6 +754,8 @@ export function neutralizeEvents(
     ["El rival tomó un premio por el contraataque", `${opponent} tomó un premio por el contraataque`],
     ["El rival puede tomar un premio", `${opponent} puede tomar un premio`],
     ["El rival tomó un premio", `${opponent} tomó un premio`],
+    // takePrize's line (also inside attacks and the checkup since the last Prize is taken on its own)
+    ["Tomaste un premio", `${self} tomó un premio`],
     ["¡Puedes tomar un premio!", `${self} puede tomar un premio`],
     // Turn end
     ["Fin de tu turno", `Fin del turno de ${self}`],
