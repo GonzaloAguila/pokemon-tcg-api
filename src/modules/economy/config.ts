@@ -87,6 +87,28 @@ export const ECONOMY = {
     minDurationMs: 2 * 60_000,
     /** Multiplayer: a player's wins against the same opponent that count per economy day. */
     maxCountedWinsPerOpponentPerDay: 3,
+    /**
+     * Multiplayer forfeits before minTurn / minDurationMs (owner, 2026-10-21): the rival
+     * surrenders, leaves, disconnects for good, is kicked on the turn timer, misses the setup or
+     * doesn't show up at their table, in a non-friendly game. The winner gets a full counted win
+     * (match coins, XP, missions, stats, streak) only when the forfeiter is an established account
+     * (verified email and `establishedMinOnlineGames` counted online games), at most
+     * `maxPaidWinsPerDay` such wins per winner per economy day (all opponents together; the
+     * per-opponent cap above applies too); otherwise the win doesn't count. The forfeiter always
+     * gets the loss in their stats (streak broken) but no coins, XP or missions, and that loss
+     * doesn't count toward countedOnlineGames (bets, trades, being established).
+     */
+    forfeit: {
+      establishedMinOnlineGames: 10,
+      maxPaidWinsPerDay: 3,
+    },
+    /**
+     * Multiplayer (normal and draft): coins a player can win from the same opponent per economy
+     * day — match coins of wins plus net table-bet winnings (pot minus own stake). Past it, match
+     * coins are paid up to what is left; a pot pays the winner's stake back plus winnings up to
+     * what is left and refunds the rest of the loser's stake. XP, missions and stats still apply.
+     */
+    maxCoinsFromOpponentPerDay: 200,
     /** Single player vs AI (client-reported): minimum duration and counted games per day. */
     aiMinDurationMs: 3 * 60_000,
     aiDailyCountedGames: 10,

@@ -56,6 +56,7 @@ function mulberry32(seed: number): () => number {
 
 type Any = Record<string, any>;
 const act = (type: string, payload: Any = {}) => ({ type, payload });
+const WIN_MISSION_COINS = ECONOMY.missions.daily.find((m) => m.id === "win_game")!.rewardCoins;
 
 /** The masked state without the viewer's own hand (visible to its owner by design). */
 const withoutOwnHand = (state: Any) => {
@@ -698,7 +699,15 @@ describe("Lucky Duel tables with a bet (standard table bets off)", () => {
     const over = nextEvent<Any>(t.s2, "gameOver");
     t.s1.emit("action", { roomId: t.roomId, action: act("surrender") });
     expect((await over).winner).toBe("player2");
-    expect(await settled).toMatchObject({ outcome: "win", coinsDelta: 100, coins: 300 });
+    // The forfeiter is an established account (ECONOMY.antiFarming.forfeit): the early win also
+    // counts (match coins + the win mission), within the per-opponent coin cap (100 + 25 < 200)
+    expect(await settled).toMatchObject({
+      outcome: "win",
+      coinsDelta: 100,
+      counted: true,
+      earlyForfeit: true,
+      coins: 300 + ECONOMY.matchCoins.online.win + WIN_MISSION_COINS,
+    });
     expect(await coins(t.p1.id)).toBe(100);
   });
 
@@ -709,7 +718,8 @@ describe("Lucky Duel tables with a bet (standard table bets off)", () => {
     const over = nextEvent<Any>(t.s2, "gameOver");
     t.s1.emit("leaveRoom", { roomId: t.roomId });
     expect((await over).winner).toBe("player2");
-    await eventually(async () => expect(await coins(t.p2.id)).toBe(150));
+    // Pot + the early forfeit's counted win (established forfeiter): match coins + win mission
+    await eventually(async () => expect(await coins(t.p2.id)).toBe(150 + ECONOMY.matchCoins.online.win + WIN_MISSION_COINS));
     expect(await coins(t.p1.id)).toBe(50);
   });
 

@@ -283,6 +283,16 @@ model Match {
   // Set exactly once, when stakes, XP and stats were settled (guards against double settlement)
   settledAt    DateTime?
 
+  // A non-friendly online game the loser forfeited (surrender, leave, disconnect, kick, no-show)
+  // before ECONOMY.antiFarming.minTurn / minDurationMs: the forfeiter's loss is in their stats
+  // (but not in countedOnlineGames); the win counted only for an established forfeiter
+  // (ECONOMY.antiFarming.forfeit, at most maxPaidWinsPerDay per winner and economy day)
+  earlyForfeit     Boolean @default(false)
+  // Coins each player won from the other in this match (match coins of a win + net bet winnings),
+  // summed per pair and economy day for ECONOMY.antiFarming.maxCoinsFromOpponentPerDay
+  player1PairCoins Int     @default(0)
+  player2PairCoins Int     @default(0)
+
   // Game rules: "standard" | "lucky-duel" (multiplayer: the table's mode; vs AI: POST /matches/ai)
   gameMode         String  @default("standard")
   // Lucky Duel: the Basic each side drew (game-core catalog id; vs AI, player 2 = the AI), who took

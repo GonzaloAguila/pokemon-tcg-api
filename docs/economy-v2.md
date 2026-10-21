@@ -99,7 +99,8 @@ Conventions (unchanged):
 | Daily missions | Abre tu sobre diario (1) → 25 · Juega 2 partidas (IA u online) → 50 · Gana 1 partida → 50 |
 | Weekly mission | complete 15 daily missions in the week → 1 pack + 1 Ficha de canje |
 | Match coins | online (normal/draft) win 25 / loss 10 · vs AI win 10 / loss 5 · cap 75 per economy day |
-| Counted game | turn ≥ 3 and ≥ 2 min (AI: ≥ 3 min, first 10 AI games per day); max 3 counted wins per day vs the same opponent; friendly tables never count |
+| Counted game | turn ≥ 3 and ≥ 2 min (AI: ≥ 3 min, first 10 AI games per day); max 3 counted wins per day vs the same opponent; friendly tables never count. Early forfeit (rival surrenders / leaves / disconnects / is kicked / misses setup / no-show before turn 3 or 2 min): a full counted win if the forfeiter has a verified email and 10 counted online games, max 3 such wins per day per winner; the forfeiter always gets the loss in stats, no coins/XP (section 9) |
+| Coins from one opponent | max 200 per economy day won from the same opponent (match coins of wins + net bet winnings); past it match coins are cut and a pot pays the winner's stake + what is left, the rest of the loser's stake is refunded (section 9) |
 | Battle pass | 1 step per login day (max 30 / month length). Free: 50 coins per step, pack at 10 and 20, unowned holo at 30. Premium (2 Rare Candies): cosmetics + 4 packs + 1.000 coins |
 | Boosters | Set boosters (one per set, 200 coins; daily, welcome and prize packs are set boosters): 1 rare (holo 66.5%, otherwise a non-holo rare; Jungle/Fossil/Team Rocket only have holo rares) + 3 uncommons (1% upgrade to rare) + 1 uncommon that is a second rare 10% of the time (`SECOND_RARE_CHANCE`, every booster) + 6 commons, **no basic Energy** (owner, 2026-10-21) and **no Trainers**. Trainer booster (market only, 200): 11 Trainers of every set — the only booster that gives Trainers |
 | Card weights | `ECONOMY.packs.cardWeights` (card id → weight, default 1): a card's chance relative to the others of its pool (same pack and rarity); the odds follow |
@@ -133,7 +134,7 @@ Returns the config as JSON (no functions). Shape (abridged):
     "weekly": { "id": "weekly_missions", "title": "Completa 15 misiones esta semana", "target": 15, "rewardPacks": 1, "rewardExchangeTokens": 1 }
   },
   "matchCoins": { "online": { "win": 25, "loss": 10 }, "ai": { "win": 10, "loss": 5 }, "dailyCap": 75 },
-  "antiFarming": { "minTurn": 3, "minDurationMs": 120000, "maxCountedWinsPerOpponentPerDay": 3, "aiMinDurationMs": 180000, "aiDailyCountedGames": 10 },
+  "antiFarming": { "minTurn": 3, "minDurationMs": 120000, "maxCountedWinsPerOpponentPerDay": 3, "forfeit": { "establishedMinOnlineGames": 10, "maxPaidWinsPerDay": 3 }, "maxCoinsFromOpponentPerDay": 200, "aiMinDurationMs": 180000, "aiDailyCountedGames": 10 },
   "battlePass": { "maxSteps": 30, "premiumPriceRareCandy": 2, "standardCoinsPerStep": 50, "standardPackSteps": [10, 20], "premium": [{ "step": 1, "rewardType": "coins", "amount": 100, "label": "100 Monedas" }, ...] },
   "setMilestones": {
     "tiers": [{ "percent": 50, "coins": 100 }, { "percent": 75, "coins": 250, "cardBack": true }, { "percent": 100, "coins": 500, "title": true, "holoVariant": true }],
@@ -440,6 +441,10 @@ reached turn 3, otherwise both stakes are refunded.)
   "coinsDelta": 0,
   "rewardCoins": 25, "rewardCoinsCapped": false,
   "missionsCompleted": [ ...MissionCompletion ],
+  "earlyForfeit": false,
+  "forfeitBlockedBy": null,
+  "pairCap": { "limit": 200, "coinsWonToday": 25, "rewardCoinsCut": 0, "betWinningsCut": 0, "reached": false },
+  "betRefundedByPairCap": 0,
   "emailVerified": true,
   "coins": 1125,
   "xpGained": 100, "xpCapped": false, "levelsGained": 0, "level": 2, "experience": 300
@@ -450,8 +455,25 @@ reached turn 3, otherwise both stakes are refunded.)
   4th+ win vs the same opponent today, friendly, no result): no stats, ranking, achievements, XP,
   match coins or missions. Suggested copy: "Esta partida no cuenta para estadísticas ni recompensas
   (se necesita llegar al turno 3 y jugar 2 minutos)".
-- A surrender during the mulligan/setup is `outcome: "win"` for the opponent but `counted: false`.
-- `coinsDelta` is only the table bet (0 while bets are off); `rewardCoins` are the match coins.
+- `earlyForfeit: true` (both players): the loser surrendered, left, disconnected for good, was kicked
+  on the turn timer, missed the setup or didn't show up at their table **before** turn 3 / 2 minutes.
+  The forfeiter (`outcome: "loss"`) always gets the loss in their stats (streak broken) but no match
+  coins, XP or missions, whatever `counted` says. The winner gets a full counted win
+  (`counted: true`) only if the forfeiter is established; otherwise `counted: false` and
+  `forfeitBlockedBy` says why: `"forfeiter_not_established"` (rival without a verified email or
+  with < 10 counted online games; copy: "Tu rival abandonó antes de tiempo: la partida no cuenta"),
+  `"daily_forfeit_limit"` (already 3 paid forfeit wins today; copy: "Ya cobraste 3 victorias por
+  abandono hoy"), `"opponent_win_limit"` (already 3 counted wins vs this rival today).
+  `forfeitBlockedBy` is null for the loser and in every other case.
+- `pairCap` (winner of a non-friendly online game, else null): the per-opponent daily coin cap.
+  `coinsWonToday` = coins won from this rival in the economy day, this game included (match coins
+  of wins + net bet winnings); `rewardCoinsCut` / `betWinningsCut` = what this game didn't pay
+  because of it (XP, missions and stats still applied). Show a notice when either cut is > 0 or
+  `reached` is true: "Alcanzaste el tope diario de 200 monedas contra este rival".
+- `betRefundedByPairCap` (loser): part of their stake given back because the winner hit the cap
+  ("Se te devolvieron N monedas de tu apuesta: tu rival alcanzó su tope diario contra ti").
+- `coinsDelta` is only the table bet (0 while bets are off): net coins the pot moved for the player
+  (after the per-opponent cap: winner +winnings, loser −winnings); `rewardCoins` are the match coins.
 - `emailVerified: false`: a counted game gave that player stats and XP but no match coins or
   missions (section 11). Suggested copy: "Verificá tu email para ganar monedas y misiones".
 
@@ -482,13 +504,13 @@ reached turn 3, otherwise both stakes are refunded.)
 | `login_calendar` | coupons | Calendario de visitas |
 | `mission_reward` | coins | Misión diaria |
 | `weekly_mission_reward` | exchangeTokens | Misión semanal |
-| `match_reward` | coins | Recompensa de partida |
+| `match_reward` | coins | Recompensa de partida. Cut by the per-opponent cap: the description ends "(Tope diario contra este rival alcanzado)"; a win cut to nothing leaves a 0-coin row so the history explains it |
 | `set_milestone` | coins | Hito de colección |
 | `exchange_redeem` | exchangeTokens (−) | Canje de ficha |
 | `battle_pass_reward` | coins | Pase de batalla (existing) |
 | `rare_candy_conversion` | rareCandy (−), coins / coupons | Conversión de Caramelo Raro (existing) |
 | `pack_purchase` | coins (−) | Compra de sobre (existing) |
-| `bet_stake` / `bet_win` / `bet_refund` | coins | Apuesta de mesa / ganada / devuelta (existing, unused while bets are off) |
+| `bet_stake` / `bet_win` / `bet_refund` | coins | Apuesta de mesa / ganada / devuelta (standard tables off; Lucky Duel tables). A pot cut by the per-opponent cap: `bet_win` "… (tu apuesta + N de ganancia; Tope diario contra este rival alcanzado)" for the winner (`bet_refund` "Apuesta devuelta: … (ganaste; Tope diario …)" when nothing was left) and `bet_refund` "Apuesta devuelta (en parte): …" for the loser |
 | `daily_login` | coins, coupons | Recompensa diaria (old rows only; retired) |
 
 Free packs are not currency: they are rows of the pack inventory (`source` above).
@@ -502,6 +524,25 @@ lasted ≥ 2 minutes since the game started, and the winner has fewer than 3 cou
 opponent in the economy day. Only counted games touch `UserStats` (wins, losses, streaks → ranking,
 titles, win/game/streak achievements), XP, match coins and missions. vs AI: ≥ 3 minutes, turn ≥ 3
 (client-reported) and the first 10 counted AI games per day; AI games never touch stats.
+
+**Early forfeits** (owner, 2026-10-21; `ECONOMY.antiFarming.forfeit`): a non-friendly online game
+(normal, Lucky Duel table or draft) that the loser gives up before turn 3 / 2 minutes — surrender,
+leaving, disconnect timeout, turn-timer kick, setup timeout, a no-show claimed by the rival, a draft
+forfeit — counts as a full win for the winner (stats, streak, XP, match coins, missions) only when
+the forfeiter is established (verified email and `establishedMinOnlineGames` = 10 counted online
+games), at most `maxPaidWinsPerDay` = 3 such wins per winner per economy day (all rivals) and within
+the 3 counted wins per rival. The forfeiter always gets the loss in `UserStats` (streak broken),
+never coins, XP or missions; those forfeit losses are left out of the "counted online games" that
+gate bets, trades and being established (`matches.earlyForfeit`). A Lucky Duel pot follows its own
+rule (paid on any turn) plus the cap below.
+
+**Per-opponent coin cap** (`ECONOMY.antiFarming.maxCoinsFromOpponentPerDay` = 200): a player wins at
+most 200 coins per economy day from the same opponent, summing the match coins of wins against them
+and the net bet winnings (pot minus own stake), stored per match in `player1PairCoins` /
+`player2PairCoins`. Every non-friendly online settlement applies it, pot first, then match coins: the
+pot pays the winner's stake back plus the winnings left under the cap and refunds the rest of the
+loser's stake; match coins are paid up to what is left. XP, missions and stats are not affected; AI
+games and losers' / draws' participation coins are not capped by it.
 
 ---
 
