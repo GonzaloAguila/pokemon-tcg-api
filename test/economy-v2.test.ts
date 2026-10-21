@@ -621,6 +621,8 @@ describe("HTTP", () => {
       expect((await app.request("GET", "/api/economy/odds")).status).toBe(200);
       const config = await app.request("GET", "/api/economy/config");
       expect(config.body).toMatchObject({ timeZone: "America/Argentina/Buenos_Aires", packs: { price: 200 } });
+      // Standard tables take no bets; Lucky Duel tables take 0–100 coins
+      expect(config.body.tableBets).toMatchObject({ enabled: false, luckyDuel: { enabled: true, maxBet: 100 } });
       expect((await app.request("GET", "/api/economy/status")).status).toBe(401);
 
       expect((await app.request("POST", "/api/economy/daily-pack", { token, body: {} })).status).toBe(422);
@@ -637,6 +639,7 @@ describe("HTTP", () => {
         dailyPack: { available: false },
         checkIn: { checkedInToday: true, loginDays: 1 },
         tableBetsEnabled: false,
+        luckyDuelTableBetsEnabled: true,
       });
       expect(status.body.missions.daily.find((m: { id: string }) => m.id === "open_daily_pack")).toMatchObject({ completed: true });
 

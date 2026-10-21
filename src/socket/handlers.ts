@@ -22,8 +22,13 @@ import {
 } from "./draft-handlers.js";
 import { registerTradeEvents } from "./trade-handlers.js";
 import { draftGameWasPlayed } from "./draft-rewards.js";
-import { InsufficientStakeError, betIneligibilityReason } from "../modules/matches/matches.service.js";
-import { ECONOMY } from "../modules/economy/config.js";
+import {
+  InsufficientStakeError,
+  betIneligibilityReason,
+  betPairLimitReason,
+  maxTableBet,
+  tableBetsEnabledFor,
+} from "../modules/matches/matches.service.js";
 import { openRoomMatch, roomMatchMode, settleRoomResult } from "./match-settlement.js";
 import { socketSchemas, parsePayload } from "./schemas.js";
 import { getIo, setIo, userRoom } from "./io-registry.js";
@@ -654,20 +659,26 @@ export function setupSocketHandlers(io: Server): void {
         }
         // The lobby shows the deck's rank F–S, never the deck
         const creatorDeck = deckId ? await describeDeck(userId, deckId) : undefined;
-        // Table bets are off unless ECONOMY.tableBets.enabled (the bet is forced to 0). When on:
-        // friendly tables carry no bet; otherwise the bet is capped by the creator's title (lobby
-        // slider), the creator must be eligible and cover it now (it's charged to both players
-        // when the game starts). Lucky Duel tables bet the same way (a draw refunds both stakes).
-        const betAmount = friendly || !ECONOMY.tableBets.enabled ? 0 : (parsed.data.betAmount ?? 0);
+        // A bet is forced to 0 unless that kind of table takes bets (standard tables:
+        // ECONOMY.tableBets.enabled, off; Lucky Duel: ECONOMY.tableBets.luckyDuel, on). When on:
+        // friendly tables carry no bet; otherwise the bet is capped (Lucky Duel: luckyDuel.maxBet
+        // whatever the title; standard: the creator's title, lobby slider), the creator must be
+        // eligible and cover it now (it's charged to both players when the game starts). A Lucky
+        // Duel's pot is paid on any turn; a draw refunds both stakes.
+        const betAmount = friendly || !tableBetsEnabledFor(mode) ? 0 : (parsed.data.betAmount ?? 0);
         if (betAmount > 0) {
-          const notEligible = await betIneligibilityReason(userId);
-          if (notEligible) {
-            socket.emit("error", { message: notEligible });
+          const maxBet = maxTableBet(mode, maxBetForTitle(identity.titleId));
+          if (betAmount > maxBet) {
+            socket.emit("error", {
+              message: luckyDuel
+                ? `Las mesas Lucky Duel permiten apostar hasta ${maxBet} monedas`
+                : `Tu título permite apostar hasta ${maxBet} monedas`,
+            });
             return;
           }
-          const maxBet = maxBetForTitle(identity.titleId);
-          if (betAmount > maxBet) {
-            socket.emit("error", { message: `Tu título permite apostar hasta ${maxBet} monedas` });
+          const notEligible = await betIneligibilityReason(userId, undefined, mode);
+          if (notEligible) {
+            socket.emit("error", { message: notEligible });
             return;
           }
           if ((await getCoins(userId)) < betAmount) {
@@ -781,10 +792,18 @@ export function setupSocketHandlers(io: Server): void {
 
         // Taking the free seat of a table with a bet: the joiner must be able to cover it
         // (charged when the game starts, in the same transaction as the creator's stake)
+        // and the pair must not have used up today's bet tables against each other (else the
+        // game would silently start without the bet)
         if (target.config.betAmount > 0 && !seated) {
-          const notEligible = await betIneligibilityReason(userId);
+          const betMode = luckyDuel ? "lucky-duel" : "standard";
+          const notEligible = await betIneligibilityReason(userId, undefined, betMode);
           if (notEligible) {
             socket.emit("error", { message: notEligible });
+            return;
+          }
+          const pairLimit = target.player1Id ? await betPairLimitReason(userId, target.player1Id) : null;
+          if (pairLimit) {
+            socket.emit("error", { message: pairLimit });
             return;
           }
           if ((await getCoins(userId)) < target.config.betAmount) {
