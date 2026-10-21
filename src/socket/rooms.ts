@@ -105,6 +105,7 @@ import {
   declineBorrowedTrainer,
 } from "@gonzaloaguila/game-core";
 import { parseGameAction, type TABLE_MODES } from "./schemas.js";
+import { isUserOnline } from "./presence.js";
 import { isLuckyDuelFaceDown } from "./state-masking.js";
 import type { RoomChatMessage } from "./room-chat.js";
 import type { RoomCosmetics } from "./room-cosmetics.js";
@@ -161,6 +162,15 @@ export interface GameRoom {
   checkIn?: boolean;
   /** A draft tournament game: not listed in the lobby. */
   isDraft?: boolean;
+
+  // Waiting lobby tables (see WAITING_TABLE_* / CREATOR_RESPONSE_MS): they outlive the creator's
+  // lobby socket. `creatorSeenAt`: last time the creator was online (any socket); `touchedAt`:
+  // created, or last opened by the creator (their seat retaken). `awaitingCreator`: a rival sat
+  // while the creator wasn't at the table; the game starts when the creator opens it, or the
+  // table closes at `expiresAt`.
+  creatorSeenAt?: number;
+  touchedAt?: number;
+  awaitingCreator?: { joinedAt: number; expiresAt: number };
 
   // Players
   player1Id: string | null;
@@ -844,8 +854,34 @@ export const LUCKY_DUEL_FACE_DOWN_ERROR = "Pulsa Listo: los Pokémon activos se 
 
 const FORFEIT_TIMEOUT_MS = 120_000; // 2 minutes
 const SETUP_TIMEOUT_MS = 90_000; // 90 seconds for opponent to finish setup
-/** A waiting room whose creator disconnected (closed / reloaded the lobby) is deleted after this. */
-const WAITING_ROOM_GRACE_MS = 15_000;
+/**
+ * Waiting tables survive their creator's lobby socket (reload, another page, a dropped
+ * connection). While the creator is online anywhere (any socket, the frontend's presence socket
+ * included) the table stays listed and joinable; while they are offline it is hidden and can't be
+ * joined, and it closes once they have been offline this long.
+ */
+export const WAITING_TABLE_OFFLINE_TTL_MS = 30 * 60_000;
+/** A waiting table closes this long after it was created or its creator last opened it, even if they stay online. */
+export const WAITING_TABLE_IDLE_TTL_MS = 60 * 60_000;
+/**
+ * A rival sat at a table whose creator wasn't at it (no seat socket): the creator gets the
+ * `tableJoined` alert and has this long to open the table (the game starts then). After it the
+ * rival may claim the victory (owner rule: a no-show is a forfeit, claimNoShow); until they do
+ * (or leave, which reopens the table) the creator can still come in and play.
+ */
+export const CREATOR_RESPONSE_MS = 90_000;
+
+/** Why the manager closed a waiting table on its own. */
+export type TableCloseReason = "offline" | "idle";
+
+/** claimNoShow refused: the rival can't claim (yet). */
+export class NoShowClaimError extends Error {
+  readonly code = "NO_SHOW_CLAIM_REFUSED";
+  constructor(message: string) {
+    super(message);
+    this.name = "NoShowClaimError";
+  }
+}
 /**
  * A finished room lives this long after its game ended, so both players can still chat and send
  * emotes ("gg") from the game-over screen (sweepRooms).
@@ -862,15 +898,26 @@ type ForfeitCallback = (
 /** A room with an open match is dropped without a result (admin close, everybody gone): refund it. */
 type AbandonCallback = (room: GameRoom, reason: string) => void;
 
-/** A room removed by the manager itself (e.g. its creator left the lobby): refresh the room list. */
-type RoomClosedCallback = (roomId: string, room: GameRoom) => void;
+/**
+ * A waiting table the manager closed on its own (TTL, or its creator never answered a rival):
+ * refresh the lists and tell the creator (and the waiting rival, if any: `room.player2Id`).
+ */
+type RoomClosedCallback = (roomId: string, room: GameRoom, reason: TableCloseReason) => void;
+
+/** The rival waiting for an away creator left (leaveRoom / disconnect): the table reopened. */
+type JoinCancelledCallback = (room: GameRoom, joinerUserId: string) => void;
+
+/** The away creator's window ended: the waiting rival may claim the victory (claimNoShow). */
+type NoShowClaimableCallback = (room: GameRoom) => void;
 
 /** The server answered for a player whose answer clock ran out (`action` = what it sent for them). */
 type AutoAnswerCallback = (roomId: string, side: PlayerKey, action: { type: string }, result: ActionResult) => void;
 
 export interface GameRoomManagerOptions {
-  /** How long a waiting room survives its creator's disconnect (default WAITING_ROOM_GRACE_MS). */
-  waitingRoomGraceMs?: number;
+  /** How long an away creator has to open a table a rival sat at (default CREATOR_RESPONSE_MS). */
+  creatorResponseMs?: number;
+  /** Whether a user has any socket (default: presence.ts, the main server's sockets). */
+  isUserOnline?: (userId: string) => boolean;
   /** Where the server's random picks come from (a timed-out Misty's Duel pick); default CSPRNG. */
   random?: () => number;
 }
@@ -885,19 +932,23 @@ export class GameRoomManager {
   private socketToRoom: Map<string, string> = new Map();
   private forfeitTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private cleanupTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
-  private waitingRoomTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
+  private creatorResponseTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private setupTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private setupTimerStartTimes: Map<string, number> = new Map(); // roomId → Date.now()
   private onForfeitCallback: ForfeitCallback | null = null;
   private onAbandonCallback: AbandonCallback | null = null;
   private onRoomClosedCallback: RoomClosedCallback | null = null;
+  private onJoinCancelledCallback: JoinCancelledCallback | null = null;
+  private onNoShowClaimableCallback: NoShowClaimableCallback | null = null;
   private onAutoAnswerCallback: AutoAnswerCallback | null = null;
   private answerTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
-  private readonly waitingRoomGraceMs: number;
+  private readonly creatorResponseMs: number;
+  private readonly isUserOnline: (userId: string) => boolean;
 
   /** @param flipCoin - where every coin of this manager's games comes from (tests pass a scripted one) */
   constructor(private readonly flipCoin: CoinSource = serverCoin, options: GameRoomManagerOptions = {}) {
-    this.waitingRoomGraceMs = options.waitingRoomGraceMs ?? WAITING_ROOM_GRACE_MS;
+    this.creatorResponseMs = options.creatorResponseMs ?? CREATOR_RESPONSE_MS;
+    this.isUserOnline = options.isUserOnline ?? isUserOnline;
     this.random = options.random ?? serverRandom;
   }
 
@@ -928,9 +979,58 @@ export class GameRoomManager {
     this.onAutoAnswerCallback = callback;
   }
 
-  /** Set the callback for rooms the manager removes on its own (waiting room of a creator who left). */
+  /** Set the callback for waiting tables the manager closes on its own (TTL, creator never answered). */
   setOnRoomClosed(callback: RoomClosedCallback): void {
     this.onRoomClosedCallback = callback;
+  }
+
+  /** Set the callback for a rival who stopped waiting for an away creator (the table reopened). */
+  setOnJoinCancelled(callback: JoinCancelledCallback): void {
+    this.onJoinCancelledCallback = callback;
+  }
+
+  /** Set the callback for a waiting rival who may now claim the victory (the creator's window ended). */
+  setOnNoShowClaimable(callback: NoShowClaimableCallback): void {
+    this.onNoShowClaimableCallback = callback;
+  }
+
+  /**
+   * Whether a waiting table's creator can be reached: at the table (seat socket) or online
+   * anywhere else (they get the `tableJoined` alert). Only such tables are listed and joinable.
+   */
+  isCreatorReachable(room: GameRoom): boolean {
+    if (room.player1SocketId) return true;
+    return room.player1Id ? this.isUserOnline(room.player1Id) : false;
+  }
+
+  /** A lobby table anyone may take the free seat of now (listed in the lobby). */
+  isJoinable(room: GameRoom): boolean {
+    return room.status === "waiting" && !room.isDraft && !room.adventure && !!room.player1Id && !room.player2Id && this.isCreatorReachable(room);
+  }
+
+  /** The user's waiting tables: the creator was seen online now (offline TTL restarts). */
+  markCreatorSeen(userId: string, now = Date.now()): void {
+    for (const room of this.findWaitingRoomsByUser(userId)) room.creatorSeenAt = now;
+  }
+
+  /**
+   * The creator's lobby socket becomes the seat of all their waiting tables (attachMyRooms), like
+   * a joinRoom to each: their idle TTL restarts and a rival waiting for them stops waiting (the
+   * caller starts that game). The socket maps to a table with a rival, else to any of them.
+   */
+  attachCreatorSocket(userId: string, socketId: string): GameRoom[] {
+    const now = Date.now();
+    // Not a table whose game is starting or whose no-show claim is being settled
+    const rooms = this.findWaitingRoomsByUser(userId).filter((r) => !r.startPending);
+    for (const room of rooms) {
+      room.player1SocketId = socketId;
+      room.creatorSeenAt = room.touchedAt = now;
+      this.cancelCreatorResponseTimer(room.id);
+      room.awaitingCreator = undefined;
+    }
+    const mapped = rooms.find((r) => r.player2Id) ?? rooms[0];
+    if (mapped) this.socketToRoom.set(socketId, mapped.id);
+    return rooms;
   }
 
   /** Whose seat in `room` belongs to `userId`, or null. */
@@ -1014,6 +1114,7 @@ export class GameRoomManager {
       players: [],
       createdAt: new Date(),
     };
+    room.creatorSeenAt = room.touchedAt = room.createdAt.getTime();
 
     this.rooms.set(id, room);
     return room;
@@ -1076,7 +1177,14 @@ export class GameRoomManager {
       this.socketToRoom.set(socketId, roomId);
       this.cancelForfeitTimer(roomId, "player1");
       this.cancelCleanupTimer(roomId);
-      this.cancelWaitingRoomTimer(roomId);
+      if (room.status === "waiting" && !room.startPending) {
+        // The creator opened their table: its idle TTL restarts, and a rival waiting for them
+        // plays now (the caller starts the game: both seats have a socket). Not while a no-show
+        // claim is being settled (startPending): that table is lost.
+        room.creatorSeenAt = room.touchedAt = Date.now();
+        this.cancelCreatorResponseTimer(roomId);
+        room.awaitingCreator = undefined;
+      }
       return room;
     }
     if (room.player2Id === userId) {
@@ -1100,11 +1208,16 @@ export class GameRoomManager {
         if (other.id !== roomId && !other.isDraft && !other.adventure && other.player1Id === userId && other.player2Id && other.status !== "finished") {
           throw new OwnTableTakenError(other.id);
         }
+        // Already waiting for another table's creator: one seat at a time
+        if (other.id !== roomId && other.awaitingCreator && other.status === "waiting" && other.player2Id === userId) {
+          throw new Error("Ya estás esperando al creador de otra mesa");
+        }
       }
     }
 
-    // A waiting room whose creator left the lobby is about to be deleted: nobody would play you
-    if (this.waitingRoomTimers.has(roomId)) {
+    // The creator of a waiting table is offline (no socket at all): the table is kept for them
+    // but nobody may sit and wait on a ghost
+    if (room.status === "waiting" && room.player1Id && !room.isDraft && !this.isCreatorReachable(room)) {
       throw new Error("El creador de la mesa no está conectado");
     }
     if (room.status !== "waiting") {
@@ -1128,10 +1241,108 @@ export class GameRoomManager {
           titleId: displayInfo.titleId ?? null,
         };
       }
+      // The creator isn't at their table (online elsewhere): the game waits for them to open it
+      if (!room.isDraft && room.player1Id && !room.player1SocketId) {
+        const now = Date.now();
+        room.awaitingCreator = { joinedAt: now, expiresAt: now + this.creatorResponseMs };
+        this.startCreatorResponseTimer(roomId);
+      }
     }
 
     this.socketToRoom.set(socketId, roomId);
     return room;
+  }
+
+  /** A rival sat at this table and waits for its away creator to open it. */
+  isAwaitingCreator(room: GameRoom): boolean {
+    return room.status === "waiting" && !!room.awaitingCreator && !!room.player2Id;
+  }
+
+  private startCreatorResponseTimer(roomId: string): void {
+    this.cancelCreatorResponseTimer(roomId);
+    const timer = setTimeout(() => this.expireAwaitingCreator(roomId), this.creatorResponseMs);
+    timer.unref?.();
+    this.creatorResponseTimers.set(roomId, timer);
+  }
+
+  private cancelCreatorResponseTimer(roomId: string): void {
+    const timer = this.creatorResponseTimers.get(roomId);
+    if (timer) {
+      clearTimeout(timer);
+      this.creatorResponseTimers.delete(roomId);
+    }
+  }
+
+  /**
+   * The away creator didn't open their table in time (CREATOR_RESPONSE_MS): the rival may claim
+   * the victory now (onNoShowClaimable). Public so tests can end the window without waiting.
+   * Returns whether the window ended for a waiting rival.
+   */
+  expireAwaitingCreator(roomId: string, now = Date.now()): boolean {
+    this.cancelCreatorResponseTimer(roomId);
+    const room = this.rooms.get(roomId);
+    if (!room || !this.isAwaitingCreator(room) || !room.awaitingCreator) return false;
+    room.awaitingCreator.expiresAt = Math.min(room.awaitingCreator.expiresAt, now);
+    this.onNoShowClaimableCallback?.(room);
+    return true;
+  }
+
+  /**
+   * The rival claims the victory over a creator who didn't come in time (owner rule: a no-show
+   * is a forfeit). Only the seated rival, only once the window ended, only while the creator
+   * still hasn't opened the table. Marks the room as settling (startPending: the creator's
+   * arrival can't start it meanwhile); the caller opens the match, settles it (winner: player 2)
+   * and removes the table with finishNoShow.
+   */
+  claimNoShow(roomId: string, userId: string, now = Date.now()): GameRoom {
+    const room = this.rooms.get(roomId);
+    if (!room || room.status !== "waiting" || room.isDraft || room.adventure) throw new NoShowClaimError("La mesa ya no existe");
+    if (room.player2Id !== userId) throw new NoShowClaimError("No estás esperando en esta mesa");
+    if (!this.isAwaitingCreator(room) || !room.awaitingCreator || room.startPending) throw new NoShowClaimError("El creador ya llegó a la mesa");
+    if (now < room.awaitingCreator.expiresAt) throw new NoShowClaimError("Todavía no puedes reclamar la victoria: el creador aún tiene tiempo");
+    this.cancelCreatorResponseTimer(roomId);
+    room.startPending = true;
+    return room;
+  }
+
+  /** The no-show was settled: the table is over and goes away (no callbacks). */
+  finishNoShow(room: GameRoom): void {
+    room.status = "finished";
+    room.startPending = false;
+    room.awaitingCreator = undefined;
+    this.cancelCreatorResponseTimer(room.id);
+    this.cancelAnswerTimer(room.id);
+    this.unmapRoomSockets(room);
+    if (this.rooms.get(room.id) === room) this.rooms.delete(room.id);
+  }
+
+  /** Remove a waiting table the manager closes on its own, and report it (onRoomClosed). */
+  private closeWaitingTable(room: GameRoom, reason: TableCloseReason): void {
+    console.log(`🗑️ Waiting table ${room.id} closed (${reason})`);
+    this.cancelCreatorResponseTimer(room.id);
+    this.cancelAnswerTimer(room.id);
+    this.rooms.delete(room.id);
+    this.unmapRoomSockets(room);
+    this.onRoomClosedCallback?.(room.id, room, reason);
+  }
+
+  /**
+   * The rival waiting for an away creator gives up their seat (leaveRoom, disconnect): the table
+   * is open again and the creator is told (onJoinCancelled).
+   */
+  private releaseWaitingJoiner(room: GameRoom): void {
+    const joinerUserId = room.player2Id;
+    if (room.player2SocketId) this.unmapSocket(room.player2SocketId, room.id);
+    room.player2Id = null;
+    room.player2SocketId = null;
+    room.player2Ready = false;
+    room.player2DeckId = null;
+    room.players = room.players.filter((id) => id !== joinerUserId);
+    room.joiner = { username: null, avatarId: null, titleId: null };
+    const wasAwaiting = !!room.awaitingCreator;
+    room.awaitingCreator = undefined;
+    this.cancelCreatorResponseTimer(room.id);
+    if (wasAwaiting && joinerUserId) this.onJoinCancelledCallback?.(room, joinerUserId);
   }
 
   /**
@@ -1163,9 +1374,14 @@ export class GameRoomManager {
       room.player1SocketId = null;
       room.player1Ready = false;
     } else if (room.player2SocketId === socketId) {
-      room.player2Id = null;
-      room.player2SocketId = null;
-      room.player2Ready = false;
+      if (room.status === "waiting") {
+        // The rival stops waiting (for an away creator, or a bet they can't cover): the table reopens
+        this.releaseWaitingJoiner(room);
+      } else {
+        room.player2Id = null;
+        room.player2SocketId = null;
+        room.player2Ready = false;
+      }
     }
 
     this.unmapSocket(socketId, roomId);
@@ -1173,7 +1389,7 @@ export class GameRoomManager {
     // Remove room if empty
     if (!room.player1Id && !room.player2Id) {
       this.abandonMatch(room, "Ambos jugadores abandonaron la mesa");
-      this.cancelWaitingRoomTimer(roomId);
+      this.cancelCreatorResponseTimer(roomId);
       room.status = "finished";
       this.cancelAnswerTimer(roomId);
       this.rooms.delete(roomId);
@@ -2461,12 +2677,12 @@ export class GameRoomManager {
 
     const roomId = this.socketToRoom.get(socketId);
     // A creator may have one waiting table per mode on the same socket (socketToRoom keeps only
-    // one of them): every other one is left too (hidden, deleted after the grace period)
+    // one of them): every other one loses that socket too (the tables stay, see below)
     let otherWaiting: string | null = null;
     for (const other of this.rooms.values()) {
       if (other.id !== roomId && other.status === "waiting" && other.player1SocketId === socketId) {
         other.player1SocketId = null;
-        this.startWaitingRoomTimer(other.id);
+        other.creatorSeenAt = Date.now();
         otherWaiting ??= other.id;
       }
     }
@@ -2491,10 +2707,17 @@ export class GameRoomManager {
     // from memory (its run keeps the snapshot and the room is rebuilt on rejoin)
     if (room.adventure) return roomId;
 
-    // The creator left the lobby (closed or reloaded the tab) while waiting for an opponent:
-    // the room is hidden at once and deleted unless they come back within the grace period
+    // The creator left the lobby (reloaded, went to another page, lost the connection) while
+    // waiting for an opponent: the table stays. Listed and joinable while they are online
+    // anywhere (a rival who sits then waits for them: awaitingCreator), hidden while they are
+    // offline; closed by the sweep after WAITING_TABLE_OFFLINE_TTL_MS offline.
     if (disconnectedSide === "player1" && room.status === "waiting") {
-      this.startWaitingRoomTimer(roomId);
+      room.creatorSeenAt = Date.now();
+    }
+    // The rival waiting for an away creator left: the seat is free again (not while the game
+    // is starting or their no-show claim is being settled)
+    if (disconnectedSide === "player2" && room.status === "waiting" && room.player2Id && !room.startPending) {
+      this.releaseWaitingJoiner(room);
     }
 
     // Start forfeit timer if game is in progress
@@ -2708,31 +2931,6 @@ export class GameRoomManager {
     this.cleanupTimers.set(roomId, timer);
   }
 
-  /** Delete a waiting room if its creator is still disconnected after the grace period. */
-  private startWaitingRoomTimer(roomId: string): void {
-    this.cancelWaitingRoomTimer(roomId);
-    const timer = setTimeout(() => {
-      this.waitingRoomTimers.delete(roomId);
-      const room = this.rooms.get(roomId);
-      if (!room || room.status !== "waiting" || room.player1SocketId) return;
-      console.log(`🗑️ Waiting room ${roomId} deleted (creator left the lobby)`);
-      this.cancelAnswerTimer(roomId);
-      this.rooms.delete(roomId);
-      this.unmapRoomSockets(room);
-      this.onRoomClosedCallback?.(roomId, room);
-    }, this.waitingRoomGraceMs);
-    timer.unref?.();
-    this.waitingRoomTimers.set(roomId, timer);
-  }
-
-  private cancelWaitingRoomTimer(roomId: string): void {
-    const timer = this.waitingRoomTimers.get(roomId);
-    if (timer) {
-      clearTimeout(timer);
-      this.waitingRoomTimers.delete(roomId);
-    }
-  }
-
   /**
    * Cancel cleanup timer (a player reconnected).
    */
@@ -2756,8 +2954,11 @@ export class GameRoomManager {
    * One cleanup pass. A finished room is kept FINISHED_ROOM_TTL_MS after its game ended (stamped
    * here the first time it is seen finished, whatever the end path), not after the room was
    * created: before, a game longer than 5 minutes lost its room within a minute of the game
-   * over, cutting the players' chat and emotes ("gg"). Waiting rooms older than 30 minutes with
-   * no player 2 go too.
+   * over, cutting the players' chat and emotes ("gg"). Waiting lobby tables close (onRoomClosed)
+   * once their creator has been offline WAITING_TABLE_OFFLINE_TTL_MS ("offline"), or
+   * WAITING_TABLE_IDLE_TTL_MS after they were created / last opened by the creator ("idle"). A
+   * table with a rival waiting for its creator is spared during the creator's window; after it
+   * (the rival may claim the victory) the same TTLs apply, releasing that rival.
    */
   sweepRooms(now = Date.now()): void {
     for (const [id, room] of this.rooms.entries()) {
@@ -2767,11 +2968,21 @@ export class GameRoomManager {
           this.cancelAnswerTimer(id);
           this.rooms.delete(id);
         }
+        continue;
       }
-      if (room.status === "waiting" && !room.player2Id && now - room.createdAt.getTime() > 1_800_000) {
-        this.cancelAnswerTimer(id);
-        this.rooms.delete(id);
-        console.log(`🧹 Deleted stale waiting room ${id}`);
+      if (room.status !== "waiting" || room.isDraft || room.adventure || room.startPending) continue;
+      if (room.awaitingCreator && now < room.awaitingCreator.expiresAt) continue;
+      if (!room.player1Id) {
+        // Nobody holds it (shouldn't happen: leaveRoom deletes empty rooms)
+        this.closeWaitingTable(room, "idle");
+        continue;
+      }
+      const created = room.createdAt.getTime();
+      if (this.isCreatorReachable(room)) room.creatorSeenAt = now;
+      if (now - (room.creatorSeenAt ?? created) >= WAITING_TABLE_OFFLINE_TTL_MS) {
+        this.closeWaitingTable(room, "offline");
+      } else if (now - (room.touchedAt ?? created) >= WAITING_TABLE_IDLE_TTL_MS) {
+        this.closeWaitingTable(room, "idle");
       }
     }
   }
@@ -2791,36 +3002,34 @@ export class GameRoomManager {
   }
 
   /**
-   * Get all available rooms (waiting for players)
+   * Lobby tables waiting for a rival that can be joined now (isJoinable: the creator is at the
+   * table or online elsewhere).
    */
   getAvailableRooms(): GameRoom[] {
     const rooms: GameRoom[] = [];
     for (const room of this.rooms.values()) {
-      if (room.status === "waiting" && !room.player2Id && !this.waitingRoomTimers.has(room.id)) {
-        rooms.push(room);
-      }
+      if (this.isJoinable(room)) rooms.push(room);
     }
     return rooms;
   }
 
   /**
-   * Get all active rooms (waiting or playing). Waiting rooms whose creator left the lobby
-   * (about to be deleted) are not listed.
+   * The lobby list: joinable waiting tables (not those of an offline creator, nor one whose
+   * rival is waiting for its creator) and games being played.
    */
   getActiveRooms(): GameRoom[] {
     const rooms: GameRoom[] = [];
     for (const room of this.rooms.values()) {
       if (room.isDraft || room.adventure) continue;
-      if ((room.status === "waiting" && !this.waitingRoomTimers.has(room.id)) || room.status === "playing") {
-        rooms.push(room);
-      }
+      if (room.status === "playing" || this.isJoinable(room)) rooms.push(room);
     }
     return rooms;
   }
 
   /**
    * Delete a room before its game starts. Only its creator (player 1, by user id: they may
-   * come back from another socket / a reloaded lobby) can.
+   * come back from another socket / a reloaded lobby) can. A rival waiting for them is released
+   * (the caller tells them: `room.player2Id`).
    */
   deleteRoom(roomId: string, userId: string): boolean {
     const room = this.rooms.get(roomId);
@@ -2831,12 +3040,12 @@ export class GameRoomManager {
       return false;
     }
 
-    // Can only delete if game hasn't started
-    if (room.status !== "waiting") {
+    // Can only delete if game hasn't started (nor is starting / settling a no-show claim)
+    if (room.status !== "waiting" || room.startPending) {
       return false;
     }
 
-    this.cancelWaitingRoomTimer(roomId);
+    this.cancelCreatorResponseTimer(roomId);
     this.cancelAnswerTimer(roomId);
     this.rooms.delete(roomId);
     this.unmapRoomSockets(room);
@@ -2855,7 +3064,7 @@ export class GameRoomManager {
     this.cancelAnswerTimer(roomId);
     // Clean up timers and socket mappings
     this.cancelSetupTimer(roomId);
-    this.cancelWaitingRoomTimer(roomId);
+    this.cancelCreatorResponseTimer(roomId);
     this.unmapRoomSockets(room);
     this.cancelAnswerTimer(roomId);
     this.rooms.delete(roomId);

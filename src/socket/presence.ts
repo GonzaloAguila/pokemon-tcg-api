@@ -34,19 +34,31 @@ const onlineSockets = new Map<string, Set<string>>();
 /** userId → sockets of that user in the global chat + their public identity */
 const chatMembers = new Map<string, { sockets: Set<string>; user: ChatPresenceUser }>();
 
-/** An authenticated socket connected. */
-export function trackOnline(userId: string, socketId: string): void {
+/** An authenticated socket connected. Returns true when it is the user's first one (they came online). */
+export function trackOnline(userId: string, socketId: string): boolean {
   const sockets = onlineSockets.get(userId) ?? new Set<string>();
+  const cameOnline = sockets.size === 0;
   sockets.add(socketId);
   onlineSockets.set(userId, sockets);
+  return cameOnline;
 }
 
-/** A socket disconnected; the user leaves when it was their last one. */
-export function untrackOnline(userId: string, socketId: string): void {
+/** A socket disconnected; the user leaves when it was their last one (then returns true). */
+export function untrackOnline(userId: string, socketId: string): boolean {
   const sockets = onlineSockets.get(userId);
-  if (!sockets) return;
-  sockets.delete(socketId);
-  if (sockets.size === 0) onlineSockets.delete(userId);
+  if (!sockets || !sockets.delete(socketId)) return false;
+  if (sockets.size > 0) return false;
+  onlineSockets.delete(userId);
+  return true;
+}
+
+/**
+ * Whether the user has at least one authenticated socket on any page (lobby, game, or the
+ * frontend's always-on presence socket): rooms.ts uses it to tell an away creator (reachable by
+ * the `tableJoined` alert) from an offline one.
+ */
+export function isUserOnline(userId: string): boolean {
+  return (onlineSockets.get(userId)?.size ?? 0) > 0;
 }
 
 /** Distinct authenticated users connected right now. */

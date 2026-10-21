@@ -7,7 +7,21 @@ import {
   decks as themeDeckList,
 } from "@gonzaloaguila/game-core";
 import type { GameState } from "@gonzaloaguila/game-core";
-import { GameRoomManager, OwnTableTakenError, PrivateTableError, RoomNotFoundError, SeatedSpectatorError, isPublicTable, type ActionResult, type GameRoom, type PlayerKey } from "./rooms.js";
+import {
+  GameRoomManager,
+  NoShowClaimError,
+  OwnTableTakenError,
+  PrivateTableError,
+  RoomNotFoundError,
+  SeatedSpectatorError,
+  WAITING_TABLE_IDLE_TTL_MS,
+  WAITING_TABLE_OFFLINE_TTL_MS,
+  isPublicTable,
+  type ActionResult,
+  type GameRoom,
+  type PlayerKey,
+  type TableCloseReason,
+} from "./rooms.js";
 import { SPECTATE_RATE_LIMITED, allowSpectate, forgetSpectateSocket } from "./spectate-limit.js";
 import { maskRoomState } from "./room-state.js";
 import { cosmeticsPayload, getRoomCosmetics, snapshotRoomCosmetics } from "./room-cosmetics.js";
@@ -211,20 +225,193 @@ async function startRoomGame(io: Server, roomId: string): Promise<GameState | nu
 
 /**
  * The user's own waiting tables with their deck (`myRooms`, only to that user: the public room
- * list is anonymous). Also the ones whose creator left the lobby (rejoin them to keep them).
+ * list is anonymous). Sent on every connection (a reloaded page restores them) and whenever they
+ * change. The tables outlive the creator's lobby socket (rooms.ts WAITING_TABLE_*):
+ * - `attached`: this table has a seat socket (a lobby that sent `attachMyRooms`, or the table's
+ *   game page): a rival who sits starts the game at once. Otherwise a rival waits for the creator.
+ * - `opponent` / `joinExpiresAt`: a rival sat while the creator was away and waits until then
+ *   (open the table: `joinRoom { roomId }`, or `attachMyRooms` from the lobby).
+ * - `closesAt`: when the table closes without a rival (idle TTL; restarts when the creator opens it).
  */
 function myRoomsPayload(userId: string) {
   return {
-    rooms: roomManager.findWaitingRoomsByUser(userId).map((r) => ({
-      id: r.id,
-      mode: r.config.mode,
-      deckId: r.config.mode === "lucky-duel" ? null : r.player1DeckId,
-      deckName: r.config.mode === "lucky-duel" ? null : (r.creatorDeck?.name ?? null),
-      prizeCount: r.config.prizeCount,
-      betAmount: r.config.betAmount,
-      deckRank: r.config.mode === "lucky-duel" ? null : (r.creatorDeck?.rank ?? null),
-    })),
+    rooms: roomManager.findWaitingRoomsByUser(userId).map((r) => {
+      const awaiting = roomManager.isAwaitingCreator(r) ? r.awaitingCreator : undefined;
+      return {
+        id: r.id,
+        mode: r.config.mode,
+        deckId: r.config.mode === "lucky-duel" ? null : r.player1DeckId,
+        deckName: r.config.mode === "lucky-duel" ? null : (r.creatorDeck?.name ?? null),
+        prizeCount: r.config.prizeCount,
+        betAmount: r.config.betAmount,
+        deckRank: r.config.mode === "lucky-duel" ? null : (r.creatorDeck?.rank ?? null),
+        attached: !!r.player1SocketId,
+        opponent: awaiting ? { username: r.joiner.username, avatarId: r.joiner.avatarId, titleId: r.joiner.titleId } : null,
+        joinExpiresAt: awaiting?.expiresAt ?? null,
+        closesAt: (r.touchedAt ?? r.createdAt.getTime()) + WAITING_TABLE_IDLE_TTL_MS,
+      };
+    }),
   };
+}
+
+// ── Table alerts (user-scoped: every socket of the user, the frontend's presence socket included) ──
+
+/**
+ * `tableJoined` to the creator of `room`: a rival sat at their waiting table. `creatorPresent`:
+ * the creator was at the table and the game already started (`expiresAt` null); otherwise the
+ * rival waits until `expiresAt` for the creator to open it (`joinRoom { roomId }`).
+ */
+function notifyTableJoined(io: Server, room: GameRoom, creatorPresent: boolean): void {
+  if (!room.player1Id) return;
+  io.to(userRoom(room.player1Id)).emit("tableJoined", {
+    roomId: room.id,
+    mode: room.config.mode,
+    opponentUsername: room.joiner.username,
+    opponentAvatarId: room.joiner.avatarId,
+    opponentTitleId: room.joiner.titleId,
+    betAmount: room.config.betAmount,
+    prizeCount: room.config.prizeCount,
+    creatorPresent,
+    expiresAt: creatorPresent ? null : (room.awaitingCreator?.expiresAt ?? null),
+  });
+}
+
+/** Why a `tableJoined` alert no longer applies (the frontend drops its toast). */
+type TableJoinEndReason = "started" | "opponent-left" | "table-closed" | "forfeited";
+
+function notifyTableJoinEnded(io: Server, creatorId: string | null, roomId: string, reason: TableJoinEndReason): void {
+  if (creatorId) io.to(userRoom(creatorId)).emit("tableJoinEnded", { roomId, reason });
+}
+
+/** A rival waiting for an away creator was released (the table closed): back to the lobby. */
+function notifyJoinerReleased(io: Server, joinerId: string | null, roomId: string): void {
+  if (!joinerId) return;
+  io.to(userRoom(joinerId)).emit("waitingForCreatorEnded", { roomId, reason: "table-closed", message: "El creador cerró la mesa" });
+}
+
+/** The rival waiting at the table: wait for the away creator until `expiresAt`. */
+function waitingForCreatorPayload(room: GameRoom) {
+  const name = room.creator.username ?? "El creador";
+  return {
+    roomId: room.id,
+    mode: room.config.mode,
+    creatorUsername: room.creator.username,
+    betAmount: room.config.betAmount,
+    expiresAt: room.awaitingCreator?.expiresAt ?? null,
+    message: `Esperando a que ${name} vuelva a su mesa`,
+  };
+}
+
+/** The creator's window ended: the rival may claim the victory (`claimNoShowVictory`). */
+function notifyNoShowClaimable(io: Server, room: GameRoom): void {
+  if (!room.player2Id) return;
+  const name = room.creator.username ?? "El creador";
+  io.to(userRoom(room.player2Id)).emit("noShowClaimable", {
+    roomId: room.id,
+    creatorUsername: room.creator.username,
+    betAmount: room.config.betAmount,
+    message: `${name} no se presentó: puedes reclamar la victoria`,
+  });
+}
+
+const minutesOf = (ms: number) => Math.round(ms / 60_000);
+
+/** What the creator is told when the server closed their table on its own (`tableClosed`). */
+const TABLE_CLOSED_MESSAGES: Record<TableCloseReason, string> = {
+  offline: `Tu mesa se cerró: estuviste desconectado más de ${minutesOf(WAITING_TABLE_OFFLINE_TTL_MS)} minutos`,
+  idle: `Tu mesa se cerró: pasaron ${minutesOf(WAITING_TABLE_IDLE_TTL_MS)} minutos sin rival`,
+};
+
+/**
+ * The rival claimed the victory over a creator who didn't come in time (owner rule: a no-show is
+ * a forfeit): the match is opened now (with a bet, both stakes are taken in one transaction) and
+ * settled through the normal result path with the rival as winner, so the anti-farming rules,
+ * stats, XP, Lucky Duel pot / standard-table refund before turn 3 apply as for any forfeit. If a
+ * player can't cover the bet anymore the no-show is recorded without a bet (nobody is charged,
+ * `betAmount: 0` in the notices). The creator gets `tableForfeited`, the rival `noShowVictory`.
+ */
+async function settleNoShow(io: Server, room: GameRoom): Promise<void> {
+  const creatorName = room.creator.username ?? "El creador";
+  const reason = `${creatorName} no se presentó`;
+  try {
+    try {
+      await openRoomMatch(room, roomMatchMode(room, false));
+    } catch (err) {
+      if (!(err instanceof InsufficientStakeError)) throw err;
+      // Someone spent their coins meanwhile: the forfeit still counts, without the bet
+      console.warn(`[noShow] room ${room.id}: ${err.userId} can't cover the bet; settled without it`);
+      room.config.betAmount = 0;
+      await openRoomMatch(room, roomMatchMode(room, false));
+    }
+  } catch (err) {
+    // No match row (DB error): settleRoomResult records nothing; the table still closes
+    console.error(`[noShow] Could not open the match of room ${room.id}:`, err);
+  }
+  room.status = "finished";
+  settleRoomResult(io, room, "player2", `no-show: ${reason}`);
+  const payload = {
+    roomId: room.id,
+    mode: room.config.mode,
+    betAmount: room.config.betAmount,
+  };
+  if (room.player1Id) {
+    io.to(userRoom(room.player1Id)).emit("tableForfeited", {
+      ...payload,
+      opponentUsername: room.joiner.username,
+      message: `No te presentaste a tu mesa: ${room.joiner.username ?? "tu rival"} reclamó la victoria`,
+    });
+  }
+  if (room.player2Id) {
+    io.to(userRoom(room.player2Id)).emit("noShowVictory", { ...payload, opponentUsername: room.creator.username, message: `${reason}: ganaste la partida` });
+  }
+  notifyTableJoinEnded(io, room.player1Id, room.id, "forfeited");
+  io.in(room.id).socketsLeave(room.id);
+  roomManager.finishNoShow(room);
+  broadcastRoomList(io);
+  emitMyRooms(io, room.player1Id);
+  console.log(`🏳️ Room ${room.id}: ${reason}, ${room.player2Id} claimed the victory`);
+}
+
+/**
+ * Start the game of a table whose two seats have a socket and tell both seats (`gameStart`).
+ * Returns false when it didn't start (startRoomGame handled why, e.g. an unpaid bet).
+ */
+async function startAndAnnounce(io: Server, room: GameRoom): Promise<boolean> {
+  const roomId = room.id;
+  const gameState = await startRoomGame(io, roomId);
+  if (!gameState) return false;
+  console.log(`[joinRoom] Game started, phase: ${gameState.gamePhase}`);
+
+  // Update room list (room now playing)
+  broadcastRoomList(io);
+
+  // Both players' cosmetics (read when the game started)
+  const cosmetics = await getRoomCosmetics(room);
+
+  // Send masked state to each player
+  io.to(room.player1SocketId!).emit("gameStart", {
+    roomId,
+    mode: room.config.mode,
+    gameState: stateFor(room, gameState, "player1"),
+    isPlayer1: true,
+    opponentInfo: room.joiner,
+    ...cosmeticsPayload(cosmetics, "player1"),
+    turnStartedAt: room.turnStartedAt,
+    turnTimerDuration: room.turnTimerDuration,
+  });
+  io.to(room.player2SocketId!).emit("gameStart", {
+    roomId,
+    mode: room.config.mode,
+    gameState: stateFor(room, gameState, "player2"),
+    isPlayer1: false,
+    opponentInfo: room.creator,
+    ...cosmeticsPayload(cosmetics, "player2"),
+    turnStartedAt: room.turnStartedAt,
+    turnTimerDuration: room.turnTimerDuration,
+  });
+
+  console.log(`🎮 Game auto-started in room ${roomId}`);
+  return true;
 }
 
 /** `myRooms` to every socket of these users (after their tables changed). */
@@ -244,6 +431,11 @@ function closeOtherWaitingRooms(io: Server, userIds: (string | null)[], keepRoom
   for (const room of closed) {
     io.to([room.id, ...(room.player1Id ? [userRoom(room.player1Id)] : [])]).emit("roomDeleted", { roomId: room.id });
     io.in(room.id).socketsLeave(room.id);
+    // A rival who was waiting for this table's creator (who now plays elsewhere) is released
+    if (room.player2Id) {
+      notifyJoinerReleased(io, room.player2Id, room.id);
+      notifyTableJoinEnded(io, room.player1Id, room.id, "table-closed");
+    }
     console.log(`🗑️ Waiting room ${room.id} closed (its creator plays in ${keepRoomId})`);
   }
   if (closed.length > 0) broadcastRoomList(io);
@@ -619,19 +811,46 @@ export function setupSocketHandlers(io: Server): void {
 
     // Join user-specific room for targeted notifications; count the user as online
     if (socket.data.user?.userId) {
-      socket.join(userRoom(socket.data.user.userId));
-      trackOnline(socket.data.user.userId, socket.id);
+      const userId: string = socket.data.user.userId;
+      socket.join(userRoom(userId));
+      // Back online (any page): their waiting tables are listed and joinable again
+      if (trackOnline(userId, socket.id) && roomManager.findWaitingRoomsByUser(userId).length > 0) {
+        roomManager.markCreatorSeen(userId);
+        broadcastRoomList(io);
+      }
     }
 
     // ==========================================================================
     // Lobby - Room Listing
     // ==========================================================================
 
-    // The user's own waiting tables (a reloaded lobby restores them)
+    // The user's own waiting tables (a reloaded page restores them; they outlive the lobby socket)
     if (socket.data.user?.userId) socket.emit("myRooms", myRoomsPayload(socket.data.user.userId));
     socket.on("getMyRooms", () => {
       const userId = getAuthUserId(socket);
       if (userId) socket.emit("myRooms", myRoomsPayload(userId));
+    });
+
+    // attachMyRooms {}: the lobby takes this socket as the seat of every waiting table of the user
+    // (after a reload / coming back to the lobby). A rival who sits then starts the game at once
+    // (`gameStart` here), and a rival already waiting for the creator plays now. Answers `myRooms`.
+    socket.on("attachMyRooms", async () => {
+      try {
+        const userId = await requireSocketUser(socket, "error");
+        if (!userId) return;
+        const attached = roomManager.attachCreatorSocket(userId, socket.id);
+        for (const room of attached) socket.join(room.id);
+        socket.emit("myRooms", myRoomsPayload(userId));
+        if (attached.length > 0) broadcastRoomList(io);
+        // A rival was waiting for the creator: that game starts now (the creator's other
+        // tables close when it does)
+        const ready = attached.find((r) => r.player2Id && r.player2SocketId && r.status === "waiting");
+        if (ready && (await startAndAnnounce(io, ready))) {
+          notifyTableJoinEnded(io, userId, ready.id, "started");
+        }
+      } catch (error) {
+        socket.emit("error", { message: (error as Error).message });
+      }
     });
 
     socket.on("getRooms", () => {
@@ -744,6 +963,13 @@ export function setupSocketHandlers(io: Server): void {
             io.in(room.player1SocketId).socketsLeave(roomId);
             io.to(room.player1SocketId).emit("roomDeleted", { roomId });
           }
+          // A rival waiting for the creator: released (and the creator's other tabs drop the alert)
+          if (room?.player2Id) {
+            io.to(roomId).emit("roomDeleted", { roomId });
+            notifyJoinerReleased(io, room.player2Id, roomId);
+            notifyTableJoinEnded(io, userId, roomId, "table-closed");
+          }
+          io.in(roomId).socketsLeave(roomId);
 
           broadcastRoomList(io);
           emitMyRooms(io, userId);
@@ -813,6 +1039,8 @@ export function setupSocketHandlers(io: Server): void {
         }
 
         console.log(`[joinRoom] Attempting to join room ${roomId} as ${userId}`);
+        // The creator opening a table where a rival waits for them: that game starts now
+        const openingAwaited = seated && target.player1Id === userId && roomManager.isAwaitingCreator(target);
         const room = await roomManager.joinRoom(roomId, userId, socket.id, identity);
         console.log(`[joinRoom] Room state after join:`, {
           player1Id: room.player1Id,
@@ -878,43 +1106,28 @@ export function setupSocketHandlers(io: Server): void {
           return;
         }
 
+        // The creator isn't at their table (online elsewhere): the rival waits for them, the
+        // creator gets the alert on every tab. No game, no match, no bet until they open it.
+        if (!isPlayer1 && roomManager.isAwaitingCreator(room)) {
+          socket.emit("waitingForCreator", waitingForCreatorPayload(room));
+          if (Date.now() >= (room.awaitingCreator?.expiresAt ?? Infinity)) notifyNoShowClaimable(io, room);
+          if (!seated) {
+            notifyTableJoined(io, room, false);
+            broadcastRoomList(io);
+            emitMyRooms(io, room.player1Id);
+            console.log(`⏳ Room ${roomId}: ${userId} waits for the creator (${room.player1Id})`);
+          }
+          return;
+        }
+
         // Auto-start game when second player joins (only if not already playing)
         console.log(`[joinRoom] Checking if room is ready: ${roomManager.isRoomReady(roomId)}`);
-        if (roomManager.isRoomReady(roomId) && room.status === "waiting") {
+        if (roomManager.isRoomReady(roomId) && room.status === "waiting" && room.player1SocketId && room.player2SocketId) {
           console.log(`[joinRoom] Room is ready, starting game...`);
-          const gameState = await startRoomGame(io, roomId);
-          if (!gameState) return;
-          console.log(`[joinRoom] Game started, phase: ${gameState.gamePhase}`);
-
-          // Update room list (room now playing)
-          broadcastRoomList(io);
-
-          // Both players' cosmetics (read when the game started)
-          const cosmetics = await getRoomCosmetics(room);
-
-          // Send masked state to each player
-          io.to(room.player1SocketId!).emit("gameStart", {
-            roomId,
-            mode: room.config.mode,
-            gameState: stateFor(room, gameState, "player1"),
-            isPlayer1: true,
-            opponentInfo: room.joiner,
-            ...cosmeticsPayload(cosmetics, "player1"),
-            turnStartedAt: room.turnStartedAt,
-            turnTimerDuration: room.turnTimerDuration,
-          });
-          io.to(room.player2SocketId!).emit("gameStart", {
-            roomId,
-            mode: room.config.mode,
-            gameState: stateFor(room, gameState, "player2"),
-            isPlayer1: false,
-            opponentInfo: room.creator,
-            ...cosmeticsPayload(cosmetics, "player2"),
-            turnStartedAt: room.turnStartedAt,
-            turnTimerDuration: room.turnTimerDuration,
-          });
-
-          console.log(`🎮 Game auto-started in room ${roomId}`);
+          if (!(await startAndAnnounce(io, room))) return;
+          // The creator's alert: on every tab (the game already started here)
+          if (openingAwaited) notifyTableJoinEnded(io, room.player1Id, roomId, "started");
+          else if (!seated && !isPlayer1) notifyTableJoined(io, room, true);
         }
       } catch (error) {
         if (error instanceof RoomNotFoundError) {
@@ -950,6 +1163,32 @@ export function setupSocketHandlers(io: Server): void {
         console.log(`👤 Socket ${socket.id} left room ${roomId}`);
       } catch (error) {
         socket.emit("error", { message: (error as Error).message });
+      }
+    });
+
+    // claimNoShowVictory { roomId } (ack { success, error?, code? }): the rival waiting at a table
+    // whose creator didn't come within CREATOR_RESPONSE_MS claims the victory (owner rule: a
+    // no-show is a forfeit). Refused before the window ends, for anyone but the seated rival and
+    // once the creator came in.
+    socket.on("claimNoShowVictory", async (payload: unknown, ack?: unknown) => {
+      const reply = (result: { success: boolean; error?: string; code?: string }) => {
+        if (typeof ack === "function") ack(result);
+      };
+      try {
+        const userId = await requireSocketUser(socket, "error");
+        if (!userId) { reply({ success: false, error: "Autenticación requerida" }); return; }
+        const parsed = parsePayload(socketSchemas.roomRef, payload);
+        if (!parsed.ok) { reply({ success: false, error: parsed.error }); return; }
+        const room = roomManager.claimNoShow(parsed.data.roomId, userId);
+        await settleNoShow(io, room);
+        reply({ success: true });
+      } catch (error) {
+        if (error instanceof NoShowClaimError) {
+          reply({ success: false, error: error.message, code: error.code });
+          return;
+        }
+        console.error("[claimNoShowVictory]", error);
+        reply({ success: false, error: "No se pudo reclamar la victoria" });
       }
     });
 
@@ -1306,8 +1545,9 @@ export function setupSocketHandlers(io: Server): void {
       console.log(`🔌 Client disconnected: ${socket.id}`);
 
       const presenceUserId = getAuthUserId(socket);
+      let wentOffline = false;
       if (presenceUserId) {
-        untrackOnline(presenceUserId, socket.id);
+        wentOffline = untrackOnline(presenceUserId, socket.id);
         if (leaveChatPresence(presenceUserId, socket.id)) broadcastChatPresence(io);
       }
 
@@ -1318,16 +1558,19 @@ export function setupSocketHandlers(io: Server): void {
         if (watched) announceSpectators(io, watched);
       }
 
-      // Find and handle room disconnect
+      // Find and handle room disconnect (waiting tables stay: rooms.ts WAITING_TABLE_*)
       const roomId = await roomManager.handleDisconnect(socket.id);
       if (roomId) {
         socket.to(roomId).emit("playerDisconnected", {
           socketId: socket.id,
         });
-
-        // Broadcast updated room list (room may have been cleaned up)
-        broadcastRoomList(io);
       }
+      // The user's waiting tables lost their seat socket or their creator went offline (hidden
+      // until they come back): refresh the lobbies and the user's other tabs
+      const hasTables = !!presenceUserId && roomManager.findWaitingRoomsByUser(presenceUserId).length > 0;
+      if (wentOffline && hasTables) roomManager.markCreatorSeen(presenceUserId!);
+      if (roomId || (wentOffline && hasTables)) broadcastRoomList(io);
+      if (hasTables) emitMyRooms(io, presenceUserId);
     });
 
     // Register draft events on this socket (pass roomManager for match creation)
@@ -1369,11 +1612,31 @@ export function setupSocketHandlers(io: Server): void {
     broadcastActionResult(io, roomId, action.type, result, answerer);
   });
 
-  // A waiting room deleted by the manager (its creator left the lobby): refresh the lobbies
-  roomManager.setOnRoomClosed((roomId, room) => {
+  // A waiting table closed by the manager on its own
+  // (TTL: its creator offline / idle too long): the lobbies, the creator's tabs (`tableClosed`) and
+  // a rival still waiting at it (released)
+  roomManager.setOnRoomClosed((roomId, room, reason) => {
     io.to(roomId).emit("roomDeleted", { roomId });
     io.in(roomId).socketsLeave(roomId);
+    if (room.player1Id) {
+      io.to(userRoom(room.player1Id)).emit("tableClosed", { roomId, mode: room.config.mode, reason, message: TABLE_CLOSED_MESSAGES[reason] });
+    }
+    if (room.player2Id) {
+      notifyJoinerReleased(io, room.player2Id, roomId);
+      notifyTableJoinEnded(io, room.player1Id, roomId, "table-closed");
+    }
     broadcastRoomList(io);
     emitMyRooms(io, room.player1Id);
   });
+
+  // The rival waiting for an away creator left: the creator's alert no longer applies and the
+  // table is listed again
+  roomManager.setOnJoinCancelled((room) => {
+    notifyTableJoinEnded(io, room.player1Id, room.id, "opponent-left");
+    broadcastRoomList(io);
+    emitMyRooms(io, room.player1Id);
+  });
+
+  // The away creator's window ended: the waiting rival may claim the victory
+  roomManager.setOnNoShowClaimable((room) => notifyNoShowClaimable(io, room));
 }

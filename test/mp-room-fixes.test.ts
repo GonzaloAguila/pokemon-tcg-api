@@ -4,7 +4,7 @@
  * 3  mulligan only in MULLIGAN, without an Active nor Basics in hand; ready only before PLAYING
  * 4  a finished game takes no more actions
  * 9  joinRoom never creates a room
- * 10 a waiting room whose creator left is hidden at once and deleted after a short grace;
+ * 10 a waiting room whose creator left is hidden while they are offline (kept: persistent tables);
  *    the creator deletes it by user id from any socket
  */
 import { describe, expect, it } from "vitest";
@@ -263,11 +263,10 @@ describe("bug 9: joinRoom never creates a room", () => {
   });
 });
 
-describe("bug 10: a waiting room whose creator left", () => {
-  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-  it("is hidden at once, can't be joined, and is deleted after the grace period", async () => {
-    const manager = new GameRoomManager(undefined, { waitingRoomGraceMs: 60 });
+describe("bug 10: a waiting room whose creator left (persistent tables since 2026-10-21)", () => {
+  it("is kept: hidden and not joinable while the creator is offline, listed again once online", async () => {
+    let online = false;
+    const manager = new GameRoomManager(undefined, { isUserOnline: () => online });
     const closed: string[] = [];
     manager.setOnRoomClosed((id) => closed.push(id));
     const room = manager.createRoom();
@@ -278,19 +277,19 @@ describe("bug 10: a waiting room whose creator left", () => {
     expect(manager.getActiveRooms()).toHaveLength(0);
     expect(manager.getAvailableRooms()).toHaveLength(0);
     await expect(manager.joinRoom(room.id, "joiner", "sock-j")).rejects.toThrow("El creador de la mesa no está conectado");
+    expect(manager.getRoom(room.id)).toBeDefined();
+    expect(closed).toEqual([]);
 
-    await sleep(120);
-    expect(manager.getRoom(room.id)).toBeUndefined();
-    expect(closed).toEqual([room.id]);
+    online = true; // the creator is on another page (presence socket)
+    expect(manager.getActiveRooms().map((r) => r.id)).toEqual([room.id]);
   });
 
-  it("survives when the creator comes back within the grace period", async () => {
-    const manager = new GameRoomManager(undefined, { waitingRoomGraceMs: 60 });
+  it("the creator takes their seat back from a new socket", async () => {
+    const manager = new GameRoomManager(undefined, { isUserOnline: () => false });
     const room = manager.createRoom();
     await manager.joinRoom(room.id, "creator", "lobby-1");
     await manager.handleDisconnect("lobby-1");
     await manager.joinRoom(room.id, "creator", "lobby-2");
-    await sleep(120);
     expect(manager.getRoom(room.id)?.player1SocketId).toBe("lobby-2");
     expect(manager.getActiveRooms().map((r) => r.id)).toEqual([room.id]);
   });

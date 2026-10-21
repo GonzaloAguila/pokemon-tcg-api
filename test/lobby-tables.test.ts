@@ -182,7 +182,7 @@ describe("myRooms: the creator's own tables with their deck", () => {
     const first = nextEvent<{ rooms: Any[] }>(a.socket, "myRooms");
     const standard = await createTable(a.socket, { deckId: "blackout", prizeCount: 5 });
     expect((await first).rooms).toEqual([
-      { id: standard, mode: "standard", deckId: "blackout", deckName: expect.any(String), prizeCount: 5, betAmount: 0, deckRank: "D" },
+      { id: standard, mode: "standard", deckId: "blackout", deckName: expect.any(String), prizeCount: 5, betAmount: 0, deckRank: "D", attached: true, opponent: null, joinExpiresAt: null, closesAt: expect.any(Number) },
     ]);
 
     const both = nextEvent<{ rooms: Any[] }>(a.socket, "myRooms");
@@ -194,7 +194,7 @@ describe("myRooms: the creator's own tables with their deck", () => {
     const asked = nextEvent<{ rooms: Any[] }>(reloaded, "myRooms");
     reloaded.emit("getMyRooms");
     expect((await asked).rooms.find((r) => r.id === lucky)).toEqual({
-      id: lucky, mode: "lucky-duel", deckId: null, deckName: null, prizeCount: 0, betAmount: 0, deckRank: null,
+      id: lucky, mode: "lucky-duel", deckId: null, deckName: null, prizeCount: 0, betAmount: 0, deckRank: null, attached: true, opponent: null, joinExpiresAt: null, closesAt: expect.any(Number),
     });
     // The deck name is the theme deck's
     expect((await asked).rooms.find((r) => r.id === standard)?.deckName).toBe("Blackout");
