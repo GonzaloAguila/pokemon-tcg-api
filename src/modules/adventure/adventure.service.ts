@@ -8,7 +8,7 @@ import { randomBytes } from "node:crypto";
 import { Prisma, type AdventureRun } from "@prisma/client";
 import { isPokemonCard } from "@gonzaloaguila/game-core";
 import { prisma } from "../../lib/prisma.js";
-import { Errors } from "../../middleware/error-handler.js";
+import { AppError, Errors } from "../../middleware/error-handler.js";
 import { lockUsers } from "../users/xp.service.js";
 import type { Db } from "../users/users.service.js";
 import { recordCardChange } from "../users/card-ledger.js";
@@ -43,6 +43,8 @@ export interface BattleSnapshot {
  */
 export interface AdventureBattleHost {
   ensureRoom(runId: string): Promise<void>;
+  /** False while the server can't run battles (no engine): the battle isn't started. */
+  isAvailable(): boolean;
 }
 let battleHost: AdventureBattleHost | null = null;
 export function setAdventureBattleHost(host: AdventureBattleHost | null) {
@@ -59,7 +61,8 @@ function adventureOf(adventureId: string): Adventure {
   return adventure;
 }
 
-function toState(row: AdventureRun): RunState {
+/** A run row as run-logic state. */
+export function runStateOf(row: AdventureRun): RunState {
   return {
     adventureId: row.adventureId,
     adventureVersion: row.adventureVersion,
@@ -137,7 +140,7 @@ function treasureView(adventure: Adventure, state: RunState, id: string) {
 /** What the client gets: never `seed`, never the battle snapshot beyond its room id. */
 export function serializeRun(row: AdventureRun) {
   const adventure = adventureOf(row.adventureId);
-  const state = toState(row);
+  const state = runStateOf(row);
   const battle = battleOf(adventure, state.currentBattle);
   const snapshot = row.battle as BattleSnapshot | null;
   const rivalDeck = battle ? logic.rivalDeckFor(adventure, battle.index, state.difficulty, state.starterId) : [];
@@ -256,7 +259,7 @@ export async function getAdventureDetail(userId: string, adventureId: string) {
     prisma.adventureRun.findFirst({ where: { userId, status: "active", adventureId } }),
     prisma.userStarterUnlock.findMany({ where: { userId }, select: { starterId: true } }),
   ]);
-  const active = activeRow ? toState(activeRow) : null;
+  const active = activeRow ? runStateOf(activeRow) : null;
   const beatenUpTo = !active ? 0 : active.phase === "choosing_treasure" ? active.currentBattle : active.currentBattle - 1;
   const current = active && (active.phase === "pre_battle" || active.phase === "in_battle") ? active.currentBattle : null;
   const unlocked = new Set(unlocks.map((u) => u.starterId));
@@ -365,7 +368,7 @@ export async function getRun(userId: string, runId: string) {
 async function mutateRun(userId: string, runId: string, change: (state: RunState, adventure: Adventure) => RunState) {
   const row = await prisma.$transaction(async (tx) => {
     const run = await lockedRun(tx, userId, runId);
-    const next = rule(() => change(toState(run), adventureOf(run.adventureId)));
+    const next = rule(() => change(runStateOf(run), adventureOf(run.adventureId)));
     return tx.adventureRun.update({ where: { id: run.id }, data: stateData(next) });
   }, TX_OPTIONS);
   return serializeRun(row);
@@ -391,11 +394,14 @@ export function abandonRun(userId: string, runId: string) {
  * lasts, the same room id (the room itself is rebuilt from the run if the server lost it).
  */
 export async function startRunBattle(userId: string, runId: string): Promise<{ roomId: string }> {
+  if (battleHost && !battleHost.isAvailable()) {
+    throw new AppError("Las batallas de aventura no están disponibles en este momento", 503, "ADVENTURE_UNAVAILABLE");
+  }
   const roomId = await prisma.$transaction(async (tx) => {
     const run = await lockedRun(tx, userId, runId);
     const snapshot = run.battle as BattleSnapshot | null;
     if (run.status === "active" && run.phase === "in_battle" && snapshot?.roomId) return snapshot.roomId;
-    const next = rule(() => logic.startBattle(toState(run), adventureOf(run.adventureId)));
+    const next = rule(() => logic.startBattle(runStateOf(run), adventureOf(run.adventureId)));
     const battle: BattleSnapshot = { roomId: `adv-${randomBytes(6).toString("hex")}`, startedAt: new Date().toISOString() };
     await tx.adventureRun.update({
       where: { id: run.id },
@@ -490,7 +496,7 @@ export async function applyRunBattleResult(
     const run = await lockedRun(tx, owner.userId, runId);
     if (run.status !== "active" || run.phase !== "in_battle") return null;
     const adventure = adventureOf(run.adventureId);
-    const before = toState(run);
+    const before = runStateOf(run);
     const snapshot = run.battle as BattleSnapshot | null;
     const { count } = await tx.adventureBattleResult.createMany({
       data: [{

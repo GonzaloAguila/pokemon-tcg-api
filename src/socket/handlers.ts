@@ -26,7 +26,9 @@ import { InsufficientStakeError, betIneligibilityReason } from "../modules/match
 import { ECONOMY } from "../modules/economy/config.js";
 import { openRoomMatch, roomMatchMode, settleRoomResult } from "./match-settlement.js";
 import { socketSchemas, parsePayload } from "./schemas.js";
-import { setIo, userRoom } from "./io-registry.js";
+import { getIo, setIo, userRoom } from "./io-registry.js";
+import { AdventureRooms } from "./adventure-room.js";
+import { setAdventureBattleHost } from "../modules/adventure/adventure.service.js";
 import { authenticateHandshake, checkSocketSession, kickBlockedUser, requireSocketUser } from "./session-guard.js";
 import * as chatService from "../modules/chat/chat.service.js";
 import { allowChatMessage, buildRoomChatMessage, rememberChatMessage } from "./room-chat.js";
@@ -279,6 +281,10 @@ async function handleUnpaidBet(io: Server, room: GameRoom, userId: string): Prom
 export const roomManager = new GameRoomManager();
 roomManager.startPeriodicCleanup();
 
+/** Modo Aventura battle rooms (player 2 = the server's AI), in the same manager. */
+export const adventureRooms = new AdventureRooms({ manager: roomManager, io: getIo });
+setAdventureBattleHost(adventureRooms);
+
 /** The state `viewer` receives for this room: masked, plus `awaitingUserId` (room-state.ts). */
 function stateFor(room: GameRoom, state: GameState, viewer: Viewer) {
   return maskRoomState(roomManager, room, state, viewer);
@@ -302,6 +308,11 @@ function finishRoomGame(
   settlementReason: string = reason,
 ): void {
   const room = roomManager.getRoom(roomId);
+  // An adventure battle: its result goes to the run (adventure-room.ts), never to a match
+  if (room?.adventure) {
+    io.to(roomId).emit("gameOver", { winner: winner === "draw" ? null : winner, reason });
+    return;
+  }
   if (!room || room.resultSettled) return;
 
   const winnerSide = winner === "draw" ? null : winner;
@@ -594,6 +605,8 @@ export function setupSocketHandlers(io: Server): void {
       .finally(() => next());
   });
 
+  adventureRooms.start();
+
   io.on("connection", (socket: Socket) => {
     console.log(`🔌 Client connected: ${socket.id}`);
 
@@ -744,19 +757,22 @@ export function setupSocketHandlers(io: Server): void {
         const { roomId } = parsed.data;
         // Never create a room here: the client is rejoining a game that is gone (finished,
         // deleted, or lost in an API restart). The frontend goes back to the lobby.
-        const target = roomManager.getRoom(roomId);
+        // An adventure battle lost from memory (restart, idle) is rebuilt from its run
+        const target = roomManager.getRoom(roomId) ?? (roomId.startsWith("adv-") ? await adventureRooms.restore(roomId, userId) : undefined);
         if (!target) {
           socket.emit("error", { code: "ROOM_NOT_FOUND", message: new RoomNotFoundError().message });
           return;
         }
         // Lucky Duel: no deck (the server builds both), a deck sent anyway is ignored
         const luckyDuel = target.config.mode === "lucky-duel";
-        const deckId = luckyDuel ? undefined : parsed.data.deckId;
+        // Adventure battles play the run's deck (built by the server), like Lucky Duel
+        const noDeck = luckyDuel || target.config.mode === "adventure";
+        const deckId = noDeck ? undefined : parsed.data.deckId;
         const identity = await getPlayableIdentity(userId);
         if ("error" in identity) { socket.emit("error", { message: identity.error }); return; }
         // Taking a seat requires a playable deck (not at Lucky Duel); reconnecting to your own seat doesn't
         const seated = roomManager.seatOf(target, userId) !== null;
-        if (!luckyDuel && (!seated || deckId)) {
+        if (!noDeck && (!seated || deckId)) {
           const deckError = await checkDeckPlayable(userId, deckId);
           if (deckError) { socket.emit("error", { message: deckError }); return; }
         }
@@ -835,6 +851,7 @@ export function setupSocketHandlers(io: Server): void {
             turnStartedAt: room.turnStartedAt,
             turnTimerDuration: room.turnTimerDuration,
             spectatorCount: roomManager.spectatorCount(room),
+            ...(room.adventure ? { adventure: adventureRooms.gameStartInfo(roomId) } : {}),
           });
           socket.emit("chatHistory", { roomId, messages: room.chat });
           return;
@@ -989,7 +1006,9 @@ export function setupSocketHandlers(io: Server): void {
       const parsed = parsePayload(socketSchemas.requestCoinFlip, payload);
       if (!parsed.ok) return ack({ success: false, error: parsed.error });
       if (roomManager.isSpectator(parsed.data.roomId, socket.id)) return ack({ success: false, error: SPECTATOR_ONLY_ERROR });
-      ack(roomManager.requestCoinFlip(parsed.data.roomId, socket.id, parsed.data));
+      const coins = roomManager.requestCoinFlip(parsed.data.roomId, socket.id, parsed.data);
+      adventureRooms.afterCoinRequest(parsed.data.roomId, parsed.data, coins.success);
+      ack(coins);
     });
 
     socket.on("action", async (payload: unknown) => {
@@ -1010,6 +1029,8 @@ export function setupSocketHandlers(io: Server): void {
         }
 
         const result = await roomManager.executeAction(roomId, socket.id, action);
+        // Adventure battle: lucky coin, input log, snapshot, then the AI's turn or the result
+        adventureRooms.afterHumanAction(roomId, action as { type: string; payload?: unknown }, result);
 
         if (!result.success) {
           socket.emit("actionResult", { success: false, error: result.error });

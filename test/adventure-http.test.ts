@@ -9,7 +9,12 @@ import { tokenFor } from "./socket-helpers.js";
 const ADVENTURE = "pueblo-paleta-bosque-verde";
 let app: Awaited<ReturnType<typeof startHttpApp>>;
 
+/** Rooms are the socket layer's (adventure-room.test.ts): here a host that only records calls. */
+const ensured: string[] = [];
+let available = true;
+
 beforeAll(async () => {
+  adventure.setAdventureBattleHost({ ensureRoom: async (runId) => { ensured.push(runId); }, isAvailable: () => available });
   app = await startHttpApp((a) => a.use("/api", adventureRouter));
 });
 
@@ -148,9 +153,24 @@ describe("POST /api/adventure/runs/:id/battle", () => {
     expect(first.body.roomId).toMatch(/^adv-[a-f0-9]{12}$/);
     expect((await app.request("POST", path, { token })).body.roomId).toBe(first.body.roomId);
     expect((await app.request("GET", `/api/adventure/runs/${run.id}`, { token })).body).toMatchObject({ phase: "in_battle", battle: { roomId: first.body.roomId } });
+    expect(ensured.filter((id) => id === run.id)).toHaveLength(2);
 
     await setRun(run.id, { phase: "choosing_treasure", pendingOffer: ["t1-bill"], battle: undefined });
     expect((await app.request("POST", path, { token })).status).toBe(409);
+  });
+
+  it("503 while the server can't run battles; the run stays on the map", async () => {
+    const { token } = await player();
+    const run = (await startRun(token)).body;
+    available = false;
+    try {
+      const res = await app.request("POST", `/api/adventure/runs/${run.id}/battle`, { token });
+      expect(res.status).toBe(503);
+      expect(res.body.error.code).toBe("ADVENTURE_UNAVAILABLE");
+    } finally {
+      available = true;
+    }
+    expect((await app.request("GET", `/api/adventure/runs/${run.id}`, { token })).body).toMatchObject({ phase: "pre_battle", battle: null });
   });
 });
 

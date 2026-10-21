@@ -114,8 +114,21 @@ import type { DeckRank } from "../modules/decks/deck-rank.js";
 /** Table type: a normal table, or Lucky Duel (random Basic and deck, no Bench, no Prizes). */
 export type TableMode = (typeof TABLE_MODES)[number];
 
+/** A room's mode: a lobby table's, or "adventure" (Modo Aventura battle, created by the server only). */
+export type RoomMode = TableMode | "adventure";
+
+/**
+ * Modo Aventura battle room (adventure-room.ts keeps the rest): the human is player 1, player 2
+ * is the game-core AI run by the server (no socket, no user id). No turn timer, answer clock,
+ * kick, forfeit, bets, match row or settlement: the run's result comes from adventure-room.ts.
+ */
+export interface AdventureRoomInfo {
+  runId: string;
+  userId: string;
+}
+
 interface RoomConfig {
-  mode: TableMode;
+  mode: RoomMode;
   prizeCount: number;           // 4, 5, or 6 (0 for Lucky Duel: no Prizes)
   betAmount: number;            // 0 = no bet
   reservedUserId: string | null; // null = open to all
@@ -204,6 +217,16 @@ export interface GameRoom {
   // `startedAt` (also room.turnStartedAt meanwhile); the turn clock is paused with
   // `turnRemainingMs` left. `autoAnswerFailed`: no default answer worked (requestKick allowed).
   answerClock?: { side: PlayerKey; startedAt: number; turnRemainingMs: number; autoAnswerFailed?: boolean };
+
+  /** Modo Aventura battle (see AdventureRoomInfo). */
+  adventure?: AdventureRoomInfo;
+  /**
+   * Math.random for every engine call of this room's actions and coin requests (adventure rooms:
+   * the battle's seeded generator). The calls run synchronously inside the swap (withRandom).
+   */
+  engineRandom?: () => number;
+  /** Where this room's coins come from (default: the manager's coin source, CSPRNG). */
+  coinSource?: CoinSource;
 }
 
 export type PlayerKey = "player1" | "player2";
@@ -568,6 +591,21 @@ function serverCoin(): "heads" | "tails" {
   return randomInt(2) === 0 ? "heads" : "tails";
 }
 
+/**
+ * Run `fn` with Math.random replaced by `random` (restored even if fn throws), or as is without
+ * one. Only for synchronous code: an await inside would leak the swap to other rooms.
+ */
+export function withRoomRandom<T>(random: (() => number) | undefined, fn: () => T): T {
+  if (!random) return fn();
+  const original = Math.random;
+  Math.random = random;
+  try {
+    return fn();
+  } finally {
+    Math.random = original;
+  }
+}
+
 /** Cap for "flip until tails" (odds 2^-63 of reaching it); the last coin is then tails. */
 const MAX_UNTIL_TAILS = 64;
 
@@ -685,7 +723,7 @@ export interface ActionResult {
  * @param self - Name for the "Tú/tu" perspective (the acting player)
  * @param opponent - Name for the "Rival" perspective
  */
-function neutralizeEvents(
+export function neutralizeEvents(
   events: GameState["events"],
   fromIndex: number,
   self: string,
@@ -869,8 +907,9 @@ export class GameRoomManager {
 
   /** The room goes away without a result: if it had an open match, let the owner refund it. */
   private abandonMatch(room: GameRoom, reason: string): void {
-    // Without a match row only a started game matters (a draft round waits for its result)
-    if (room.resultSettled || (!room.matchId && !room.gameState)) return;
+    // Without a match row only a started game matters (a draft round waits for its result).
+    // An adventure battle has no match: its run keeps the battle and rebuilds the room on rejoin.
+    if (room.adventure || room.resultSettled || (!room.matchId && !room.gameState)) return;
     this.onAbandonCallback?.(room, reason);
   }
 
@@ -925,7 +964,7 @@ export class GameRoomManager {
    */
   createRoom(roomId?: string, config?: Partial<RoomConfig>, creator?: Partial<CreatorInfo>): GameRoom {
     const id = roomId || this.generateRoomId();
-    const mode: TableMode = config?.mode ?? "standard";
+    const mode: RoomMode = config?.mode ?? "standard";
     const luckyDuel = mode === "lucky-duel";
     const prizeCount = config?.prizeCount ?? 6;
     const room: GameRoom = {
@@ -971,6 +1010,43 @@ export class GameRoomManager {
   }
 
   /**
+   * A Modo Aventura battle (adventure-room.ts): already playing, player 1 = the user (reserved:
+   * nobody else may join or watch), player 2 = the server's AI (no user, no socket; `rival` is
+   * what the player sees as their opponent). Never listed in the lobby.
+   */
+  createAdventureRoom(input: {
+    roomId: string;
+    runId: string;
+    userId: string;
+    rival: CreatorInfo;
+    gameState: GameState;
+    engineRandom: () => number;
+    coinSource: CoinSource;
+  }): GameRoom {
+    if (this.rooms.has(input.roomId)) throw new Error(`Room ${input.roomId} already exists`);
+    const room = this.createRoom(input.roomId, { mode: "adventure", friendly: true, reservedUserId: input.userId });
+    room.config.prizeCount = input.gameState.playerPrizes.length;
+    room.status = "playing";
+    room.player1Id = input.userId;
+    room.players = [input.userId];
+    room.joiner = { ...input.rival };
+    room.gameState = input.gameState;
+    room.turnStartedAt = Date.now();
+    room.adventure = { runId: input.runId, userId: input.userId };
+    room.engineRandom = input.engineRandom;
+    room.coinSource = input.coinSource;
+    return room;
+  }
+
+  /** Drop an adventure room from memory (idle, or its battle ended): no callbacks, no settlement. */
+  removeAdventureRoom(roomId: string): void {
+    const room = this.rooms.get(roomId);
+    if (!room?.adventure) return;
+    this.rooms.delete(roomId);
+    this.unmapRoomSockets(room);
+  }
+
+  /**
    * Join an existing room: reconnect to your seat, or take the free one. A room that doesn't
    * exist is never created here (RoomNotFoundError): the client asking for it is rejoining a
    * game that is gone (e.g. after an API restart), and rooms only come from createRoom.
@@ -1011,7 +1087,7 @@ export class GameRoomManager {
     // Draft games seat their players through here too and are left out.
     if (!room.isDraft) {
       for (const other of this.rooms.values()) {
-        if (other.id !== roomId && !other.isDraft && other.player1Id === userId && other.player2Id && other.status !== "finished") {
+        if (other.id !== roomId && !other.isDraft && !other.adventure && other.player1Id === userId && other.player2Id && other.status !== "finished") {
           throw new OwnTableTakenError(other.id);
         }
       }
@@ -1054,6 +1130,13 @@ export class GameRoomManager {
   async leaveRoom(roomId: string, socketId: string): Promise<void> {
     const room = this.rooms.get(roomId);
     if (!room) return;
+
+    // Leaving an adventure battle keeps it (the map's "Continuar"): only surrendering loses it
+    if (room.adventure) {
+      if (room.player1SocketId === socketId) room.player1SocketId = null;
+      this.unmapSocket(socketId, roomId);
+      return;
+    }
 
     // Leaving a game in progress is a forfeit: the other player wins (and takes the bet). Before
     // this, a losing player could leave, let the room die and escape the result.
@@ -1304,6 +1387,14 @@ export class GameRoomManager {
     socketId: string,
     request: CoinFlipRequest,
   ): { success: true; results: Coin[]; result: Coin; flippedBy?: Flipper[] } | { success: false; error: string } {
+    return withRoomRandom(this.rooms.get(roomId)?.engineRandom, () => this.requestCoinFlipNow(roomId, socketId, request));
+  }
+
+  private requestCoinFlipNow(
+    roomId: string,
+    socketId: string,
+    request: CoinFlipRequest,
+  ): { success: true; results: Coin[]; result: Coin; flippedBy?: Flipper[] } | { success: false; error: string } {
     const room = this.rooms.get(roomId);
     if (!room?.gameState) return { success: false, error: "Game not started" };
     if (room.status === "finished" || room.gameState.gamePhase === "GAME_OVER") {
@@ -1368,7 +1459,7 @@ export class GameRoomManager {
     }
     const stored = store[coinKey];
     if (stored && coinsSatisfy(requirement, stored.results)) return stored.results;
-    const results = rollCoins(requirement, this.flipCoin);
+    const results = rollCoins(requirement, this.coinsOf(room));
     store[coinKey] = { results, turnNumber: coinKey.includes(":trainer:") ? null : turnNumber };
     return results;
   }
@@ -1379,9 +1470,9 @@ export class GameRoomManager {
    * Trainer that flipped nothing before its steps; never cached in room.effectCoins and never
    * offered by requestCoinFlip, so they can't be peeked with dummy answers. `view`: its player's.
    */
-  private trainerCoinsAfterSteps(view: GameState, cardId: string, selections: string[][], preCoins: Coin[]): Coin[] {
+  private trainerCoinsAfterSteps(view: GameState, cardId: string, selections: string[][], preCoins: Coin[], flip: CoinSource): Coin[] {
     if (preCoins.length > 0) return [];
-    return rollCoins(getTrainerCoinFlips(view, cardId, selections), this.flipCoin);
+    return rollCoins(getTrainerCoinFlips(view, cardId, selections), flip);
   }
 
   /**
@@ -1405,6 +1496,20 @@ export class GameRoomManager {
     from: { socketId: string } | { side: PlayerKey },
     rawAction: unknown
   ): Promise<ActionResult> {
+    // Synchronous from here on: a seeded room's engine calls all run inside its Math.random swap
+    return withRoomRandom(this.rooms.get(roomId)?.engineRandom, () => this.runActionNow(roomId, from, rawAction));
+  }
+
+  /** Where `room`'s coins come from: its own source (adventure rooms) or the manager's. */
+  private coinsOf(room: GameRoom): CoinSource {
+    return room.coinSource ?? this.flipCoin;
+  }
+
+  private runActionNow(
+    roomId: string,
+    from: { socketId: string } | { side: PlayerKey },
+    rawAction: unknown
+  ): ActionResult {
     const parsed = parseGameAction(rawAction);
     if (!parsed.ok) return { success: false, error: parsed.error };
     const action = parsed.action;
@@ -1412,6 +1517,7 @@ export class GameRoomManager {
     const room = this.rooms.get(roomId);
     if (!room) return { success: false, error: "Room not found" };
     if (!room.gameState) return { success: false, error: "Game not started" };
+    const flip = this.coinsOf(room);
     // A finished game takes no more actions: no surrender after the end (a second gameOver
     // with the other winner), no promotion of the loser, no farming wins on a dead room
     if (room.status === "finished" || room.gameState.gamePhase === "GAME_OVER") {
@@ -1614,7 +1720,7 @@ export class GameRoomManager {
           // engine applies the self-damage / KO / end of turn. Heads: the attack proceeds.
           let beforeAttack = room.gameState;
           if (attacker?.statusConditions?.includes("confused")) {
-            const confusionCoin = this.flipCoin();
+            const confusionCoin = flip();
             let canAttack = true as boolean;
             const afterFlip = executeForPlayer((state) => {
               const resolved = resolveConfusionFlip(state, confusionCoin === "heads");
@@ -1653,7 +1759,7 @@ export class GameRoomManager {
             break;
           }
           const coinPlan = getAttackCoinPlan(toActor(beforeAttack), attackToUse, coinOptions);
-          const coinResults = flipAttackCoins(coinPlan, this.flipCoin);
+          const coinResults = flipAttackCoins(coinPlan, flip);
           const attackOptions = { coinResults, skipDefenderPromotion: true, ...coinOptions, ...(chosenType ? { chosenType } : {}) };
           newState = executeForPlayer((state) =>
             typeof attackToUse === "number"
@@ -1688,7 +1794,7 @@ export class GameRoomManager {
           if (probe.playerActivePokemon?.pokemon.id === actorView.playerActivePokemon?.pokemon.id) {
             return { success: false, error: probe.events[probe.events.length - 1]?.message ?? "No puedes retirarte ahora" };
           }
-          const coinResults = sinkholes.map(() => this.flipCoin());
+          const coinResults = sinkholes.map(() => flip());
           newState = executeForPlayer((state) => executeRetreat(state, energyIds, benchIdx, { coinResults }));
           if (coinResults.length > 0) {
             const source = sinkholes[0].pokemon;
@@ -1708,7 +1814,7 @@ export class GameRoomManager {
           const position = action.type === "playBasicToActive" ? "active" : "bench";
           const reason = canPlayBasicPokemon(actorView, cardId, position);
           if (reason) return { success: false, error: reason };
-          const coinResults = Array.from({ length: getPlayBasicCoinFlips(actorView, cardId, position) }, () => this.flipCoin());
+          const coinResults = Array.from({ length: getPlayBasicCoinFlips(actorView, cardId, position) }, () => flip());
           newState = executeForPlayer((state) => playBasicPokemon(state, cardId, position, { coinResults }));
           if (coinResults.length > 0) {
             actionCoinFlipInfo = { attackName: actorView.stadium?.card.name ?? "Estadio", results: coinResults };
@@ -1811,7 +1917,7 @@ export class GameRoomManager {
           // getAttackChoiceCoinPlan) and every client animates them. Never coins from the client
           // (the schema rejects them).
           const reflipPlan = getAttackChoiceCoinPlan(attackerView, selection);
-          const reflipCoins = reflipPlan ? flipAttackCoins(reflipPlan, this.flipCoin) : undefined;
+          const reflipCoins = reflipPlan ? flipAttackCoins(reflipPlan, flip) : undefined;
           newState = asAttacker((() => {
             const resolved = resolveAttackChoice(attackerView, selection, { skipEndTurn: true, ...(reflipCoins ? { coinResults: reflipCoins } : {}) });
             return resolved.pendingAttackChoice || resolved.gameResult !== null ? resolved : endTurn(resolved, true);
@@ -1891,7 +1997,7 @@ export class GameRoomManager {
             // Both players ready - cancel setup timer and start the game. The engine draws the
             // starting player's first card (classic rule): nothing to draw here.
             this.cancelSetupTimer(roomId);
-            const coinFlipResult = this.flipCoin();
+            const coinFlipResult = flip();
             newState = startPlayingPhase(newState, coinFlipResult);
           } else if ((p1Ready || p2Ready) && !(p1Ready && p2Ready)) {
             // Only one player is ready — start setup timer for the opponent
@@ -1942,7 +2048,7 @@ export class GameRoomManager {
           const pendingStep = walkClientSteps((answered) => getTrainerSteps(actorView, cardId, answered, preCoins.length > 0 ? preCoins : undefined), selections);
           // The next question is the other player's (Erika, Treaty, Blaine's Quiz) or needs hidden cards
           if (pendingStep && isServerStep(pendingStep)) throw new IllegalActionError("Esta elección la pide el servidor: juega la carta con startTrainer");
-          const postCoins = this.trainerCoinsAfterSteps(actorView, cardId, selections, preCoins);
+          const postCoins = this.trainerCoinsAfterSteps(actorView, cardId, selections, preCoins, flip);
           const coinCaption = trainerCoinCaption(actorView, cardId, card?.name);
           newState = executeForPlayer((state) =>
             playTrainerCard(state, cardId, selections, {
@@ -1987,7 +2093,7 @@ export class GameRoomManager {
             break;
           }
           // Nothing left to ask (e.g. Sneak Attack against an empty hand): played at once
-          const postCoins = this.trainerCoinsAfterSteps(actorView, cardId, selections, preCoins);
+          const postCoins = this.trainerCoinsAfterSteps(actorView, cardId, selections, preCoins, flip);
           newState = executeForPlayer((state) =>
             playTrainerCard(state, cardId, selections, {
               coinResults: preCoins.length > 0 ? preCoins : postCoins,
@@ -2035,7 +2141,7 @@ export class GameRoomManager {
             nextPendingTrainer = { ...pendingRecord, selections };
             break;
           }
-          const postCoins = this.trainerCoinsAfterSteps(trainerView, pendingRecord.cardId, selections, preCoins);
+          const postCoins = this.trainerCoinsAfterSteps(trainerView, pendingRecord.cardId, selections, preCoins, flip);
           newState = asTrainer(playTrainerCard(trainerView, pendingRecord.cardId, selections, {
             coinResults: preCoins.length > 0 ? preCoins : postCoins,
             skipEndTurn: true,
@@ -2069,7 +2175,7 @@ export class GameRoomManager {
           const coinKey = effectCoinKey(actorKey, "stadium", actorView.stadium?.card.id ?? "", actorView.turnNumber);
           const preCoins = this.effectCoins(room, coinKey, getStadiumActionCoinFlips(actorView));
           walkClientSteps((answered) => getStadiumActionSteps(actorView, answered, preCoins.length > 0 ? preCoins : undefined), selections);
-          const postCoins = preCoins.length > 0 ? [] : rollCoins(getStadiumActionCoinFlips(actorView, selections), this.flipCoin);
+          const postCoins = preCoins.length > 0 ? [] : rollCoins(getStadiumActionCoinFlips(actorView, selections), flip);
           newState = executeForPlayer((state) =>
             useStadiumAction(state, selections, { coinResults: preCoins.length > 0 ? preCoins : postCoins, skipEndTurn: true }));
           newState = endTurnIfEffectEndedIt(newState, actorKey);
@@ -2237,6 +2343,11 @@ export class GameRoomManager {
    */
   private updateClocks(room: GameRoom): void {
     const now = Date.now();
+    // Adventure battles have no clocks (the AI never runs out of time, the human may take theirs)
+    if (room.adventure) {
+      room.turnStartedAt = now;
+      return;
+    }
     const durationMs = room.turnTimerDuration * 1000;
     const answerer = room.status === "playing" ? offTurnAnswerer(room.gameState) : null;
     if (answerer) {
@@ -2358,6 +2469,10 @@ export class GameRoomManager {
     }
 
     this.socketToRoom.delete(socketId);
+
+    // An adventure battle never forfeits nor expires here: adventure-room.ts evicts an idle one
+    // from memory (its run keeps the snapshot and the room is rebuilt on rejoin)
+    if (room.adventure) return roomId;
 
     // The creator left the lobby (closed or reloaded the tab) while waiting for an opponent:
     // the room is hidden at once and deleted unless they come back within the grace period
@@ -2486,8 +2601,8 @@ export class GameRoomManager {
    * If the opponent doesn't click ready within SETUP_TIMEOUT_MS, the ready player wins.
    */
   startSetupTimer(roomId: string, readySide: "player1" | "player2"): void {
-    // Don't start if already running
-    if (this.setupTimers.has(roomId)) return;
+    // Don't start if already running; adventure battles have no setup deadline
+    if (this.setupTimers.has(roomId) || this.rooms.get(roomId)?.adventure) return;
 
     const startTime = Date.now();
     console.log(
@@ -2678,7 +2793,7 @@ export class GameRoomManager {
   getActiveRooms(): GameRoom[] {
     const rooms: GameRoom[] = [];
     for (const room of this.rooms.values()) {
-      if (room.isDraft) continue;
+      if (room.isDraft || room.adventure) continue;
       if ((room.status === "waiting" && !this.waitingRoomTimers.has(room.id)) || room.status === "playing") {
         rooms.push(room);
       }
@@ -2737,6 +2852,7 @@ export class GameRoomManager {
   requestKick(roomId: string, socketId: string): { success: boolean; winner?: "player1" | "player2"; error?: string } {
     const room = this.rooms.get(roomId);
     if (!room) return { success: false, error: "Room not found" };
+    if (room.adventure) return { success: false, error: "No hay tiempo límite en el Modo Aventura" };
     if (room.status !== "playing" || !room.gameState) {
       return { success: false, error: "Game is not in progress" };
     }
@@ -2836,6 +2952,8 @@ export class GameRoomManager {
    */
   getActiveRoomForUser(userId: string): GameRoom | null {
     for (const room of this.rooms.values()) {
+      // Adventure battles resume from the adventure map (GET /adventure/runs/active), not the lobby
+      if (room.adventure) continue;
       if (room.status === "playing" && (room.player1Id === userId || room.player2Id === userId)) {
         return room;
       }

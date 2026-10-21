@@ -29,13 +29,16 @@ export function roomMatchMode(room: GameRoom, isDraft: boolean): MultiplayerMode
 export async function openRoomMatch(room: GameRoom, mode: MultiplayerMode): Promise<void> {
   if (room.matchId) return;
   if (!room.player1Id || !room.player2Id) throw new Error("Need two players to start");
+  const gameMode = room.config.mode;
+  // Adventure battles are not matches (no row, no settlement: modules/adventure applies the result)
+  if (gameMode === "adventure") throw new Error("Adventure battles have no match");
   const match = await openMultiplayerMatch({
     player1Id: room.player1Id,
     player2Id: room.player2Id,
     mode,
     betAmount: mode === "friendly" ? 0 : room.config.betAmount,
     roomId: room.id,
-    gameMode: room.config.mode,
+    gameMode,
   });
   room.matchId = match.id;
   // Bets off / pair not eligible: the table is played without a bet
@@ -57,7 +60,8 @@ export function settleRoomResult(
   // The mode (draft or not) comes from the match row; kept for the existing callers
   _options: { isDraft?: boolean } = {},
 ): void {
-  if (!room || room.resultSettled) return;
+  // Adventure battles never settle a match (adventure-room.ts applies their result to the run)
+  if (!room || room.resultSettled || room.adventure) return;
   room.resultSettled = true;
 
   const player1Id = room.player1Id;
