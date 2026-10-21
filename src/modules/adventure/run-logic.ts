@@ -3,7 +3,7 @@
  * takes a run and returns a new one; actions outside their phase throw RunPhaseError (409), rule
  * violations RunRuleError (422).
  */
-import { isBasicEnergy, isEnergyCard, isLimitedInDeck, isPokemonCard } from "@gonzaloaguila/game-core";
+import { isBasicEnergy, isEnergyCard, isPokemonCard, validateDeckEntries } from "@gonzaloaguila/game-core";
 import { adventureCardProblem, cardOf, isBasicPokemonCard } from "./content/cards.js";
 import type { AdventureStarter, AdventureTreasure, Difficulty } from "./content/schema.js";
 import type { Adventure } from "./content/validate.js";
@@ -22,7 +22,6 @@ import {
 /** Treasures offered after a victory (fewer when the pool has fewer candidates). */
 export const OFFER_SIZE = 3;
 
-const deckSize = (deck: readonly CardEntry[]) => deck.reduce((n, e) => n + e.qty, 0);
 
 function lastBattle(adventure: Adventure): number {
   return Math.max(...adventure.battles.map((b) => b.index));
@@ -56,25 +55,14 @@ function addCards(deck: readonly CardEntry[], entries: readonly CardEntry[]): Ca
 }
 
 /**
- * Why a run deck breaks the adventure's rules, or null: size within min/max, copies by name when
- * `rules.maxCopies` is a number (basic Energy unlimited), at least one Basic Pokémon.
- * (game-core 0.10.0's `validateDeckEntries` covers size and copies; swap when the API moves.)
+ * Why a run deck breaks the adventure's rules, or null: game-core's `validateDeckEntries` (size
+ * within min/max, copies by name when `rules.maxCopies` is a number, basic Energy unlimited),
+ * plus at least one Basic Pokémon (a deck without one could never start).
  */
 export function deckProblem(deck: readonly CardEntry[], adventure: Adventure): string | null {
   const { minDeckSize, maxDeckSize, maxCopies } = adventure.rules;
-  const size = deckSize(deck);
-  if (size < minDeckSize) return `El mazo necesita al menos ${minDeckSize} cartas (tiene ${size})`;
-  if (size > maxDeckSize) return `El mazo admite como máximo ${maxDeckSize} cartas (tiene ${size})`;
-  if (maxCopies !== null) {
-    const byName = new Map<string, number>();
-    for (const entry of deck) {
-      const card = cardOf(entry.cardId);
-      if (isLimitedInDeck(card)) byName.set(card.name, (byName.get(card.name) ?? 0) + entry.qty);
-    }
-    for (const [name, copies] of byName) {
-      if (copies > maxCopies) return `Máximo ${maxCopies} copias de ${name}`;
-    }
-  }
+  const problem = validateDeckEntries(deck, { minSize: minDeckSize, maxSize: maxDeckSize, maxCopies });
+  if (problem) return problem;
   if (!deck.some((e) => isBasicPokemonCard(cardOf(e.cardId)))) return "El mazo necesita al menos un Pokémon básico";
   return null;
 }

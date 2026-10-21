@@ -1,8 +1,7 @@
 /**
- * A minimal AdventureEngine on game-core 0.9.0 primitives, for the adventure room's plumbing
- * tests until game-core 0.10.0's adventure API (createAdventureGame, the AI driver) is installed.
- * Its "AI" only sets up, readies, promotes, takes Prizes and ends its turns; passives other than
- * the lucky coin and battle modifiers are ignored.
+ * A minimal AdventureEngine on plain game-core primitives, for the adventure room's plumbing
+ * tests (adventure-room.test.ts). Its "AI" only sets up, readies, promotes, takes Prizes and ends
+ * its turns; passives other than the lucky coin and battle modifiers are ignored.
  */
 import {
   GamePhase,
@@ -16,7 +15,6 @@ import {
   setPlayerReady,
   shuffle,
   startGame,
-  startPlayingPhase,
   swapSides,
   takePrize,
   type GameCard,
@@ -25,7 +23,8 @@ import {
 import type { AdventureEngine, SeededRng } from "../src/socket/adventure-engine.js";
 import type { CardEntry } from "../src/modules/adventure/engine-types.js";
 
-type StubStep = { kind: "place"; cardId: string } | { kind: "mulligan" } | { kind: "ready" } | { kind: "promote" } | { kind: "takePrize" } | { kind: "endTurn" };
+/** Same kinds as game-core's driver for what it covers ("setup" = Active + ready; the room flips the starting coin). */
+type StubStep = { kind: "mulligan" } | { kind: "setup" } | { kind: "promote" } | { kind: "takePrize" } | { kind: "endTurn" };
 
 function createRng(seed: number, state?: number): SeededRng {
   let a = (state ?? seed) >>> 0;
@@ -84,9 +83,8 @@ export function createStubEngine(): AdventureEngine & { stepsApplied: number } {
         if (state.gamePhase === "GAME_OVER") return null;
         if (state.gamePhase === "MULLIGAN" || state.gamePhase === "SETUP") {
           if (state.opponentReady) return null;
-          if (state.opponentActivePokemon) return { kind: "ready" };
-          const basic = state.opponentHand.find((c) => isPokemonCard(c) && c.stage === "basic");
-          return basic ? { kind: "place", cardId: basic.id } : { kind: "mulligan" };
+          const basic = state.opponentHand.some((c) => isPokemonCard(c) && c.stage === "basic");
+          return basic || state.opponentActivePokemon ? { kind: "setup" } : { kind: "mulligan" };
         }
         if (state.opponentNeedsToPromote && state.opponentBench.length > 0) return { kind: "promote" };
         if (state.opponentCanTakePrize) return { kind: "takePrize" };
@@ -99,16 +97,12 @@ export function createStubEngine(): AdventureEngine & { stepsApplied: number } {
       const step = raw as StubStep;
       engine.stepsApplied += 1;
       switch (step.kind) {
-        case "place":
-          return swapSides(playBasicPokemon(swapSides(state), step.cardId, "active"));
         case "mulligan":
           return doMulligan(state, false);
-        case "ready": {
-          const ready = setPlayerReady(state, false);
-          if (!ready.playerReady || !ready.opponentReady) return ready;
-          const coin = options.flip();
-          options.onCoins({ label: "Inicio", results: [coin] });
-          return startPlayingPhase(ready, coin);
+        case "setup": {
+          const basic = state.opponentHand.find((c) => isPokemonCard(c) && c.stage === "basic");
+          const placed = !state.opponentActivePokemon && basic ? swapSides(playBasicPokemon(swapSides(state), basic.id, "active")) : state;
+          return setPlayerReady(placed, false);
         }
         case "promote":
           return promoteActivePokemon(state, 0, false);

@@ -1,16 +1,16 @@
-import { UNSUPPORTED_TRAINERS, findCardById, isPokemonCard, isTrainerCard, type Card } from "@gonzaloaguila/game-core";
+import { UNSUPPORTED_TRAINERS, findCardById, isAdventureCardAllowed, isPokemonCard, isTrainerCard, type Card } from "@gonzaloaguila/game-core";
 import { isReleasedCard } from "../../../lib/released-sets.js";
 
 /**
  * Why a catalog id can't be used in an adventure, or null: unknown id, a set still in development
- * or a Trainer the engine doesn't implement. Same rule as game-core 0.10.0's
- * `isAdventureCardAllowed` (swap when the API moves to it).
+ * or a Trainer the engine doesn't implement (game-core's `isAdventureCardAllowed`, with a reason).
  */
 export function adventureCardProblem(cardId: string): string | null {
   const card = findCardById(cardId);
   if (!card) return `carta desconocida ${cardId}`;
   if (!isReleasedCard(card)) return `${card.name} (${cardId}) es de un set en desarrollo`;
   if (isTrainerCard(card) && UNSUPPORTED_TRAINERS.includes(card.name)) return `${card.name} no está implementada`;
+  if (!isAdventureCardAllowed(card)) return `${card.name} (${cardId}) no se puede usar en una aventura`;
   return null;
 }
 

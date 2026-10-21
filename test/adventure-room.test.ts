@@ -1,8 +1,9 @@
 /**
- * Adventure battle rooms over real sockets (production handlers). The engine is the test stub
- * (adventure-stub-engine.ts) until game-core 0.10.0's AI driver is installed: these tests cover
- * the room plumbing — AI seat without a socket, masking, privacy, lucky coin, snapshots and
- * restore, the end applied once, no match rows.
+ * Adventure battle rooms over real sockets (production handlers), on a minimal engine
+ * (adventure-stub-engine.ts: an AI that only sets up and ends its turns) so the room plumbing is
+ * tested fast and predictably — AI seat without a socket, masking, privacy, lucky coin, snapshots
+ * and restore, the end applied once, no match rows. adventure-room-engine.test.ts runs the same
+ * room on game-core's real adventure engine.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Socket as ClientSocket } from "socket.io-client";

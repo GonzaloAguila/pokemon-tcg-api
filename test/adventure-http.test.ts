@@ -131,7 +131,7 @@ describe("PATCH /api/adventure/runs/:id/deck", () => {
 
     const under = await app.request("PATCH", path, { token, body: { remove: [{ cardId: "base-set-098-fire-energy", qty: 2 }], energies: [] } });
     expect(under.status).toBe(422);
-    expect(under.body.error.message).toBe("El mazo necesita al menos 20 cartas (tiene 19)");
+    expect(under.body.error.message).toBe("El mazo debe tener al menos 20 cartas (tiene 19)");
 
     const dce = await app.request("PATCH", path, { token, body: { remove: [], energies: [{ cardId: "base-set-096-double-colorless-energy", qty: 1 }] } });
     expect(dce.status).toBe(422);

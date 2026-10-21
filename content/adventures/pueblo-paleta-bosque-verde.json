@@ -183,13 +183,13 @@
         "lead": "base-set-054-metapod",
         "deck": [
           { "cardId": "base-set-045-caterpie", "qty": 3 },
-          { "cardId": "base-set-054-metapod", "qty": 3 },
+          { "cardId": "base-set-054-metapod", "qty": 4 },
           { "cardId": "base-set-094-potion", "qty": 4 },
           { "cardId": "base-set-090-super-potion", "qty": 3 },
           { "cardId": "base-set-080-defender", "qty": 2 },
           { "cardId": "base-set-092-energy-removal", "qty": 2 },
           { "cardId": "base-set-095-switch", "qty": 1 },
-          { "cardId": "base-set-099-grass-energy", "qty": 22 }
+          { "cardId": "base-set-099-grass-energy", "qty": 21 }
         ]
       },
       "treasurePool": "tier2",

@@ -20,7 +20,7 @@
  */
 import type { Server } from "socket.io";
 import { Prisma, type AdventureRun } from "@prisma/client";
-import type { GameState } from "@gonzaloaguila/game-core";
+import { GamePhase, startPlayingPhase, type GameState } from "@gonzaloaguila/game-core";
 import { prisma } from "../lib/prisma.js";
 import { getAdventure } from "../modules/adventure/content/load.js";
 import { describeModifier } from "../modules/adventure/content/modifiers.js";
@@ -374,6 +374,11 @@ export class AdventureRooms implements AdventureBattleHost {
     await Promise.resolve(); // never inside the caller's stack (it may still be broadcasting)
     for (let steps = 0; steps < MAX_AI_STEPS_PER_LOOP; steps++) {
       if (!this.isLive(runtime) || !runtime.room.gameState) return;
+      if (this.startIfBothReady(runtime)) {
+        this.emitAIStep(runtime, null, []);
+        this.captureSnapshot(runtime);
+        continue;
+      }
       const peek = withRoomRandom(random, () => engine.nextAIStep(runtime.room.gameState!, runtime.plan));
       if (!peek) return;
       const delay = engine.stepDelay(peek.step) * this.aiDelayScale;
@@ -418,11 +423,27 @@ export class AdventureRooms implements AdventureBattleHost {
     console.error(`[adventure ${runtime.roomId}] AI loop stopped after ${MAX_AI_STEPS_PER_LOOP} steps`);
   }
 
-  private emitAIStep(runtime: Runtime, actionType: string, coins: AICoins[]): void {
+  /**
+   * Both sides ready in the opening after the AI's setup: the battle starts here (the driver leaves
+   * the starting player's coin to the room, like rooms.ts does when the human readies last). The
+   * coin comes from the battle's generator; startPlayingPhase applies the adventure's setup rules.
+   */
+  private startIfBothReady(runtime: Runtime): boolean {
+    const state = runtime.room.gameState!;
+    if (state.gamePhase !== GamePhase.Mulligan || !state.playerReady || !state.opponentReady) return false;
+    const coin = rngCoin(runtime.rng);
+    const started = withRoomRandom(() => runtime.rng.next(), () => startPlayingPhase(state, coin));
+    runtime.room.gameState = { ...started, events: neutralizeEvents(started.events, state.events.length, "Jugador 1", "Jugador 2") };
+    runtime.room.turnStartedAt = Date.now();
+    return true;
+  }
+
+  /** The AI's step to the player: its animation (`opponentAction`, none for the battle's start), coins, state. */
+  private emitAIStep(runtime: Runtime, actionType: string | null, coins: AICoins[]): void {
     const io = this.io();
     const room = runtime.room;
     if (!io || !room.gameState) return;
-    io.to(runtime.roomId).emit("opponentAction", { type: actionType });
+    if (actionType) io.to(runtime.roomId).emit("opponentAction", { type: actionType });
     for (const coin of coins) {
       // results: the acting player's (the AI's) coins; flippedBy relative to it, as for any player
       const flippedBy = coin.flippedBy?.map((who) => (who === "self" ? "attacker" : "defender"));

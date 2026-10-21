@@ -99,7 +99,7 @@ describe("validator", () => {
     expect(
       problemsOf((a) => {
         a.battles[6].opponent.deck.push({ cardId: "base-set-069-weedle", qty: 1 });
-        a.battles[6].opponent.deck[7].qty = 21;
+        a.battles[6].opponent.deck[7].qty = 20;
         a.battles[6].modifiers[2].active = ["base-set-069-weedle", "base-set-054-metapod"];
       }),
     ).toContain("Batalla 7, opponentSetup: Metapod no evoluciona de Weedle");

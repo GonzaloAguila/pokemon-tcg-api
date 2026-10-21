@@ -37,12 +37,16 @@ import { refundUnsettledMatches } from "./modules/matches/matches.service.js";
 import { cleanupOldMessages } from "./modules/chat/chat.service.js";
 import { getAdventures } from "./modules/adventure/content/load.js";
 import { adventureRouter } from "./modules/adventure/index.js";
+import { setAdventureEngine } from "./socket/adventure-engine.js";
+import { gameCoreAdventureEngine } from "./socket/adventure-engine-game-core.js";
 
 // Load environment variables
 dotenv.config();
 
 // Adventure content (content/adventures/*.json): an invalid file stops the boot, every problem listed
 getAdventures();
+// Adventure battle rooms run game-core's adventure engine (AI driver, seeded RNG)
+setAdventureEngine(gameCoreAdventureEngine);
 
 const corsOrigin = process.env.CORS_ORIGIN
   ? process.env.CORS_ORIGIN.split(",").map((s) => s.trim())

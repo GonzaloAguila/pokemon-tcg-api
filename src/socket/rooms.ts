@@ -805,6 +805,9 @@ export function neutralizeEvents(
     [/ tu mazo/g, " su mazo"],
     [/^Turno de Jugador$/, `Turno de ${self}`],
     [/^Turno de Rival$/, `Turno de ${opponent}`],
+    // game-core's AI executor (adventure rooms) writes the AI's moves as "Rival colocó / jugó …"
+    // from the human's view: name it, so masking's opening rule (hideSetupBoard) also hides them
+    [/^Rival (?=[a-záéíóú])/, `${opponent} `],
   ];
 
   const newEvents = [...events];
@@ -1918,9 +1921,12 @@ export class GameRoomManager {
           // (the schema rejects them).
           const reflipPlan = getAttackChoiceCoinPlan(attackerView, selection);
           const reflipCoins = reflipPlan ? flipAttackCoins(reflipPlan, flip) : undefined;
+          // Adventure: the AI's attack is finished by its driver (finishAttack step: its own choices,
+          // promotion, the end of its turn), never here
+          const aiFinishesAttack = !!room.adventure && !attackerIsPlayer1;
           newState = asAttacker((() => {
             const resolved = resolveAttackChoice(attackerView, selection, { skipEndTurn: true, ...(reflipCoins ? { coinResults: reflipCoins } : {}) });
-            return resolved.pendingAttackChoice || resolved.gameResult !== null ? resolved : endTurn(resolved, true);
+            return resolved.pendingAttackChoice || resolved.gameResult !== null || aiFinishesAttack ? resolved : endTurn(resolved, true);
           })());
           if (reflipPlan && reflipCoins && reflipCoins.length > 0) {
             actionCoinFlipInfo = attackCoinInfo(pausedAttackName(attackerView) ?? "Sabrina's ESP", reflipPlan, reflipCoins);
