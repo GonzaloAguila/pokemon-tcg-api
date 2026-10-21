@@ -24,8 +24,7 @@ import { GamePhase, startPlayingPhase, type GameState } from "@gonzaloaguila/gam
 import { prisma } from "../lib/prisma.js";
 import { getAdventure } from "../modules/adventure/content/load.js";
 import { describeModifier } from "../modules/adventure/content/modifiers.js";
-import type { BattleModifier } from "../modules/adventure/engine-types.js";
-import { battleConfig } from "../modules/adventure/run-logic.js";
+import { battleConfig, battleRules } from "../modules/adventure/run-logic.js";
 import {
   applyRunBattleResult,
   runStateOf,
@@ -304,7 +303,7 @@ export class AdventureRooms implements AdventureBattleHost {
         hearts: run.hearts,
         maxHearts: run.maxHearts,
         passives: run.passives,
-        rules: battle.modifiers.map((m) => describeModifier(m as BattleModifier)),
+        rules: battleRules(adventure, battle.index, run.difficulty).map(describeModifier),
         rival: { name: rival.name, trainerClass: rival.trainerClass },
       },
       luckyPending: false,

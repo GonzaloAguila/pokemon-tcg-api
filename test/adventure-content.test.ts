@@ -2,7 +2,11 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { getAdventure, getAdventures, validateAdventure } from "../src/modules/adventure/content/load.js";
+import { isPokemonCard } from "@gonzaloaguila/game-core";
+import { cardOf, isBasicPokemonCard } from "../src/modules/adventure/content/cards.js";
+import { battleModifiers, difficultyRules, rivalDeckOf } from "../src/modules/adventure/content/difficulty.js";
 import { describeModifier } from "../src/modules/adventure/content/modifiers.js";
+import { ADVENTURE_PLAYMATS } from "../src/modules/prizes/catalog.js";
 import type { BattleModifier } from "../src/modules/adventure/engine-types.js";
 
 const FILE = path.resolve(__dirname, "../content/adventures/pueblo-paleta-bosque-verde.json");
@@ -35,13 +39,15 @@ describe("Adventure 1 content", () => {
     expect(adventure.battles.map((b) => b.index)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
     const sizes = adventure.battles.map((b) => (b.opponent.deck ? sum(b.opponent.deck) : sum(b.opponent.deckByDifficulty!.normal)));
     expect(sizes).toEqual([20, 20, 20, 20, 20, 20, 40, 20, 20, 24]);
-    for (const deck of Object.values(adventure.battles[9].opponent.deckByDifficulty!.hard.byStarter)) expect(sum(deck)).toBe(24);
+    const hard10 = adventure.battles[9].opponent.deckByDifficulty!.hard;
+    if (Array.isArray(hard10)) throw new Error("battle 10's hard decks are by starter");
+    for (const deck of Object.values(hard10.byStarter)) expect(sum(deck)).toBe(24);
     expect(adventure.battles.map((b) => b.treasurePool)).toEqual([
       "tier1", "tier1", "tier1", "tier1", "major", "tier2", "tier2", "tier2", "tier2", null,
     ]);
     expect(adventure.achievements.map((a) => [a.id, a.tier])).toEqual([
       ["adventure-1-clear-normal", "bronze"],
-      ["adventure-1-clear-hard", "gold"],
+      ["adventure-1-clear-hard", "platinum"],
       ["adventure-1-flawless", "silver"],
       ["adventure-1-all-starters", "silver"],
       ["adventure-1-all-starters-hard", "platinum"],
@@ -50,16 +56,65 @@ describe("Adventure 1 content", () => {
     ]);
   });
 
-  it("battle 7 is the Metapod battle with its four rules", () => {
+  it("battle 7 is the Metapod battle with its four rules (normal: a Caterpie to reach; hard: a Metapod and a Caterpie benched)", () => {
     const battle = getAdventure("pueblo-paleta-bosque-verde")!.battles[6];
     expect(battle.opponent.name).toBe("Teo");
     expect(battle.modifiers.map((m) => m.type)).toEqual(["prizeCount", "noPrizeFor", "opponentSetup", "bonusCards"]);
     expect(battle.modifiers.map((m) => describeModifier(m as BattleModifier))).toEqual([
-      "Mesa a 1 premio por jugador",
+      "Premios: tú 1, el rival 2",
       "Los Metapod del rival no dan premios",
-      "El rival empieza con Metapod activo y 2 Metapod en la banca",
+      "El rival empieza con Metapod activo y Caterpie en la banca",
       "Empiezas con Pokémon Flute, Gust of Wind y PlusPower en la mano",
     ]);
+    expect(battleModifiers(battle, "hard").map(describeModifier)).toEqual([
+      "Premios: tú 1, el rival 2",
+      "Los Metapod del rival no dan premios",
+      "El rival empieza con Metapod activo y Metapod y Caterpie en la banca",
+      "Empiezas con Pokémon Flute, Gust of Wind y PlusPower en la mano",
+    ]);
+  });
+
+  it("hard mode: 2 hearts, its own decks and rules in every battle, its own treasure pools and weights", () => {
+    const adventure = getAdventure("pueblo-paleta-bosque-verde")!;
+    expect(difficultyRules(adventure, "normal")).toMatchObject({ hearts: 3, treasurePools: adventure.treasurePools, treasureOffer: adventure.treasureOffer });
+    const hard = difficultyRules(adventure, "hard");
+    expect(hard.hearts).toBe(2);
+    expect(hard.treasureOffer).toEqual({ rarityWeights: { common: 4, rare: 4, epic: 2 }, maxPassives: 1 });
+    for (const d of ["normal", "hard"] as const) expect(adventure.difficulties[d].description.length).toBeGreaterThan(10);
+
+    // Every battle has a hard deck of its own (battle 10: one per starter), with more evolutions
+    const evolutions = (deck: { cardId: string; qty: number }[]) =>
+      deck.filter((e) => isPokemonCard(cardOf(e.cardId)) && !isBasicPokemonCard(cardOf(e.cardId))).reduce((n, e) => n + e.qty, 0);
+    for (const battle of adventure.battles) {
+      const normal = rivalDeckOf(battle, "normal", "charmander")!;
+      for (const starter of adventure.starters) {
+        const hardDeck = rivalDeckOf(battle, "hard", starter.id)!;
+        // A deck of its own, or (battle 7) the same deck behind harder rules
+        const differs = JSON.stringify(hardDeck) !== JSON.stringify(normal) || JSON.stringify(battleModifiers(battle, "hard")) !== JSON.stringify(battle.modifiers);
+        expect(differs).toBe(true);
+        expect(evolutions(hardDeck)).toBeGreaterThanOrEqual(evolutions(normal));
+      }
+    }
+    // Boss rules: the rival plays with one Prize fewer in battles 5 and 10 (hard only)
+    for (const index of [5, 10]) {
+      const battle = adventure.battles[index - 1];
+      expect(battleModifiers(battle, "hard")).toContainEqual({ type: "prizeCount", opponent: 2 });
+      expect(battleModifiers(battle, "normal").some((m) => m.type === "prizeCount")).toBe(false);
+    }
+    expect(adventure.battles.filter((b) => battleModifiers(b, "hard").length > 0).length).toBeGreaterThanOrEqual(8);
+
+    // No "easy" treasures in hard: no Potion packs, no Arranque rápido before battle 6
+    const pools = hard.treasurePools;
+    for (const id of [...pools.tier1, ...pools.major, ...pools.tier2]) expect(["t1-pociones", "t2-superpocion"]).not.toContain(id);
+    expect([...pools.tier1, ...pools.major]).not.toContain("t1-energia");
+    const epics = (ids: string[]) => ids.filter((id) => adventure.treasures.find((t) => t.id === id)!.rarity === "epic").length;
+    expect(epics(pools.tier2)).toBeGreaterThan(epics(adventure.treasurePools.tier2));
+  });
+
+  it("Esta vez en serio is platinum and grants the Ciudad Plateada playmat", () => {
+    const achievement = getAdventure("pueblo-paleta-bosque-verde")!.achievements.find((a) => a.id === "adventure-1-clear-hard")!;
+    expect(achievement).toMatchObject({ tier: "platinum", cosmetic: { type: "playmat", id: "playmat-ciudad-plateada" } });
+    expect(ADVENTURE_PLAYMATS.map((p) => p.itemId)).toContain("playmat-ciudad-plateada");
   });
 });
 
@@ -69,15 +124,61 @@ describe("validator", () => {
   });
 
   it("rejects a 19-card rival deck", () => {
-    expect(problemsOf((a) => (a.battles[0].opponent.deck[3].qty = 11))).toContain(
-      "Batalla 1: el mazo del rival tiene 19 cartas (debe tener entre 20 y 40)",
+    expect(problemsOf((a) => (a.battles[0].opponent.deckByDifficulty.normal[3].qty = 11))).toContain(
+      "Batalla 1: el mazo del rival (normal) tiene 19 cartas (debe tener entre 20 y 40)",
+    );
+    expect(problemsOf((a) => (a.battles[0].opponent.deckByDifficulty.hard[6].qty = 8))).toContain(
+      "Batalla 1: el mazo del rival (difícil) tiene 19 cartas (debe tener entre 20 y 40)",
     );
   });
 
   it("rejects an unknown card id", () => {
-    expect(problemsOf((a) => (a.battles[1].opponent.deck[0].cardId = "base-set-999-missingno"))).toContain(
-      "Batalla 2, mazo del rival: carta desconocida base-set-999-missingno",
+    expect(problemsOf((a) => (a.battles[1].opponent.deckByDifficulty.normal[0].cardId = "base-set-999-missingno"))).toContain(
+      "Batalla 2, mazo del rival (normal): carta desconocida base-set-999-missingno",
     );
+    expect(problemsOf((a) => (a.battles[1].opponent.deckByDifficulty.hard[0].cardId = "base-set-999-missingno"))).toContain(
+      "Batalla 2, mazo del rival (difícil): carta desconocida base-set-999-missingno",
+    );
+  });
+
+  it("a battle with deckByDifficulty needs both decks; deck and deckByDifficulty can't go together", () => {
+    expect(problemsOf((a) => delete a.battles[0].opponent.deckByDifficulty.hard).some((p) => p.startsWith("battles.0.opponent.deckByDifficulty.hard"))).toBe(true);
+    expect(
+      problemsOf((a) => (a.battles[0].opponent.deck = a.battles[0].opponent.deckByDifficulty.normal)).some((p) => p.includes("deck o deckByDifficulty")),
+    ).toBe(true);
+  });
+
+  it("requires a description for each difficulty and validates the hard overrides", () => {
+    expect(problemsOf((a) => delete a.difficulties)).toEqual([expect.stringMatching(/^difficulties: /)]);
+    expect(problemsOf((a) => delete a.difficulties.hard.description)).toEqual([expect.stringMatching(/^difficulties\.hard\.description: /)]);
+    expect(problemsOf((a) => (a.difficulties.hard.hearts = 0))).toEqual([expect.stringMatching(/^difficulties\.hard\.hearts: /)]);
+    expect(problemsOf((a) => (a.difficulties.hard.treasureOffer.rarityWeights.epic = 0))).toEqual([
+      expect.stringMatching(/^difficulties\.hard\.treasureOffer\.rarityWeights\.epic: /),
+    ]);
+    expect(problemsOf((a) => a.difficulties.hard.treasurePools.tier2.push("h2-nada"))).toContain("Pool difícil tier2: tesoro desconocido h2-nada");
+  });
+
+  it("checks a difficulty's own battle rules against its decks", () => {
+    expect(problemsOf((a) => a.battles[1].modifiersByDifficulty.hard.push({ type: "opponentSetup", active: ["base-set-061-rattata"], bench: [] }))).toEqual(
+      expect.arrayContaining(["Batalla 2 (difícil): modificador opponentSetup repetido"]),
+    );
+    expect(
+      problemsOf((a) => (a.battles[1].modifiersByDifficulty.hard = [{ type: "opponentSetup", active: ["base-set-061-rattata"], bench: [] }])),
+    ).toEqual(["Batalla 2, opponentSetup: el mazo del rival (difícil) tiene 0 Rattata y la mesa pide 1"]);
+    expect(problemsOf((a) => (a.battles[3].modifiersByDifficulty.hard = [{ type: "noPrizeFor", side: "opponent", names: ["Missingno"] }]))).toContain(
+      "Batalla 4 (difícil), noPrizeFor: ningún Pokémon se llama Missingno",
+    );
+    expect(problemsOf((a) => (a.battles[0].modifiersByDifficulty = { hard: [{ type: "doublePrizes" }] })).some((p) => p.startsWith("battles.0.modifiersByDifficulty.hard.0"))).toBe(true);
+  });
+
+  it("an achievement cosmetic must be an adventure cosmetic of that type", () => {
+    expect(problemsOf((a) => (a.achievements[1].cosmetic = { type: "playmat", id: "stadium", name: "Estadio" }))).toEqual([
+      "Logro adventure-1-clear-hard: cosmético de aventura desconocido playmat stadium",
+    ]);
+    expect(problemsOf((a) => (a.achievements[1].cosmetic = { type: "cardBack", id: "playmat-ciudad-plateada", name: "x" }))).toEqual([
+      "Logro adventure-1-clear-hard: cosmético de aventura desconocido cardBack playmat-ciudad-plateada",
+    ]);
+    expect(problemsOf((a) => (a.achievements[1].cosmetic = { type: "emote", id: "x", name: "x" })).some((p) => p.startsWith("achievements.1.cosmetic.type"))).toBe(true);
   });
 
   it("requires a known rarity on every treasure and the offer weights", () => {
@@ -106,20 +207,26 @@ describe("validator", () => {
   it("rejects an opponentSetup Metapod over a Weedle", () => {
     expect(
       problemsOf((a) => {
-        a.battles[6].opponent.deck.push({ cardId: "base-set-069-weedle", qty: 1 });
-        a.battles[6].opponent.deck[7].qty = 20;
+        a.battles[6].opponent.deckByDifficulty.normal.push({ cardId: "base-set-069-weedle", qty: 1 });
+        a.battles[6].opponent.deckByDifficulty.normal[7].qty = 20;
         a.battles[6].modifiers[2].active = ["base-set-069-weedle", "base-set-054-metapod"];
       }),
     ).toContain("Batalla 7, opponentSetup: Metapod no evoluciona de Weedle");
   });
 
-  it("rejects an opponentSetup card missing from the rival deck", () => {
+  it("rejects an opponentSetup card missing from the rival deck (each difficulty's table vs its own deck)", () => {
     expect(
       problemsOf((a) => {
-        a.battles[6].opponent.deck[1].qty = 2; // 3 Metapod in play, 2 in the deck
-        a.battles[6].opponent.deck[7].qty = 23;
+        a.battles[6].opponent.deckByDifficulty.hard[1].qty = 1; // hard: 2 Metapod in play, 1 in the deck
+        a.battles[6].opponent.deckByDifficulty.hard[7].qty = 24;
       }),
-    ).toContain("Batalla 7, opponentSetup: el mazo del rival tiene 2 Metapod y la mesa pide 3");
+    ).toEqual(["Batalla 7, opponentSetup: el mazo del rival (difícil) tiene 1 Metapod y la mesa pide 2"]);
+    // Normal asks for 1 Metapod: 2 in its deck are fine (the hard deck keeps its 4)
+    const ok = raw();
+    ok.battles[6].opponent.deckByDifficulty.normal[1].qty = 2;
+    ok.battles[6].opponent.deckByDifficulty.normal[7].qty = 23;
+    const result = validateAdventure(ok);
+    expect(result.ok ? [] : result.problems).toEqual([]);
   });
 
   it("rejects a starter deck over the maximum and a copy limit when rules set one", () => {
@@ -129,7 +236,7 @@ describe("validator", () => {
 
   it("lists every problem at once", () => {
     const problems = problemsOf((a) => {
-      a.battles[0].opponent.deck[0].cardId = "nope";
+      a.battles[0].opponent.deckByDifficulty.normal[0].cardId = "nope";
       a.treasurePools.tier1.push("t1-nada");
     });
     expect(problems.length).toBeGreaterThanOrEqual(2);

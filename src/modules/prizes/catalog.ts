@@ -62,6 +62,15 @@ export const ADVENTURE_CARD_BACKS: CosmeticItem[] = [
   { itemId: "cardback-bosque-verde", name: "Bosque Verde", imageUrl: "/card-backs/card-back-bosque-verde.jpg" },
 ];
 
+/**
+ * Playmats won in Modo Aventura (an adventure achievement's `cosmetic`, content/adventures): never
+ * sold nor won elsewhere; admins can grant them. Frontend PLAYMAT_COLLECTION entries with source
+ * "adventure".
+ */
+export const ADVENTURE_PLAYMATS: CosmeticItem[] = [
+  { itemId: "playmat-ciudad-plateada", name: "Ciudad Plateada", imageUrl: "/bg/bg-ciudad-plateada.jpg" },
+];
+
 /** Event playmats (frontend PLAYMAT_COLLECTION, source "event"): not sold nor won, only granted. */
 export const ADMIN_ONLY_PLAYMATS: CosmeticItem[] = [
   { itemId: "halloween-forest", name: "Bosque Embrujado", imageUrl: "/bg/bg-halloween-forest.jpg" },

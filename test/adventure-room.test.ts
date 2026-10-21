@@ -38,15 +38,18 @@ afterAll(async () => {
 type Masked = GameState & { awaitingUserId: string | null };
 
 /** A player with a run in battle 1 (optionally: a fixed seed, passives, deck) and its room. */
-async function battleFor(options: { seed?: string; passives?: string[]; deck?: { cardId: string; qty: number }[] } = {}) {
+async function battleFor(
+  options: { seed?: string; passives?: string[]; deck?: { cardId: string; qty: number }[]; difficulty?: "normal" | "hard"; battle?: number } = {},
+) {
   const user = await createUser({}, { stats: true });
-  const run = await adventure.createRun(user.id, { adventureId: ADVENTURE, difficulty: "normal", starterId: "charmander" });
+  const run = await adventure.createRun(user.id, { adventureId: ADVENTURE, difficulty: options.difficulty ?? "normal", starterId: "charmander" });
   await prisma.adventureRun.update({
     where: { id: run.id },
     data: {
       ...(options.seed ? { seed: options.seed } : {}),
       ...(options.passives ? { passives: options.passives } : {}),
       ...(options.deck ? { deck: options.deck } : {}),
+      ...(options.battle ? { currentBattle: options.battle } : {}),
     },
   });
   const { roomId } = await adventure.startRunBattle(user.id, run.id);
@@ -141,6 +144,24 @@ describe("adventure battle room", () => {
     const row = await prisma.adventureRun.findUniqueOrThrow({ where: { id: runId } });
     expect(row.battle).toMatchObject({ roomId, rngState: expect.any(Number), state: expect.any(Object) });
     expect((await adventure.getRun(user.id, runId)).battle).toEqual({ roomId });
+    client.socket.disconnect();
+  });
+
+  it("a hard run's room plays the hard rival deck with the hard rules, also when rebuilt from the run", async () => {
+    const { roomId, token, runId } = await battleFor({ difficulty: "hard", battle: 5 });
+    const names = (state: GameState) =>
+      [...state.opponentDeck, ...state.opponentHand, ...state.opponentPrizes, ...(state.opponentActivePokemon ? [state.opponentActivePokemon.pokemon] : [])].map((c) => c.name);
+    expect(names(room(roomId).gameState!)).toContain("Venonat"); // only in the hard deck of battle 5
+    const rules = ["El rival juega con 2 premios", "El rival empieza con Potion en la mano"];
+    let client = await join(token, roomId);
+    expect(client.start.adventure).toMatchObject({ runId, battle: 5, hearts: 2, maxHearts: 2, rules });
+    client.socket.disconnect();
+
+    await adventureRooms.evict(roomId);
+    expect(roomManager.getRoom(roomId)).toBeUndefined();
+    client = await join(token, roomId);
+    expect(client.start.adventure).toMatchObject({ battle: 5, hearts: 2, rules });
+    expect(names(room(roomId).gameState!)).toContain("Venonat");
     client.socket.disconnect();
   });
 

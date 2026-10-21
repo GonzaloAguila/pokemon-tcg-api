@@ -8,6 +8,7 @@ import { RELEASED_SETS } from "../../lib/released-sets.js";
 import {
   ADMIN_ONLY_COINS,
   ADVENTURE_CARD_BACKS,
+  ADVENTURE_PLAYMATS,
   ALL_VARIANTS,
   AVAILABLE_AVATARS,
   AVAILABLE_CARD_BACKS,
@@ -43,7 +44,7 @@ export const GRANTABLE_COSMETICS: Record<CosmeticType, ReadonlySet<string>> = {
   avatar: new Set(AVAILABLE_AVATARS.map((a) => a.itemId).filter((id) => !FREE_AVATAR_IDS.has(id))),
   // "<pokemon-slug>-<overlayId>": every Rare Holo Pokémon × every overlay (catalog.ts)
   skin: new Set(ALL_VARIANTS.map((v) => v.itemId)),
-  playmat: new Set([...AVAILABLE_PLAYMATS, ...ADMIN_ONLY_PLAYMATS].map((p) => p.itemId)),
+  playmat: new Set([...AVAILABLE_PLAYMATS, ...ADMIN_ONLY_PLAYMATS, ...ADVENTURE_PLAYMATS].map((p) => p.itemId)),
   emote: new Set(COLLECTIBLE_EMOTES.map((e) => e.id)),
   trophy: new Set(TROPHIES.map((t) => t.itemId)),
 };

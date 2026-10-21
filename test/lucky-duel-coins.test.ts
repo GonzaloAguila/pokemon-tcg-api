@@ -411,7 +411,7 @@ describe("Lucky Duel achievements vs the AI", () => {
     expect(await luckyClaimable(u.id)).toEqual(["lucky-magikarp"]);
 
     const before = await coins(u.id);
-    expect(await claimAchievement(u.id, "lucky-magikarp")).toEqual({ achievementId: "lucky-magikarp", coins: 500, coupons: 0 });
+    expect(await claimAchievement(u.id, "lucky-magikarp")).toEqual({ achievementId: "lucky-magikarp", coins: 500, coupons: 0, cosmetic: null });
     expect(await coins(u.id)).toBe(before + 500);
     const def = (await listAchievements(u.id)).find((a) => a.id === "lucky-magikarp")!;
     expect(def).toMatchObject({ name: "Magikarp campeón", tier: "silver", progressTarget: 1, claimed: true, status: "active" });

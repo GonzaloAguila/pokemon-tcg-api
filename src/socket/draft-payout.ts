@@ -15,6 +15,7 @@ import { boosterIdForSet } from "../modules/boosters/boosters.service.js";
 import { COSMETIC_TYPE_LABELS } from "../modules/admin/grantable-cosmetics.js";
 import {
   ADMIN_ONLY_PLAYMATS,
+  ADVENTURE_PLAYMATS,
   ALL_VARIANTS,
   AVAILABLE_AVATARS,
   AVAILABLE_CARD_BACKS,
@@ -196,7 +197,7 @@ const ITEM_NAMES: Record<DraftRewardItem["type"], Map<string, string>> = {
   ]),
   avatar: new Map(AVAILABLE_AVATARS.map((a) => [a.itemId, a.name])),
   skin: new Map(ALL_VARIANTS.map((v) => [v.itemId, v.name])),
-  playmat: new Map([...AVAILABLE_PLAYMATS, ...ADMIN_ONLY_PLAYMATS].map((p) => [p.itemId, p.name])),
+  playmat: new Map([...AVAILABLE_PLAYMATS, ...ADMIN_ONLY_PLAYMATS, ...ADVENTURE_PLAYMATS].map((p) => [p.itemId, p.name])),
   emote: new Map(BATTLE_EMOTES.map((e) => [e.id, e.name])),
   trophy: new Map(TROPHIES.map((t) => [t.itemId, t.name])),
 };

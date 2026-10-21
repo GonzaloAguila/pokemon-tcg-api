@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { getAdventure } from "../src/modules/adventure/content/load.js";
+import { difficultyRules, rivalDeckOf } from "../src/modules/adventure/content/difficulty.js";
 import {
   abandonRun,
   achievementFacts,
   applyBattleResult,
   battleConfig,
+  battleRules,
   chooseTreasure,
   editDeck,
   generateOffer,
@@ -50,7 +52,7 @@ describe("newRun", () => {
     const run = fresh();
     expect(run).toMatchObject({
       adventureId: "pueblo-paleta-bosque-verde",
-      adventureVersion: 2,
+      adventureVersion: 3,
       status: "active",
       phase: "pre_battle",
       currentBattle: 1,
@@ -68,6 +70,85 @@ describe("newRun", () => {
 
   it("rejects an unknown starter", () => {
     expect(() => fresh("pikachu")).toThrow(RunRuleError);
+  });
+
+  it("a hard run starts with the hard hearts (2); the extra heart treasure still adds one", () => {
+    const run = fresh("squirtle", "hard");
+    expect(run).toMatchObject({ difficulty: "hard", hearts: 2, maxHearts: 2, currentBattle: 1 });
+    const won = applyBattleResult(startBattle(runAtBattle(5, run), adventure), adventure, { victory: true }).run;
+    const next = chooseTreasure({ ...won, pendingOffer: ["m-corazon"] }, adventure, { treasureId: "m-corazon" });
+    expect(next).toMatchObject({ hearts: 3, maxHearts: 3 });
+    // One defeat leaves 1 heart, the second ends the run
+    const lost = applyBattleResult(startBattle(run, adventure), adventure, { victory: false }).run;
+    expect(lost).toMatchObject({ status: "active", hearts: 1 });
+    expect(applyBattleResult(startBattle(lost, adventure), adventure, { victory: false }).run).toMatchObject({ status: "lost", hearts: 0 });
+  });
+});
+
+describe("hard mode", () => {
+  const hard = difficultyRules(adventure, "hard");
+  const rarityOf = (id: string) => adventure.treasures.find((t) => t.id === id)!.rarity;
+
+  it("offers come from the hard pools (and the normal ones from the normal pools)", () => {
+    for (const seed of Array.from({ length: 200 }, (_, i) => `hard-pools-${i}`)) {
+      const run = { ...fresh("bulbasaur", "hard"), seed };
+      for (const battle of [1, 2, 3, 4]) for (const id of generateOffer(run, adventure, battle)) expect(hard.treasurePools.tier1).toContain(id);
+      for (const id of generateOffer(run, adventure, 5)) expect(hard.treasurePools.major).toContain(id);
+      for (const battle of [6, 7, 8, 9]) for (const id of generateOffer(run, adventure, battle)) expect(hard.treasurePools.tier2).toContain(id);
+      expect(generateOffer(run, adventure, 10)).toEqual([]);
+      for (const id of generateOffer({ ...fresh("bulbasaur", "normal"), seed }, adventure, 1)) expect(adventure.treasurePools.tier1).toContain(id);
+    }
+    expect(offerCandidates(fresh("charmander", "hard"), adventure, 1)).not.toContain("t1-pociones");
+  });
+
+  it("uses the hard offer weights: epics show up more often than in normal", () => {
+    const epicShare = (difficulty: "normal" | "hard") => {
+      let epics = 0;
+      let total = 0;
+      for (let i = 0; i < 600; i++) {
+        for (const id of generateOffer({ ...fresh("charmander", difficulty), seed: `weights-${i}` }, adventure, 6)) {
+          total++;
+          if (rarityOf(id) === "epic") epics++;
+        }
+      }
+      return epics / total;
+    };
+    expect(epicShare("hard")).toBeGreaterThan(epicShare("normal") + 0.1);
+    // The weights come from the difficulty: an epic-only hard table offers its epics first
+    const epicOnly = structuredClone(adventure);
+    epicOnly.difficulties.hard.treasureOffer = { rarityWeights: { common: 1, rare: 1, epic: 1000 }, maxPassives: 1 };
+    for (let i = 0; i < 100; i++) {
+      const offer = generateOffer({ ...fresh("charmander", "hard"), seed: `epic-${i}` }, epicOnly, 6);
+      expect(offer.filter((id) => rarityOf(id) === "epic").length).toBeGreaterThanOrEqual(2);
+    }
+  });
+
+  it("new hard treasures resolve with the starter's line and enter the deck", () => {
+    const criador = adventure.treasures.find((t) => t.id === "h5-criador")!;
+    expect(resolveTreasureCards(criador, adventure.starters[1])).toEqual([
+      { cardId: "base-set-002-blastoise", qty: 1 },
+      { cardId: "base-set-076-pokemon-breeder", qty: 2 },
+    ]);
+    const won = applyBattleResult(startBattle(fresh("squirtle", "hard"), adventure), adventure, { victory: true }).run;
+    const run = chooseTreasure({ ...won, pendingOffer: ["h1-kangaskhan"] }, adventure, { treasureId: "h1-kangaskhan" });
+    expect(copies(run, "jungle-005-kangaskhan")).toBe(1);
+    expect(copies(run, DCE)).toBe(2);
+  });
+
+  it("battleConfig uses the hard rival deck and the hard rules of the battle", () => {
+    const hard1 = battleConfig(fresh("charmander", "hard"), adventure);
+    expect(hard1.opponentDeck).toEqual(rivalDeckOf(adventure.battles[0], "hard", "charmander"));
+    expect(hard1.opponentDeck.some((e) => e.cardId === "base-set-040-raticate")).toBe(true);
+    expect(battleConfig(fresh("charmander", "normal"), adventure).opponentDeck.some((e) => e.cardId === "base-set-040-raticate")).toBe(false);
+
+    const boss = battleConfig(runAtBattle(5, fresh("charmander", "hard")), adventure);
+    expect(boss.modifiers).toContainEqual({ type: "prizeCount", opponent: 2 });
+    expect(battleConfig(runAtBattle(5), adventure).modifiers).toEqual([]);
+    expect(battleRules(adventure, 5, "hard")).toEqual(boss.modifiers);
+
+    const final = battleConfig(runAtBattle(10, fresh("squirtle", "hard")), adventure);
+    expect(final.opponentDeck[0].cardId).toBe("base-set-044-bulbasaur");
+    expect(final.modifiers.map((m) => m.type)).toEqual(["prizeCount", "bonusCards", "opponentPassives"]);
   });
 });
 
@@ -253,8 +334,19 @@ describe("offers by rarity", () => {
     const won = applyBattleResult(startBattle(runAtBattle(2), adventure), adventure, { victory: true }).run;
     const run = chooseTreasure({ ...won, adventureVersion: 1, pendingOffer: ["t1-energia", "t1-bill", "t1-moneda"] }, adventure, { treasureId: "t1-energia" });
     expect(run).toMatchObject({ currentBattle: 3, passives: ["start_attached_energy"], treasuresTaken: ["t1-energia"] });
-    expect(adventure.version).toBe(2);
-    expect(fresh().adventureVersion).toBe(2);
+    expect(adventure.version).toBe(3);
+    expect(fresh().adventureVersion).toBe(3);
+  });
+
+  it("live hard runs of version 2 keep their hearts and stored offer; later offers use the hard pools", () => {
+    // A version-2 hard run: 3 hearts and a stored offer from the old (shared) pools
+    const won = applyBattleResult(startBattle(runAtBattle(2, fresh("charmander", "hard")), adventure), adventure, { victory: true }).run;
+    const v2 = { ...won, adventureVersion: 2, hearts: 3, maxHearts: 3, pendingOffer: ["t1-pociones", "t1-bill", "t1-moneda"] };
+    const run = chooseTreasure(v2, adventure, { treasureId: "t1-pociones" });
+    expect(run).toMatchObject({ currentBattle: 3, hearts: 3, maxHearts: 3, adventureVersion: 2 });
+    expect(copies(run, "base-set-094-potion")).toBe(4);
+    const next = applyBattleResult(startBattle(run, adventure), adventure, { victory: true }).run;
+    for (const id of next.pendingOffer) expect(difficultyRules(adventure, "hard").treasurePools.tier1).toContain(id);
   });
 });
 

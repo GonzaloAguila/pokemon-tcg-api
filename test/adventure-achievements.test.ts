@@ -2,7 +2,8 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { prisma } from "../src/lib/prisma.js";
-import { checkAndUpdateProgress, claimAchievement, listAchievements } from "../src/modules/achievements/achievements.service.js";
+import { backfillAchievementCosmetics, checkAndUpdateProgress, claimAchievement, listAchievements } from "../src/modules/achievements/achievements.service.js";
+import { AVAILABLE_PLAYMATS } from "../src/modules/prizes/catalog.js";
 import * as adventure from "../src/modules/adventure/adventure.service.js";
 import { validateAdventure } from "../src/modules/adventure/content/load.js";
 import { isGrantableCosmetic } from "../src/modules/admin/grantable-cosmetics.js";
@@ -74,8 +75,8 @@ describe("adventure achievements", () => {
 
   it("is claimed through the existing claim with the tier's reward", async () => {
     const { user } = await withProgress({ clearsNormal: 1, flawlessClears: 1 });
-    expect(await claimAchievement(user.id, "adventure-1-clear-normal")).toEqual({ achievementId: "adventure-1-clear-normal", coins: 200, coupons: 0 });
-    expect(await claimAchievement(user.id, "adventure-1-flawless")).toEqual({ achievementId: "adventure-1-flawless", coins: 500, coupons: 0 });
+    expect(await claimAchievement(user.id, "adventure-1-clear-normal")).toEqual({ achievementId: "adventure-1-clear-normal", coins: 200, coupons: 0, cosmetic: null });
+    expect(await claimAchievement(user.id, "adventure-1-flawless")).toEqual({ achievementId: "adventure-1-flawless", coins: 500, coupons: 0, cosmetic: null });
     expect((await getBalances(user.id)).coins).toBe(700);
     await expect(claimAchievement(user.id, "adventure-1-clear-hard")).rejects.toThrow("todavía no está completo");
   });
@@ -107,6 +108,71 @@ describe("adventure achievements", () => {
     await winRun({ heartsLost: 0, treasuresTaken: [], offTypeUsed: false });
     list = await listAchievements(user.id);
     expect([claimable("adventure-1-flawless"), claimable("adventure-1-purist"), claimable("adventure-1-monotype")]).toEqual([true, true, true]);
+  });
+});
+
+describe("Esta vez en serio (hard clear): platinum + the Ciudad Plateada playmat", () => {
+  const PLAYMAT = "playmat-ciudad-plateada";
+  const owns = async (userId: string) => (await prisma.userPlaymat.count({ where: { userId, playmatId: PLAYMAT } })) === 1;
+
+  it("is platinum and shows its cosmetic in GET /achievements", async () => {
+    const { state } = await withProgress({ clearsHard: 1 });
+    expect(state("adventure-1-clear-hard")).toMatchObject({
+      tier: "platinum",
+      reward: { coins: 1500, coupons: 10 },
+      cosmetic: { type: "playmat", id: PLAYMAT, name: "Tapete Ciudad Plateada", imageUrl: "/bg/bg-ciudad-plateada.jpg" },
+      claimable: true,
+    });
+    expect(state("adventure-1-clear-normal").cosmetic).toBeNull();
+  });
+
+  it("the claim grants the playmat with the tier reward, in the same transaction, once (also under concurrency)", async () => {
+    const { user } = await withProgress({ clearsHard: 1 });
+    await expect(updateCosmetics(user.id, { activePlaymatId: PLAYMAT })).rejects.toThrow("No posees ese tapete");
+    const results = await Promise.allSettled([
+      claimAchievement(user.id, "adventure-1-clear-hard"),
+      claimAchievement(user.id, "adventure-1-clear-hard"),
+      claimAchievement(user.id, "adventure-1-clear-hard"),
+    ]);
+    const ok = results.filter((r) => r.status === "fulfilled") as PromiseFulfilledResult<Awaited<ReturnType<typeof claimAchievement>>>[];
+    expect(ok).toHaveLength(1);
+    expect(ok[0].value).toEqual({
+      achievementId: "adventure-1-clear-hard",
+      coins: 1500,
+      coupons: 10,
+      cosmetic: { type: "playmat", id: PLAYMAT, name: "Tapete Ciudad Plateada", imageUrl: "/bg/bg-ciudad-plateada.jpg" },
+    });
+    expect(await prisma.userPlaymat.count({ where: { userId: user.id, playmatId: PLAYMAT } })).toBe(1);
+    expect((await getBalances(user.id)).coins).toBe(1500);
+    expect(await updateCosmetics(user.id, { activePlaymatId: PLAYMAT })).toMatchObject({ activePlaymatId: PLAYMAT });
+  });
+
+  it("a player who already owns it (admin grant) still claims fine", async () => {
+    const { user } = await withProgress({ clearsHard: 1 });
+    await prisma.userPlaymat.create({ data: { userId: user.id, playmatId: PLAYMAT } });
+    await claimAchievement(user.id, "adventure-1-clear-hard");
+    expect(await owns(user.id)).toBe(true);
+  });
+
+  it("earlier claimers get it from the one-off backfill, once; unclaimed players don't", async () => {
+    const early = await withProgress({ clearsHard: 1 });
+    const pending = await withProgress({ clearsHard: 1 });
+    // Claimed before the achievement had a cosmetic: unlockedAt set, no playmat
+    await prisma.userAchievement.update({
+      where: { userId_achievementId: { userId: early.user.id, achievementId: "adventure-1-clear-hard" } },
+      data: { unlockedAt: new Date() },
+    });
+    const first = await backfillAchievementCosmetics();
+    expect(first["adventure-1-clear-hard"]).toBeGreaterThanOrEqual(1);
+    expect(await owns(early.user.id)).toBe(true);
+    expect(await owns(pending.user.id)).toBe(false);
+    await backfillAchievementCosmetics();
+    expect(await prisma.userPlaymat.count({ where: { userId: early.user.id, playmatId: PLAYMAT } })).toBe(1);
+  });
+
+  it("admins can grant it; it is never sold", () => {
+    expect(isGrantableCosmetic("playmat", PLAYMAT)).toBe(true);
+    expect(AVAILABLE_PLAYMATS.some((p) => p.itemId === PLAYMAT)).toBe(false);
   });
 });
 

@@ -16,9 +16,11 @@ import { claimOnce, hasClaim } from "../economy/claims.js";
 import { checkAndUpdateProgress } from "../achievements/achievements.service.js";
 import { cardOf } from "./content/cards.js";
 import { getAdventure, getAdventures, type Adventure } from "./content/load.js";
+import { battleModifiers, difficultyRules, rivalDeckOf } from "./content/difficulty.js";
 import { describeModifier } from "./content/modifiers.js";
-import type { AdventureBattle, AdventureReward, Difficulty } from "./content/schema.js";
-import type { AdventurePassive, BattleModifier, CardEntry } from "./engine-types.js";
+import { DIFFICULTIES, type AdventureBattle, type AdventureReward, type Difficulty } from "./content/schema.js";
+import { achievementCosmeticView } from "./cosmetics.js";
+import type { AdventurePassive, CardEntry } from "./engine-types.js";
 import * as logic from "./run-logic.js";
 import { RunPhaseError, RunRuleError, type DeckEdit, type RunEvent, type RunState, type TreasureChoice } from "./run-logic.types.js";
 
@@ -125,7 +127,8 @@ function leadOf(battle: AdventureBattle, deck: readonly CardEntry[]): string | n
   return battle.opponent.lead ?? deck.find((e) => isPokemonCard(cardOf(e.cardId)))?.cardId ?? null;
 }
 
-const rulesOf = (battle: AdventureBattle) => battle.modifiers.map((m) => describeModifier(m as BattleModifier));
+/** The battle's rules as Spanish lines, in a run of that difficulty. */
+const rulesOf = (battle: AdventureBattle, difficulty: Difficulty) => battleModifiers(battle, difficulty).map(describeModifier);
 
 function treasureView(adventure: Adventure, state: RunState, id: string) {
   const treasure = adventure.treasures.find((t) => t.id === id);
@@ -171,7 +174,7 @@ export function serializeRun(row: AdventureRun) {
           id: battle.id,
           location: battle.location,
           opponent: { name: battle.opponent.name, trainerClass: battle.opponent.trainerClass, lead: leadOf(battle, rivalDeck) },
-          rules: rulesOf(battle),
+          rules: rulesOf(battle, state.difficulty),
         }
       : null,
     createdAt: row.createdAt,
@@ -217,7 +220,22 @@ async function rewardsView(userId: string, adventure: Adventure) {
 }
 
 const achievementsView = (adventure: Adventure) =>
-  adventure.achievements.map(({ id, name, description, tier }) => ({ id, name, description, tier }));
+  adventure.achievements.map(({ id, name, description, tier, cosmetic }) => ({
+    id,
+    name,
+    description,
+    tier,
+    cosmetic: achievementCosmeticView(cosmetic),
+  }));
+
+/** Per difficulty: the new-run screen's line and hearts (and, in the detail, its offer rules). */
+function difficultiesView(adventure: Adventure, detail: boolean) {
+  const view = (difficulty: Difficulty) => {
+    const { description, hearts, treasurePools, treasureOffer } = difficultyRules(adventure, difficulty);
+    return detail ? { description, hearts, treasurePools, treasureOffer } : { description, hearts };
+  };
+  return Object.fromEntries(DIFFICULTIES.map((d) => [d, view(d)])) as Record<Difficulty, ReturnType<typeof view>>;
+}
 
 /** GET /adventures */
 export async function listAdventures(userId: string) {
@@ -230,6 +248,7 @@ export async function listAdventures(userId: string) {
       description: adventure.description,
       starters: adventure.starters.map((s) => ({ id: s.id, name: s.name, energyType: s.energyType })),
       battleCount: adventure.battles.length,
+      difficulties: difficultiesView(adventure, false),
       rewards: await rewardsView(userId, adventure),
       progress: await progressOf(prisma, userId, adventure.id),
       achievements: achievementsView(adventure),
@@ -251,7 +270,9 @@ export async function listAdventures(userId: string) {
 
 /**
  * GET /adventures/:id — rival decks only of the battles the active run already beat; the battle
- * rules of those and of the current one; future battles show only who and where.
+ * rules of those and of the current one (the run's difficulty); future battles show only who and
+ * where. `treasurePools` are the active run's difficulty's (normal without a run); `difficulties`
+ * has every difficulty's.
  */
 export async function getAdventureDetail(userId: string, adventureId: string) {
   const adventure = adventureOf(adventureId);
@@ -263,6 +284,7 @@ export async function getAdventureDetail(userId: string, adventureId: string) {
   const beatenUpTo = !active ? 0 : active.phase === "choosing_treasure" ? active.currentBattle : active.currentBattle - 1;
   const current = active && (active.phase === "pre_battle" || active.phase === "in_battle") ? active.currentBattle : null;
   const unlocked = new Set(unlocks.map((u) => u.starterId));
+  const difficulty: Difficulty = active?.difficulty ?? "normal";
 
   return {
     id: adventure.id,
@@ -270,6 +292,7 @@ export async function getAdventureDetail(userId: string, adventureId: string) {
     name: adventure.name,
     description: adventure.description,
     rules: adventure.rules,
+    difficulties: difficultiesView(adventure, true),
     starters: adventure.starters.map((s) => ({
       id: s.id,
       name: s.name,
@@ -279,9 +302,7 @@ export async function getAdventureDetail(userId: string, adventureId: string) {
       locked: !!s.requiresUnlock && !unlocked.has(s.id),
     })),
     battles: adventure.battles.map((battle) => {
-      const deck = active
-        ? logic.rivalDeckFor(adventure, battle.index, active.difficulty, active.starterId)
-        : (battle.opponent.deck ?? battle.opponent.deckByDifficulty!.normal);
+      const deck = rivalDeckOf(battle, difficulty, active?.starterId ?? "") ?? rivalDeckOf(battle, "normal", "")!;
       const beaten = battle.index <= beatenUpTo;
       return {
         index: battle.index,
@@ -291,12 +312,12 @@ export async function getAdventureDetail(userId: string, adventureId: string) {
         treasurePool: battle.treasurePool,
         beaten,
         current: battle.index === current,
-        rules: beaten || battle.index === current ? rulesOf(battle) : null,
+        rules: beaten || battle.index === current ? rulesOf(battle, difficulty) : null,
         rivalDeck: beaten ? deck : null,
       };
     }),
     treasures: adventure.treasures,
-    treasurePools: adventure.treasurePools,
+    treasurePools: difficultyRules(adventure, difficulty).treasurePools,
     rewards: await rewardsView(userId, adventure),
     achievements: achievementsView(adventure),
     activeRunId: activeRow?.id ?? null,

@@ -329,9 +329,9 @@ describe("GET /api/adventures", () => {
     expect(battles.filter((b) => b.rules !== null).map((b) => b.index)).toEqual([1, 2, 3, 4, 5, 6, 7]);
     expect(battles[6]).toMatchObject({ current: true, beaten: false });
     expect(battles[6].rules).toEqual([
-      "Mesa a 1 premio por jugador",
+      "Premios: tú 1, el rival 2",
       "Los Metapod del rival no dan premios",
-      "El rival empieza con Metapod activo y 2 Metapod en la banca",
+      "El rival empieza con Metapod activo y Caterpie en la banca",
       "Empiezas con Pokémon Flute, Gust of Wind y PlusPower en la mano",
     ]);
     expect(JSON.stringify(battles.slice(6))).not.toContain("base-set-099-grass-energy");
@@ -342,6 +342,48 @@ describe("GET /api/adventures", () => {
     expect(treasures.every((t) => ["common", "rare", "epic"].includes(t.rarity))).toBe(true);
     expect(treasures.find((t) => t.id === "t1-energia")?.rarity).toBe("epic");
     expect((await app.request("GET", "/api/adventures/nope", { token })).status).toBe(404);
+  });
+
+  it("difficulties: hearts and description per difficulty in the list; the detail adds their offer rules", async () => {
+    const { token } = await player();
+    const list = (await app.request("GET", "/api/adventures", { token })).body[0];
+    expect(list.difficulties).toEqual({
+      normal: { hearts: 3, description: expect.any(String) },
+      hard: { hearts: 2, description: expect.any(String) },
+    });
+    const detail = (await app.request("GET", `/api/adventures/${ADVENTURE}`, { token })).body;
+    expect(detail.difficulties.hard).toMatchObject({
+      hearts: 2,
+      treasureOffer: { rarityWeights: { common: 4, rare: 4, epic: 2 }, maxPassives: 1 },
+      treasurePools: { tier1: expect.arrayContaining(["h1-kangaskhan"]) },
+    });
+    expect(detail.difficulties.normal.treasurePools.tier1).toContain("t1-pociones");
+    // Without a run (or in a normal one) the top-level pools are the normal ones
+    expect(detail.treasurePools.tier1).toContain("t1-pociones");
+    const clearHard = detail.achievements.find((a: { id: string }) => a.id === "adventure-1-clear-hard");
+    expect(clearHard).toMatchObject({ tier: "platinum", cosmetic: { type: "playmat", id: "playmat-ciudad-plateada", imageUrl: "/bg/bg-ciudad-plateada.jpg" } });
+    expect(list.achievements.find((a: { id: string }) => a.id === "adventure-1-flawless").cosmetic).toBeNull();
+  });
+
+  it("a hard run: 2 hearts, the hard rules of its battles, the hard rival decks and pools", async () => {
+    const { token } = await player();
+    const created = await startRun(token, { difficulty: "hard", starterId: "squirtle" });
+    expect(created.status).toBe(201);
+    expect(created.body).toMatchObject({ difficulty: "hard", hearts: 2, maxHearts: 2 });
+    await setRun(created.body.id, { currentBattle: 5 });
+    const run = (await app.request("GET", "/api/adventure/runs/active", { token })).body;
+    expect(run.currentBattleInfo).toMatchObject({
+      index: 5,
+      rules: ["El rival juega con 2 premios", "El rival empieza con Potion en la mano"],
+    });
+    const detail = (await app.request("GET", `/api/adventures/${ADVENTURE}`, { token })).body;
+    expect(detail.battles[4].rules).toEqual(run.currentBattleInfo.rules);
+    expect(detail.battles[0].rules).toEqual([]);
+    expect(detail.battles[0].rivalDeck).toContainEqual({ cardId: "base-set-040-raticate", qty: 1 });
+    expect(detail.battles[1].rules).toEqual(["El rival empieza con Doduo activo y Pidgey en la banca"]);
+    expect(detail.treasurePools.tier1).toContain("h1-kangaskhan");
+    expect(detail.treasurePools.tier1).not.toContain("t1-pociones");
+    expect(detail.battles[9].opponent.lead).toBe("base-set-044-bulbasaur");
   });
 
   it("detail without an active run shows no rival decks nor rules", async () => {

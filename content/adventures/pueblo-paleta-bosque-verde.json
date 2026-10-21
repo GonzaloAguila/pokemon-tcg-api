@@ -1,16 +1,9 @@
 {
   "id": "pueblo-paleta-bosque-verde",
-  "version": 2,
+  "version": 3,
   "name": "De Pueblo Paleta al Bosque Verde",
   "description": "Elige tu inicial y abre camino por la Ruta 1, Ciudad Verde, la Ruta 22 y el Bosque Verde hasta las puertas de Ciudad Plateada, donde te espera tu rival.",
-  "rules": {
-    "hearts": 3,
-    "prizeCount": 3,
-    "openingHand": 7,
-    "minDeckSize": 20,
-    "maxDeckSize": 40,
-    "maxCopies": null
-  },
+  "rules": { "hearts": 3, "prizeCount": 3, "openingHand": 7, "minDeckSize": 20, "maxDeckSize": 40, "maxCopies": null },
   "starters": [
     {
       "id": "charmander",
@@ -66,12 +59,23 @@
       "opponent": {
         "name": "Lucas",
         "trainerClass": "Joven",
-        "deck": [
-          { "cardId": "base-set-061-rattata", "qty": 4 },
-          { "cardId": "base-set-057-pidgey", "qty": 3 },
-          { "cardId": "base-set-094-potion", "qty": 1 },
-          { "cardId": "base-set-097-fighting-energy", "qty": 12 }
-        ]
+        "deckByDifficulty": {
+          "normal": [
+            { "cardId": "base-set-061-rattata", "qty": 4 },
+            { "cardId": "base-set-057-pidgey", "qty": 3 },
+            { "cardId": "base-set-094-potion", "qty": 1 },
+            { "cardId": "base-set-097-fighting-energy", "qty": 12 }
+          ],
+          "hard": [
+            { "cardId": "base-set-061-rattata", "qty": 4 },
+            { "cardId": "base-set-040-raticate", "qty": 1 },
+            { "cardId": "base-set-057-pidgey", "qty": 3 },
+            { "cardId": "base-set-022-pidgeotto", "qty": 1 },
+            { "cardId": "base-set-094-potion", "qty": 1 },
+            { "cardId": "base-set-091-bill", "qty": 1 },
+            { "cardId": "base-set-097-fighting-energy", "qty": 9 }
+          ]
+        }
       },
       "treasurePool": "tier1",
       "modifiers": []
@@ -83,15 +87,28 @@
       "opponent": {
         "name": "Sofía",
         "trainerClass": "Chica",
-        "deck": [
-          { "cardId": "base-set-057-pidgey", "qty": 4 },
-          { "cardId": "base-set-048-doduo", "qty": 3 },
-          { "cardId": "base-set-094-potion", "qty": 2 },
-          { "cardId": "base-set-097-fighting-energy", "qty": 11 }
-        ]
+        "deckByDifficulty": {
+          "normal": [
+            { "cardId": "base-set-057-pidgey", "qty": 4 },
+            { "cardId": "base-set-048-doduo", "qty": 3 },
+            { "cardId": "base-set-094-potion", "qty": 2 },
+            { "cardId": "base-set-097-fighting-energy", "qty": 11 }
+          ],
+          "hard": [
+            { "cardId": "base-set-057-pidgey", "qty": 3 },
+            { "cardId": "base-set-022-pidgeotto", "qty": 1 },
+            { "cardId": "base-set-048-doduo", "qty": 3 },
+            { "cardId": "jungle-034-dodrio", "qty": 1 },
+            { "cardId": "jungle-054-jigglypuff", "qty": 2 },
+            { "cardId": "base-set-094-potion", "qty": 1 },
+            { "cardId": "base-set-091-bill", "qty": 1 },
+            { "cardId": "base-set-097-fighting-energy", "qty": 8 }
+          ]
+        }
       },
       "treasurePool": "tier1",
-      "modifiers": []
+      "modifiers": [],
+      "modifiersByDifficulty": { "hard": [{ "type": "opponentSetup", "active": ["base-set-048-doduo"], "bench": [["base-set-057-pidgey"]] }] }
     },
     {
       "index": 3,
@@ -101,17 +118,30 @@
         "name": "Bruno",
         "trainerClass": "Joven",
         "lead": "base-set-040-raticate",
-        "deck": [
-          { "cardId": "base-set-061-rattata", "qty": 4 },
-          { "cardId": "base-set-040-raticate", "qty": 2 },
-          { "cardId": "base-set-057-pidgey", "qty": 2 },
-          { "cardId": "base-set-094-potion", "qty": 1 },
-          { "cardId": "base-set-091-bill", "qty": 1 },
-          { "cardId": "base-set-097-fighting-energy", "qty": 10 }
-        ]
+        "deckByDifficulty": {
+          "normal": [
+            { "cardId": "base-set-061-rattata", "qty": 4 },
+            { "cardId": "base-set-040-raticate", "qty": 2 },
+            { "cardId": "base-set-057-pidgey", "qty": 2 },
+            { "cardId": "base-set-094-potion", "qty": 1 },
+            { "cardId": "base-set-091-bill", "qty": 1 },
+            { "cardId": "base-set-097-fighting-energy", "qty": 10 }
+          ],
+          "hard": [
+            { "cardId": "base-set-061-rattata", "qty": 4 },
+            { "cardId": "base-set-040-raticate", "qty": 2 },
+            { "cardId": "jungle-056-meowth", "qty": 2 },
+            { "cardId": "jungle-042-persian", "qty": 1 },
+            { "cardId": "base-set-057-pidgey", "qty": 2 },
+            { "cardId": "base-set-091-bill", "qty": 1 },
+            { "cardId": "base-set-084-pluspower", "qty": 1 },
+            { "cardId": "base-set-097-fighting-energy", "qty": 8 }
+          ]
+        }
       },
       "treasurePool": "tier1",
-      "modifiers": []
+      "modifiers": [],
+      "modifiersByDifficulty": { "hard": [{ "type": "opponentSetup", "active": ["base-set-061-rattata"], "bench": [["jungle-056-meowth"]] }] }
     },
     {
       "index": 4,
@@ -120,17 +150,33 @@
       "opponent": {
         "name": "Ramiro",
         "trainerClass": "Pescador",
-        "deck": [
-          { "cardId": "base-set-035-magikarp", "qty": 4 },
-          { "cardId": "base-set-059-poliwag", "qty": 3 },
-          { "cardId": "base-set-038-poliwhirl", "qty": 1 },
-          { "cardId": "base-set-065-staryu", "qty": 2 },
-          { "cardId": "base-set-094-potion", "qty": 1 },
-          { "cardId": "base-set-102-water-energy", "qty": 9 }
-        ]
+        "deckByDifficulty": {
+          "normal": [
+            { "cardId": "base-set-035-magikarp", "qty": 4 },
+            { "cardId": "base-set-059-poliwag", "qty": 3 },
+            { "cardId": "base-set-038-poliwhirl", "qty": 1 },
+            { "cardId": "base-set-065-staryu", "qty": 2 },
+            { "cardId": "base-set-094-potion", "qty": 1 },
+            { "cardId": "base-set-102-water-energy", "qty": 9 }
+          ],
+          "hard": [
+            { "cardId": "base-set-035-magikarp", "qty": 1 },
+            { "cardId": "base-set-059-poliwag", "qty": 3 },
+            { "cardId": "base-set-038-poliwhirl", "qty": 2 },
+            { "cardId": "base-set-065-staryu", "qty": 3 },
+            { "cardId": "base-set-064-starmie", "qty": 1 },
+            { "cardId": "jungle-053-goldeen", "qty": 2 },
+            { "cardId": "jungle-046-seaking", "qty": 1 },
+            { "cardId": "base-set-090-super-potion", "qty": 1 },
+            { "cardId": "base-set-084-pluspower", "qty": 1 },
+            { "cardId": "base-set-091-bill", "qty": 1 },
+            { "cardId": "base-set-102-water-energy", "qty": 9 }
+          ]
+        }
       },
       "treasurePool": "tier1",
-      "modifiers": []
+      "modifiers": [],
+      "modifiersByDifficulty": { "hard": [{ "type": "opponentPassives", "passives": ["start_attached_energy"] }] }
     },
     {
       "index": 5,
@@ -140,19 +186,39 @@
         "name": "Rick",
         "trainerClass": "Cazabichos",
         "lead": "base-set-017-beedrill",
-        "deck": [
-          { "cardId": "base-set-069-weedle", "qty": 4 },
-          { "cardId": "base-set-033-kakuna", "qty": 2 },
-          { "cardId": "base-set-017-beedrill", "qty": 1 },
-          { "cardId": "base-set-045-caterpie", "qty": 2 },
-          { "cardId": "base-set-054-metapod", "qty": 1 },
-          { "cardId": "base-set-094-potion", "qty": 1 },
-          { "cardId": "base-set-095-switch", "qty": 1 },
-          { "cardId": "base-set-099-grass-energy", "qty": 8 }
-        ]
+        "deckByDifficulty": {
+          "normal": [
+            { "cardId": "base-set-069-weedle", "qty": 4 },
+            { "cardId": "base-set-033-kakuna", "qty": 2 },
+            { "cardId": "base-set-017-beedrill", "qty": 1 },
+            { "cardId": "base-set-045-caterpie", "qty": 2 },
+            { "cardId": "base-set-054-metapod", "qty": 1 },
+            { "cardId": "base-set-094-potion", "qty": 1 },
+            { "cardId": "base-set-095-switch", "qty": 1 },
+            { "cardId": "base-set-099-grass-energy", "qty": 8 }
+          ],
+          "hard": [
+            { "cardId": "base-set-069-weedle", "qty": 4 },
+            { "cardId": "base-set-033-kakuna", "qty": 3 },
+            { "cardId": "base-set-017-beedrill", "qty": 1 },
+            { "cardId": "jungle-063-venonat", "qty": 2 },
+            { "cardId": "base-set-045-caterpie", "qty": 2 },
+            { "cardId": "base-set-054-metapod", "qty": 1 },
+            { "cardId": "base-set-094-potion", "qty": 1 },
+            { "cardId": "base-set-095-switch", "qty": 1 },
+            { "cardId": "base-set-091-bill", "qty": 1 },
+            { "cardId": "base-set-099-grass-energy", "qty": 9 }
+          ]
+        }
       },
       "treasurePool": "major",
-      "modifiers": []
+      "modifiers": [],
+      "modifiersByDifficulty": {
+        "hard": [
+          { "type": "prizeCount", "opponent": 2 },
+          { "type": "bonusCards", "side": "opponent", "cards": [{ "cardId": "base-set-094-potion", "qty": 1 }], "to": "hand" }
+        ]
+      }
     },
     {
       "index": 6,
@@ -161,17 +227,32 @@
       "opponent": {
         "name": "Ana",
         "trainerClass": "Chica",
-        "deck": [
-          { "cardId": "base-set-058-pikachu", "qty": 4 },
-          { "cardId": "base-set-067-voltorb", "qty": 3 },
-          { "cardId": "base-set-053-magnemite", "qty": 2 },
-          { "cardId": "base-set-094-potion", "qty": 2 },
-          { "cardId": "base-set-084-pluspower", "qty": 1 },
-          { "cardId": "base-set-100-lightning-energy", "qty": 8 }
-        ]
+        "deckByDifficulty": {
+          "normal": [
+            { "cardId": "base-set-058-pikachu", "qty": 4 },
+            { "cardId": "base-set-067-voltorb", "qty": 3 },
+            { "cardId": "base-set-053-magnemite", "qty": 2 },
+            { "cardId": "base-set-094-potion", "qty": 2 },
+            { "cardId": "base-set-084-pluspower", "qty": 1 },
+            { "cardId": "base-set-100-lightning-energy", "qty": 8 }
+          ],
+          "hard": [
+            { "cardId": "base-set-058-pikachu", "qty": 3 },
+            { "cardId": "base-set-014-raichu", "qty": 1 },
+            { "cardId": "base-set-067-voltorb", "qty": 2 },
+            { "cardId": "jungle-002-electrode", "qty": 1 },
+            { "cardId": "base-set-053-magnemite", "qty": 2 },
+            { "cardId": "base-set-020-electabuzz", "qty": 1 },
+            { "cardId": "base-set-084-pluspower", "qty": 1 },
+            { "cardId": "base-set-094-potion", "qty": 1 },
+            { "cardId": "base-set-091-bill", "qty": 1 },
+            { "cardId": "base-set-100-lightning-energy", "qty": 9 }
+          ]
+        }
       },
       "treasurePool": "tier2",
-      "modifiers": []
+      "modifiers": [],
+      "modifiersByDifficulty": { "hard": [{ "type": "opponentPassives", "passives": ["lucky_coin"] }] }
     },
     {
       "index": 7,
@@ -181,29 +262,34 @@
         "name": "Teo",
         "trainerClass": "Cazabichos",
         "lead": "base-set-054-metapod",
-        "deck": [
-          { "cardId": "base-set-045-caterpie", "qty": 3 },
-          { "cardId": "base-set-054-metapod", "qty": 4 },
-          { "cardId": "base-set-094-potion", "qty": 4 },
-          { "cardId": "base-set-090-super-potion", "qty": 3 },
-          { "cardId": "base-set-080-defender", "qty": 2 },
-          { "cardId": "base-set-092-energy-removal", "qty": 2 },
-          { "cardId": "base-set-095-switch", "qty": 1 },
-          { "cardId": "base-set-099-grass-energy", "qty": 21 }
-        ]
+        "deckByDifficulty": {
+          "normal": [
+            { "cardId": "base-set-045-caterpie", "qty": 3 },
+            { "cardId": "base-set-054-metapod", "qty": 4 },
+            { "cardId": "base-set-094-potion", "qty": 4 },
+            { "cardId": "base-set-090-super-potion", "qty": 3 },
+            { "cardId": "base-set-080-defender", "qty": 2 },
+            { "cardId": "base-set-092-energy-removal", "qty": 2 },
+            { "cardId": "base-set-095-switch", "qty": 1 },
+            { "cardId": "base-set-099-grass-energy", "qty": 21 }
+          ],
+          "hard": [
+            { "cardId": "base-set-045-caterpie", "qty": 3 },
+            { "cardId": "base-set-054-metapod", "qty": 4 },
+            { "cardId": "base-set-094-potion", "qty": 4 },
+            { "cardId": "base-set-090-super-potion", "qty": 3 },
+            { "cardId": "base-set-080-defender", "qty": 2 },
+            { "cardId": "base-set-092-energy-removal", "qty": 2 },
+            { "cardId": "base-set-095-switch", "qty": 1 },
+            { "cardId": "base-set-099-grass-energy", "qty": 21 }
+          ]
+        }
       },
       "treasurePool": "tier2",
       "modifiers": [
-        { "type": "prizeCount", "player": 1, "opponent": 1 },
+        { "type": "prizeCount", "player": 1, "opponent": 2 },
         { "type": "noPrizeFor", "side": "opponent", "names": ["Metapod"] },
-        {
-          "type": "opponentSetup",
-          "active": ["base-set-045-caterpie", "base-set-054-metapod"],
-          "bench": [
-            ["base-set-045-caterpie", "base-set-054-metapod"],
-            ["base-set-045-caterpie", "base-set-054-metapod"]
-          ]
-        },
+        { "type": "opponentSetup", "active": ["base-set-045-caterpie", "base-set-054-metapod"], "bench": [["base-set-045-caterpie"]] },
         {
           "type": "bonusCards",
           "side": "player",
@@ -214,7 +300,28 @@
           ],
           "to": "hand"
         }
-      ]
+      ],
+      "modifiersByDifficulty": {
+        "hard": [
+          { "type": "prizeCount", "player": 1, "opponent": 2 },
+          { "type": "noPrizeFor", "side": "opponent", "names": ["Metapod"] },
+          {
+            "type": "opponentSetup",
+            "active": ["base-set-045-caterpie", "base-set-054-metapod"],
+            "bench": [["base-set-045-caterpie", "base-set-054-metapod"], ["base-set-045-caterpie"]]
+          },
+          {
+            "type": "bonusCards",
+            "side": "player",
+            "cards": [
+              { "cardId": "base-set-086-pokemon-flute", "qty": 1 },
+              { "cardId": "base-set-093-gust-of-wind", "qty": 1 },
+              { "cardId": "base-set-084-pluspower", "qty": 1 }
+            ],
+            "to": "hand"
+          }
+        ]
+      }
     },
     {
       "index": 8,
@@ -224,18 +331,38 @@
         "name": "Mateo",
         "trainerClass": "Joven",
         "lead": "base-set-019-dugtrio",
-        "deck": [
-          { "cardId": "base-set-047-diglett", "qty": 4 },
-          { "cardId": "base-set-019-dugtrio", "qty": 1 },
-          { "cardId": "base-set-062-sandshrew", "qty": 3 },
-          { "cardId": "base-set-084-pluspower", "qty": 2 },
-          { "cardId": "base-set-091-bill", "qty": 1 },
-          { "cardId": "base-set-095-switch", "qty": 1 },
-          { "cardId": "base-set-097-fighting-energy", "qty": 8 }
-        ]
+        "deckByDifficulty": {
+          "normal": [
+            { "cardId": "base-set-047-diglett", "qty": 4 },
+            { "cardId": "base-set-019-dugtrio", "qty": 1 },
+            { "cardId": "base-set-062-sandshrew", "qty": 3 },
+            { "cardId": "base-set-084-pluspower", "qty": 2 },
+            { "cardId": "base-set-091-bill", "qty": 1 },
+            { "cardId": "base-set-095-switch", "qty": 1 },
+            { "cardId": "base-set-097-fighting-energy", "qty": 8 }
+          ],
+          "hard": [
+            { "cardId": "base-set-047-diglett", "qty": 4 },
+            { "cardId": "base-set-019-dugtrio", "qty": 2 },
+            { "cardId": "base-set-062-sandshrew", "qty": 3 },
+            { "cardId": "fossil-041-sandslash", "qty": 1 },
+            { "cardId": "jungle-050-cubone", "qty": 2 },
+            { "cardId": "jungle-039-marowak", "qty": 1 },
+            { "cardId": "base-set-084-pluspower", "qty": 2 },
+            { "cardId": "base-set-091-bill", "qty": 1 },
+            { "cardId": "base-set-095-switch", "qty": 1 },
+            { "cardId": "base-set-097-fighting-energy", "qty": 8 }
+          ]
+        }
       },
       "treasurePool": "tier2",
-      "modifiers": []
+      "modifiers": [],
+      "modifiersByDifficulty": {
+        "hard": [
+          { "type": "opponentPassives", "passives": ["start_attached_energy"] },
+          { "type": "opponentSetup", "active": ["base-set-047-diglett"], "bench": [["base-set-062-sandshrew"]] }
+        ]
+      }
     },
     {
       "index": 9,
@@ -245,19 +372,40 @@
         "name": "Óscar",
         "trainerClass": "Montañero",
         "lead": "base-set-056-onix",
-        "deck": [
-          { "cardId": "base-set-052-machop", "qty": 3 },
-          { "cardId": "base-set-034-machoke", "qty": 2 },
-          { "cardId": "base-set-056-onix", "qty": 2 },
-          { "cardId": "base-set-080-defender", "qty": 1 },
-          { "cardId": "base-set-084-pluspower", "qty": 1 },
-          { "cardId": "base-set-091-bill", "qty": 1 },
-          { "cardId": "base-set-094-potion", "qty": 1 },
-          { "cardId": "base-set-097-fighting-energy", "qty": 9 }
-        ]
+        "deckByDifficulty": {
+          "normal": [
+            { "cardId": "base-set-052-machop", "qty": 3 },
+            { "cardId": "base-set-034-machoke", "qty": 2 },
+            { "cardId": "base-set-056-onix", "qty": 2 },
+            { "cardId": "base-set-080-defender", "qty": 1 },
+            { "cardId": "base-set-084-pluspower", "qty": 1 },
+            { "cardId": "base-set-091-bill", "qty": 1 },
+            { "cardId": "base-set-094-potion", "qty": 1 },
+            { "cardId": "base-set-097-fighting-energy", "qty": 9 }
+          ],
+          "hard": [
+            { "cardId": "base-set-052-machop", "qty": 4 },
+            { "cardId": "base-set-034-machoke", "qty": 3 },
+            { "cardId": "base-set-008-machamp", "qty": 1 },
+            { "cardId": "base-set-056-onix", "qty": 2 },
+            { "cardId": "fossil-047-geodude", "qty": 2 },
+            { "cardId": "fossil-037-graveler", "qty": 1 },
+            { "cardId": "base-set-080-defender", "qty": 2 },
+            { "cardId": "base-set-084-pluspower", "qty": 2 },
+            { "cardId": "base-set-091-bill", "qty": 1 },
+            { "cardId": "base-set-094-potion", "qty": 1 },
+            { "cardId": "base-set-097-fighting-energy", "qty": 11 }
+          ]
+        }
       },
       "treasurePool": "tier2",
-      "modifiers": []
+      "modifiers": [],
+      "modifiersByDifficulty": {
+        "hard": [
+          { "type": "opponentSetup", "active": ["base-set-056-onix"], "bench": [["base-set-052-machop"]] },
+          { "type": "opponentPassives", "passives": ["start_attached_energy"] }
+        ]
+      }
     },
     {
       "index": 10,
@@ -322,18 +470,46 @@
         }
       },
       "treasurePool": null,
-      "modifiers": []
+      "modifiers": [],
+      "modifiersByDifficulty": {
+        "hard": [
+          { "type": "prizeCount", "opponent": 2 },
+          { "type": "bonusCards", "side": "opponent", "cards": [{ "cardId": "base-set-084-pluspower", "qty": 1 }], "to": "hand" },
+          { "type": "opponentPassives", "passives": ["start_attached_energy"] }
+        ]
+      }
     }
   ],
+  "difficulties": {
+    "normal": { "description": "La aventura clásica: 3 corazones, rivales a tu medida y los tesoros de siempre." },
+    "hard": {
+      "description": "2 corazones, rivales con mazos evolucionados y reglas de jefe, y tesoros más poderosos pero arriesgados.",
+      "hearts": 2,
+      "treasurePools": {
+        "tier1": ["h1-cazador", "h1-emboscada", "h1-apuesta", "t1-evolucion", "h1-tijera", "t1-moneda", "h1-kangaskhan"],
+        "major": ["m-final", "m-atajo", "m-corazon", "h5-criador"],
+        "tier2": [
+          "h2-todo-o-nada",
+          "h2-golpe-bajo",
+          "t1-energia",
+          "h2-peso-pesado",
+          "h2-bandada",
+          "t2-dce",
+          "t2-removal",
+          "t2-plus",
+          "h2-buscador",
+          "t2-mano"
+        ]
+      },
+      "treasureOffer": { "rarityWeights": { "common": 4, "rare": 4, "epic": 2 }, "maxPassives": 1 }
+    }
+  },
   "treasurePools": {
     "tier1": ["t1-evolucion", "t1-pociones", "t1-bill", "t1-tactica", "t1-pikachu", "t1-moneda"],
     "major": ["m-final", "m-corazon", "m-atajo", "m-profesor"],
     "tier2": ["t2-oak", "t2-superpocion", "t2-plus", "t2-removal", "t2-bandada", "t2-defensa", "t2-dce", "t2-mano", "t1-energia"]
   },
-  "treasureOffer": {
-    "rarityWeights": { "common": 6, "rare": 3, "epic": 1 },
-    "maxPassives": 1
-  },
+  "treasureOffer": { "rarityWeights": { "common": 6, "rare": 3, "epic": 1 }, "maxPassives": 1 },
   "treasures": [
     {
       "id": "t1-evolucion",
@@ -486,6 +662,98 @@
       "rarity": "common",
       "kind": "passive",
       "passive": "opening_hand_plus_1"
+    },
+    {
+      "id": "h1-cazador",
+      "name": "Cazador",
+      "description": "+2 Poké Ball",
+      "rarity": "common",
+      "kind": "cards",
+      "cards": [{ "cardId": "jungle-064-poke-ball", "qty": 2 }]
+    },
+    {
+      "id": "h1-emboscada",
+      "name": "Emboscada",
+      "description": "+1 Gust of Wind y +1 PlusPower",
+      "rarity": "common",
+      "kind": "cards",
+      "cards": [{ "cardId": "base-set-093-gust-of-wind", "qty": 1 }, { "cardId": "base-set-084-pluspower", "qty": 1 }]
+    },
+    {
+      "id": "h1-apuesta",
+      "name": "Apuesta",
+      "description": "+1 Gambler y +1 Bill",
+      "rarity": "common",
+      "kind": "cards",
+      "cards": [{ "cardId": "fossil-060-gambler", "qty": 1 }, { "cardId": "base-set-091-bill", "qty": 1 }]
+    },
+    {
+      "id": "h1-tijera",
+      "name": "Filo del bosque",
+      "description": "+1 Scyther y +1 Double Colorless Energy",
+      "rarity": "rare",
+      "kind": "cards",
+      "cards": [{ "cardId": "jungle-010-scyther", "qty": 1 }, { "cardId": "base-set-096-double-colorless-energy", "qty": 1 }]
+    },
+    {
+      "id": "h1-kangaskhan",
+      "name": "Puño cometa",
+      "description": "+1 Kangaskhan y +2 Double Colorless Energy",
+      "rarity": "epic",
+      "kind": "cards",
+      "cards": [{ "cardId": "jungle-005-kangaskhan", "qty": 1 }, { "cardId": "base-set-096-double-colorless-energy", "qty": 2 }]
+    },
+    {
+      "id": "h5-criador",
+      "name": "Criador experto",
+      "description": "+1 Stage 2 de tu inicial y +2 Pokémon Breeder",
+      "rarity": "epic",
+      "kind": "cards",
+      "cards": [{ "ref": "starter.stage2", "qty": 1 }, { "cardId": "base-set-076-pokemon-breeder", "qty": 2 }]
+    },
+    {
+      "id": "h2-todo-o-nada",
+      "name": "Todo o nada",
+      "description": "+2 Professor Oak y +1 Computer Search: robas mucho, pero descartas tu mano",
+      "rarity": "epic",
+      "kind": "cards",
+      "cards": [{ "cardId": "base-set-088-professor-oak", "qty": 2 }, { "cardId": "base-set-071-computer-search", "qty": 1 }]
+    },
+    {
+      "id": "h2-golpe-bajo",
+      "name": "Golpe bajo",
+      "description": "+2 Super Energy Removal: le quitas 2 energías al rival descartando 1 tuya",
+      "rarity": "epic",
+      "kind": "cards",
+      "cards": [{ "cardId": "base-set-079-super-energy-removal", "qty": 2 }]
+    },
+    {
+      "id": "h2-peso-pesado",
+      "name": "Peso pesado",
+      "description": "+1 Snorlax y +1 Double Colorless Energy",
+      "rarity": "rare",
+      "kind": "cards",
+      "cards": [{ "cardId": "jungle-011-snorlax", "qty": 1 }, { "cardId": "base-set-096-double-colorless-energy", "qty": 1 }]
+    },
+    {
+      "id": "h2-bandada",
+      "name": "Bandada veloz",
+      "description": "+1 Pidgey, +1 Pidgeotto y +1 Pidgeot",
+      "rarity": "rare",
+      "kind": "cards",
+      "cards": [
+        { "cardId": "base-set-057-pidgey", "qty": 1 },
+        { "cardId": "base-set-022-pidgeotto", "qty": 1 },
+        { "cardId": "jungle-008-pidgeot", "qty": 1 }
+      ]
+    },
+    {
+      "id": "h2-buscador",
+      "name": "Buscador",
+      "description": "+1 Computer Search y +1 Energy Retrieval",
+      "rarity": "common",
+      "kind": "cards",
+      "cards": [{ "cardId": "base-set-071-computer-search", "qty": 1 }, { "cardId": "base-set-081-energy-retrieval", "qty": 1 }]
     }
   ],
   "rewards": {
@@ -493,12 +761,55 @@
     "hard": { "type": "starter_unlock", "id": "pikachu", "name": "Pikachu como inicial" }
   },
   "achievements": [
-    { "id": "adventure-1-clear-normal", "name": "Primer paso", "description": "Completa De Pueblo Paleta al Bosque Verde en normal", "tier": "bronze", "condition": { "type": "clear", "difficulty": "normal" } },
-    { "id": "adventure-1-clear-hard", "name": "Esta vez en serio", "description": "Completa De Pueblo Paleta al Bosque Verde en difícil", "tier": "gold", "condition": { "type": "clear", "difficulty": "hard" } },
-    { "id": "adventure-1-flawless", "name": "Sin un rasguño", "description": "Completa la aventura sin perder corazones", "tier": "silver", "condition": { "type": "flawless" } },
-    { "id": "adventure-1-all-starters", "name": "Ayudante del Profesor", "description": "Completa la aventura con los 3 iniciales", "tier": "silver", "condition": { "type": "allStarters" } },
-    { "id": "adventure-1-all-starters-hard", "name": "Maestro de Kanto", "description": "Completa la aventura en difícil con los 3 iniciales", "tier": "platinum", "condition": { "type": "allStarters", "difficulty": "hard" } },
-    { "id": "adventure-1-purist", "name": "Purista", "description": "Completa la aventura saltando todos los tesoros", "tier": "gold", "condition": { "type": "purist" } },
-    { "id": "adventure-1-monotype", "name": "Monotipo", "description": "Completa la aventura sin cartas ni energías de otro tipo que el de tu inicial (incoloros permitidos)", "tier": "silver", "condition": { "type": "monotype" } }
+    {
+      "id": "adventure-1-clear-normal",
+      "name": "Primer paso",
+      "description": "Completa De Pueblo Paleta al Bosque Verde en normal",
+      "tier": "bronze",
+      "condition": { "type": "clear", "difficulty": "normal" }
+    },
+    {
+      "id": "adventure-1-clear-hard",
+      "name": "Esta vez en serio",
+      "description": "Completa De Pueblo Paleta al Bosque Verde en difícil",
+      "tier": "platinum",
+      "condition": { "type": "clear", "difficulty": "hard" },
+      "cosmetic": { "type": "playmat", "id": "playmat-ciudad-plateada", "name": "Tapete Ciudad Plateada" }
+    },
+    {
+      "id": "adventure-1-flawless",
+      "name": "Sin un rasguño",
+      "description": "Completa la aventura sin perder corazones",
+      "tier": "silver",
+      "condition": { "type": "flawless" }
+    },
+    {
+      "id": "adventure-1-all-starters",
+      "name": "Ayudante del Profesor",
+      "description": "Completa la aventura con los 3 iniciales",
+      "tier": "silver",
+      "condition": { "type": "allStarters" }
+    },
+    {
+      "id": "adventure-1-all-starters-hard",
+      "name": "Maestro de Kanto",
+      "description": "Completa la aventura en difícil con los 3 iniciales",
+      "tier": "platinum",
+      "condition": { "type": "allStarters", "difficulty": "hard" }
+    },
+    {
+      "id": "adventure-1-purist",
+      "name": "Purista",
+      "description": "Completa la aventura saltando todos los tesoros",
+      "tier": "gold",
+      "condition": { "type": "purist" }
+    },
+    {
+      "id": "adventure-1-monotype",
+      "name": "Monotipo",
+      "description": "Completa la aventura sin cartas ni energías de otro tipo que el de tu inicial (incoloros permitidos)",
+      "tier": "silver",
+      "condition": { "type": "monotype" }
+    }
   ]
 }

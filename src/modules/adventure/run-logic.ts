@@ -5,9 +5,10 @@
  */
 import { isBasicEnergy, isEnergyCard, isPokemonCard, validateDeckEntries } from "@gonzaloaguila/game-core";
 import { adventureCardProblem, cardOf, isBasicPokemonCard } from "./content/cards.js";
+import { battleModifiers, difficultyRules, rivalDeckOf } from "./content/difficulty.js";
 import type { AdventureStarter, AdventureTreasure, Difficulty } from "./content/schema.js";
 import type { Adventure } from "./content/validate.js";
-import type { AdventureGameConfig, CardEntry } from "./engine-types.js";
+import type { AdventureGameConfig, BattleModifier, CardEntry } from "./engine-types.js";
 import { seededRandom } from "./rng.js";
 import {
   RunPhaseError,
@@ -72,6 +73,7 @@ export function newRun(
   options: { difficulty: Difficulty; starterId: string; seed: string },
 ): RunState {
   const starter = starterOf(adventure, options.starterId);
+  const { hearts } = difficultyRules(adventure, options.difficulty);
   return {
     adventureId: adventure.id,
     adventureVersion: adventure.version,
@@ -81,8 +83,8 @@ export function newRun(
     phase: "pre_battle",
     currentBattle: 1,
     attempt: 1,
-    hearts: adventure.rules.hearts,
-    maxHearts: adventure.rules.hearts,
+    hearts,
+    maxHearts: hearts,
     heartsLost: 0,
     deck: addCards([], starter.deck),
     passives: [],
@@ -146,14 +148,15 @@ function cardsFit(run: RunState, adventure: Adventure, treasure: AdventureTreasu
 }
 
 /**
- * Treasures that can be offered after `battleIndex`: the battle's pool minus passives the run
+ * Treasures that can be offered after `battleIndex`: the battle's pool (in the run difficulty's
+ * `treasurePools`) minus passives the run
  * already has and card treasures that would break the deck rules (over the max size; no copy
  * limit in adventure mode).
  */
 export function offerCandidates(run: RunState, adventure: Adventure, battleIndex: number): string[] {
   const pool = battleAt(adventure, battleIndex).treasurePool;
   if (!pool) return [];
-  return adventure.treasurePools[pool].filter((id) => {
+  return difficultyRules(adventure, run.difficulty).treasurePools[pool].filter((id) => {
     const treasure = treasureById(adventure, id);
     if (treasure.kind === "passive") return !run.passives.includes(treasure.passive);
     return cardsFit(run, adventure, treasure);
@@ -161,12 +164,13 @@ export function offerCandidates(run: RunState, adventure: Adventure, battleIndex
 }
 
 /**
- * The candidates in a random order weighted by rarity (`treasureOffer.rarityWeights`): weighted
- * sampling without replacement (Efraimidis–Spirakis: key = -ln(u) / weight, smallest first),
- * driven by `rng` in pool order so the same seed always gives the same order.
+ * The candidates in a random order weighted by rarity (the difficulty's
+ * `treasureOffer.rarityWeights`): weighted sampling without replacement (Efraimidis–Spirakis:
+ * key = -ln(u) / weight, smallest first), driven by `rng` in pool order so the same seed always
+ * gives the same order.
  */
-function weightedOrder(ids: readonly string[], adventure: Adventure, rng: () => number): string[] {
-  const weights = adventure.treasureOffer.rarityWeights;
+function weightedOrder(ids: readonly string[], adventure: Adventure, difficulty: Difficulty, rng: () => number): string[] {
+  const weights = difficultyRules(adventure, difficulty).treasureOffer.rarityWeights;
   return ids
     .map((id) => ({ id, key: -Math.log(1 - rng()) / weights[treasureById(adventure, id).rarity] }))
     .sort((a, b) => a.key - b.key)
@@ -184,10 +188,10 @@ export function generateOffer(run: RunState, adventure: Adventure, battleIndex: 
   const candidates = offerCandidates(run, adventure, battleIndex);
   const rng = seededRandom(`${run.seed}:${battleIndex}`);
   const taken = new Set(run.treasuresTaken);
-  const ordered = weightedOrder(candidates, adventure, rng);
+  const ordered = weightedOrder(candidates, adventure, run.difficulty, rng);
   const queue = [...ordered.filter((id) => !taken.has(id)), ...ordered.filter((id) => taken.has(id))];
   const isPassive = (id: string) => treasureById(adventure, id).kind === "passive";
-  const { maxPassives } = adventure.treasureOffer;
+  const { maxPassives } = difficultyRules(adventure, run.difficulty).treasureOffer;
 
   const offer: string[] = [];
   let passives = 0;
@@ -299,15 +303,16 @@ export function abandonRun(run: RunState): RunState {
   return { ...run, status: "abandoned", phase: "finished", pendingOffer: [] };
 }
 
-/** The rival deck of a battle for this run (battle 10: by difficulty, hard by starter). */
+/** The rival deck of a battle for this run (by difficulty; a hard deck may be by starter). */
 export function rivalDeckFor(adventure: Adventure, battleIndex: number, difficulty: Difficulty, starterId: string): CardEntry[] {
-  const { opponent } = battleAt(adventure, battleIndex);
-  if (opponent.deck) return opponent.deck;
-  const byDifficulty = opponent.deckByDifficulty!;
-  if (difficulty === "normal") return byDifficulty.normal;
-  const deck = byDifficulty.hard.byStarter[starterId];
+  const deck = rivalDeckOf(battleAt(adventure, battleIndex), difficulty, starterId);
   if (!deck) throw new RunRuleError(`No hay mazo difícil para ${starterId}`);
   return deck;
+}
+
+/** The battle's rules (modifiers) in a run of that difficulty. */
+export function battleRules(adventure: Adventure, battleIndex: number, difficulty: Difficulty): BattleModifier[] {
+  return battleModifiers(battleAt(adventure, battleIndex), difficulty);
 }
 
 /** What `createAdventureGame` needs for the run's current battle. */
@@ -319,7 +324,7 @@ export function battleConfig(run: RunState, adventure: Adventure): AdventureGame
     prizeCount: adventure.rules.prizeCount,
     openingHand: adventure.rules.openingHand,
     playerPassives: [...run.passives],
-    modifiers: battle.modifiers.map((m) => structuredClone(m)),
+    modifiers: battleModifiers(battle, run.difficulty).map((m) => structuredClone(m)),
   };
 }
 

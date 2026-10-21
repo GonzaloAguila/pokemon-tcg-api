@@ -5,7 +5,8 @@ import * as usersService from "../users/users.service.js";
 import type { CardChangeReason } from "../users/card-ledger.js";
 import { Errors } from "../../middleware/error-handler.js";
 import { getAdventures } from "../adventure/content/load.js";
-import type { AchievementCondition } from "../adventure/content/schema.js";
+import type { AchievementCondition, AchievementCosmetic } from "../adventure/content/schema.js";
+import { achievementCosmeticView, grantAchievementCosmetic } from "../adventure/cosmetics.js";
 
 // ---------------------------------------------------------------------------
 // Tier rewards
@@ -91,6 +92,8 @@ interface AchievementDef {
   /** "adventure": the adventure and the condition from its file. */
   adventureId?: string;
   condition?: AchievementCondition;
+  /** An exclusive cosmetic granted with the reward on claim (adventure achievements). */
+  cosmetic?: AchievementCosmetic;
 }
 
 const RAW_DEFS: Omit<AchievementDef, "status">[] = [
@@ -177,6 +180,7 @@ function adventureDefs(): AchievementDef[] {
       status: "active" as const,
       adventureId: adventure.id,
       condition: a.condition,
+      cosmetic: a.cosmetic,
     })),
   );
 }
@@ -249,6 +253,8 @@ export interface ClaimResult {
   achievementId: string;
   coins: number;
   coupons: number;
+  /** The cosmetic this claim granted (adventure achievements), else null. */
+  cosmetic: ReturnType<typeof achievementCosmeticView>;
 }
 
 /** Definitions plus the user's state (GET /achievements). */
@@ -275,6 +281,8 @@ export async function listAchievements(userId: string) {
       claimedAt: row?.unlockedAt ?? null,
       claimable: d.status === "active" && !row?.unlockedAt && (row?.progress ?? 0) >= d.progressTarget,
       reward: d.status === "active" ? reward : { coins: 0, coupons: 0 },
+      /** Exclusive cosmetic granted on claim (adventure achievements), else null. */
+      cosmetic: achievementCosmeticView(d.cosmetic),
     };
   });
 }
@@ -611,10 +619,42 @@ async function grantReward(tx: usersService.Db, userId: string, def: Achievement
   if (reward.coupons > 0) {
     await usersService.addCoupons(userId, reward.coupons, "achievement", `Logro: ${def.name}`, tx);
   }
+  // Same transaction as the claim (unlockedAt set once), so it is granted exactly once
+  if (def.cosmetic) await grantAchievementCosmetic(tx, userId, def.cosmetic);
 
   return {
     achievementId: def.id,
     coins: reward.coins,
     coupons: reward.coupons,
+    cosmetic: achievementCosmeticView(def.cosmetic),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Cosmetics of achievements claimed before the achievement had one
+// ---------------------------------------------------------------------------
+
+/**
+ * Give every player who already claimed an achievement its cosmetic (added to the content after
+ * they claimed it), once per deploy that adds one. Idempotent: cosmetics already owned are
+ * skipped, and nothing ever removes a cosmetic. Returns how many were granted per achievement.
+ *   node -e "require('./dist/modules/achievements/achievements.service.js').backfillAchievementCosmetics().then((r) => { console.log(r); process.exit(0); })"
+ */
+export async function backfillAchievementCosmetics(): Promise<Record<string, number>> {
+  const granted: Record<string, number> = {};
+  for (const def of ACHIEVEMENT_DEFS) {
+    if (!def.cosmetic) continue;
+    const claimed = await prisma.userAchievement.findMany({
+      where: { achievementId: def.id, unlockedAt: { not: null } },
+      select: { userId: true },
+    });
+    const userIds = claimed.map((c) => c.userId);
+    const { type, id } = def.cosmetic;
+    const { count } =
+      type === "playmat"
+        ? await prisma.userPlaymat.createMany({ data: userIds.map((userId) => ({ userId, playmatId: id })), skipDuplicates: true })
+        : await prisma.userCardBack.createMany({ data: userIds.map((userId) => ({ userId, cardBackId: id })), skipDuplicates: true });
+    granted[def.id] = count;
+  }
+  return granted;
 }

@@ -3,10 +3,11 @@
  * express (design §5.4). Problems are Spanish sentences, all reported at once.
  */
 import { isLimitedInDeck, isPokemonCard, ALL_CARDS } from "@gonzaloaguila/game-core";
-import { ADVENTURE_CARD_BACKS } from "../../prizes/catalog.js";
-import type { CardEntry } from "../engine-types.js";
+import { ADVENTURE_CARD_BACKS, ADVENTURE_PLAYMATS } from "../../prizes/catalog.js";
+import type { BattleModifier, CardEntry } from "../engine-types.js";
 import { adventureCardProblem, cardOf, isBasicPokemonCard } from "./cards.js";
-import { adventureSchema, type AdventureBattle, type AdventureContent } from "./schema.js";
+import { battleModifiers } from "./difficulty.js";
+import { adventureSchema, DIFFICULTIES, type AchievementCosmeticType, type AdventureBattle, type AdventureContent, type Difficulty } from "./schema.js";
 
 export type Adventure = AdventureContent;
 export type ValidationResult = { ok: true; adventure: Adventure } | { ok: false; problems: string[] };
@@ -15,16 +16,25 @@ export const BATTLE_COUNT = 10;
 const POKEMON_NAMES = new Set(ALL_CARDS.filter(isPokemonCard).map((c) => c.name));
 /** Card backs an adventure may grant (prizes/catalog.ts). */
 const ADVENTURE_CARD_BACK_IDS = new Set(ADVENTURE_CARD_BACKS.map((c) => c.itemId));
+/** Cosmetics an adventure achievement may grant, by type (prizes/catalog.ts). */
+const ACHIEVEMENT_COSMETIC_IDS: Record<AchievementCosmeticType, ReadonlySet<string>> = {
+  playmat: new Set(ADVENTURE_PLAYMATS.map((p) => p.itemId)),
+  cardBack: ADVENTURE_CARD_BACK_IDS,
+};
+const DIFFICULTY_LABELS: Record<Difficulty, string> = { normal: "normal", hard: "difícil" };
 
 const deckSize = (deck: readonly CardEntry[]) => deck.reduce((n, e) => n + e.qty, 0);
 
-/** Every rival deck of a battle with a label ("" for the only one). */
-export function rivalDecks(battle: AdventureBattle): { label: string; deck: CardEntry[] }[] {
+/** Every rival deck of a battle with a label ("" for the only one) and the difficulties using it. */
+export function rivalDecks(battle: AdventureBattle): { label: string; deck: CardEntry[]; difficulties: Difficulty[] }[] {
   const { deck, deckByDifficulty } = battle.opponent;
-  if (deck) return [{ label: "", deck }];
+  if (deck) return [{ label: "", deck, difficulties: [...DIFFICULTIES] }];
+  const { normal, hard } = deckByDifficulty!;
   return [
-    { label: " (normal)", deck: deckByDifficulty!.normal },
-    ...Object.entries(deckByDifficulty!.hard.byStarter).map(([starter, d]) => ({ label: ` (difícil, ${starter})`, deck: d })),
+    { label: " (normal)", deck: normal, difficulties: ["normal"] },
+    ...(Array.isArray(hard)
+      ? [{ label: " (difícil)", deck: hard, difficulties: ["hard" as const] }]
+      : Object.entries(hard.byStarter).map(([starter, d]) => ({ label: ` (difícil, ${starter})`, deck: d, difficulties: ["hard" as const] }))),
   ];
 }
 
@@ -78,42 +88,10 @@ function checkEvolutionChain(problems: string[], where: string, chain: readonly 
   }
 }
 
-function checkBattle(problems: string[], adventure: Adventure, battle: AdventureBattle) {
-  const where = `Batalla ${battle.index}`;
-  const { rules } = adventure;
-  const setup = battle.modifiers.find((m) => m.type === "opponentSetup");
-
-  for (const { label, deck } of rivalDecks(battle)) {
-    const before = problems.length;
-    checkCards(problems, `${where}, mazo del rival${label}`, deck.map((e) => e.cardId));
-    if (problems.length > before) continue;
-    const size = deckSize(deck);
-    if (size < rules.minDeckSize || size > rules.maxDeckSize) {
-      problems.push(`${where}: el mazo del rival${label} tiene ${size} cartas (debe tener entre ${rules.minDeckSize} y ${rules.maxDeckSize})`);
-    }
-    if (!setup && !deck.some((e) => isBasicPokemonCard(cardOf(e.cardId)))) {
-      problems.push(`${where}: el mazo del rival${label} no tiene Pokémon básicos`);
-    }
-  }
-
-  const byStarter = battle.opponent.deckByDifficulty?.hard.byStarter;
-  if (byStarter) {
-    for (const starter of adventure.starters) {
-      if (!byStarter[starter.id]) problems.push(`${where}: falta el mazo difícil para el inicial ${starter.id}`);
-    }
-    for (const key of Object.keys(byStarter)) {
-      if (!adventure.starters.some((s) => s.id === key)) problems.push(`${where}: mazo difícil para un inicial desconocido ${key}`);
-    }
-  }
-
-  if (battle.opponent.lead) {
-    const problem = adventureCardProblem(battle.opponent.lead);
-    if (problem) problems.push(`${where}, lead: ${problem}`);
-    else if (!isPokemonCard(cardOf(battle.opponent.lead))) problems.push(`${where}, lead: no es un Pokémon`);
-  }
-
+/** One list of battle rules on its own: repeats, names, cards, opponentSetup chains. */
+function checkModifierList(problems: string[], where: string, modifiers: readonly BattleModifier[]) {
   const seen = new Set<string>();
-  for (const modifier of battle.modifiers) {
+  for (const modifier of modifiers) {
     // One modifier of each type per battle (bonusCards / noPrizeFor: one per side)
     const key = modifier.type === "bonusCards" || modifier.type === "noPrizeFor" ? `${modifier.type}:${modifier.side}` : modifier.type;
     if (seen.has(key)) problems.push(`${where}: modificador ${modifier.type} repetido`);
@@ -128,27 +106,80 @@ function checkBattle(problems: string[], adventure: Adventure, battle: Adventure
       case "bonusCards":
         checkCards(problems, `${where}, bonusCards`, modifier.cards.map((c) => c.cardId));
         break;
-      case "opponentSetup": {
-        const chains = [modifier.active, ...modifier.bench];
-        const before = problems.length;
-        for (const chain of chains) checkEvolutionChain(problems, `${where}, opponentSetup`, chain);
-        if (problems.length > before) break;
-        const needed = new Map<string, number>();
-        for (const id of chains.flat()) needed.set(id, (needed.get(id) ?? 0) + 1);
-        for (const { label, deck } of rivalDecks(battle)) {
-          for (const [id, count] of needed) {
-            const inDeck = deck.filter((e) => e.cardId === id).reduce((n, e) => n + e.qty, 0);
-            if (inDeck < count) {
-              problems.push(`${where}, opponentSetup: el mazo del rival${label} tiene ${inDeck} ${cardOf(id).name} y la mesa pide ${count}`);
-            }
-          }
-        }
+      case "opponentSetup":
+        for (const chain of [modifier.active, ...modifier.bench]) checkEvolutionChain(problems, `${where}, opponentSetup`, chain);
         break;
-      }
       case "prizeCount":
       case "openingHand":
       case "opponentPassives":
         break;
+    }
+  }
+}
+
+function checkBattle(problems: string[], adventure: Adventure, battle: AdventureBattle) {
+  const where = `Batalla ${battle.index}`;
+  const { rules } = adventure;
+  const decks = rivalDecks(battle);
+
+  for (const { label, deck } of decks) {
+    const before = problems.length;
+    checkCards(problems, `${where}, mazo del rival${label}`, deck.map((e) => e.cardId));
+    if (problems.length > before) continue;
+    const size = deckSize(deck);
+    if (size < rules.minDeckSize || size > rules.maxDeckSize) {
+      problems.push(`${where}: el mazo del rival${label} tiene ${size} cartas (debe tener entre ${rules.minDeckSize} y ${rules.maxDeckSize})`);
+    }
+  }
+
+  const hard = battle.opponent.deckByDifficulty?.hard;
+  if (hard && !Array.isArray(hard)) {
+    for (const starter of adventure.starters) {
+      if (!hard.byStarter[starter.id]) problems.push(`${where}: falta el mazo difícil para el inicial ${starter.id}`);
+    }
+    for (const key of Object.keys(hard.byStarter)) {
+      if (!adventure.starters.some((s) => s.id === key)) problems.push(`${where}: mazo difícil para un inicial desconocido ${key}`);
+    }
+  }
+
+  if (battle.opponent.lead) {
+    const problem = adventureCardProblem(battle.opponent.lead);
+    if (problem) problems.push(`${where}, lead: ${problem}`);
+    else if (!isPokemonCard(cardOf(battle.opponent.lead))) problems.push(`${where}, lead: no es un Pokémon`);
+  }
+
+  // Each list of rules on its own: the base one and every difficulty's replacement
+  checkModifierList(problems, where, battle.modifiers as BattleModifier[]);
+  for (const difficulty of DIFFICULTIES) {
+    const own = battle.modifiersByDifficulty?.[difficulty];
+    if (own) checkModifierList(problems, `${where} (${DIFFICULTY_LABELS[difficulty]})`, own as BattleModifier[]);
+  }
+
+  // Each difficulty's rules against the decks it plays with
+  const reported = new Set<string>();
+  const report = (problem: string) => {
+    if (!reported.has(problem)) problems.push(problem);
+    reported.add(problem);
+  };
+  for (const difficulty of DIFFICULTIES) {
+    const modifiers = battleModifiers(battle, difficulty);
+    const setup = modifiers.find((m) => m.type === "opponentSetup");
+    for (const { label, deck, difficulties } of decks) {
+      if (!difficulties.includes(difficulty) || deck.some((e) => adventureCardProblem(e.cardId))) continue;
+      if (!setup && !deck.some((e) => isBasicPokemonCard(cardOf(e.cardId)))) {
+        report(`${where}: el mazo del rival${label} no tiene Pokémon básicos`);
+      }
+      if (!setup) continue;
+      const chains = [setup.active, ...setup.bench];
+      if (chains.flat().some((id) => adventureCardProblem(id))) continue;
+      const needed = new Map<string, number>();
+      for (const id of chains.flat()) needed.set(id, (needed.get(id) ?? 0) + 1);
+      for (const [id, count] of needed) {
+        const inDeck = deck.filter((e) => e.cardId === id).reduce((n, e) => n + e.qty, 0);
+        if (inDeck < count) {
+          report(`${where}, opponentSetup: el mazo del rival${label} tiene ${inDeck} ${cardOf(id).name} y la mesa pide ${count}`);
+        }
+      }
     }
   }
 }
@@ -190,15 +221,29 @@ export function validateAdventure(raw: unknown): ValidationResult {
     checkCards(problems, `Tesoro ${treasure.id}`, ids);
   }
   const treasureIds = new Set(adventure.treasures.map((t) => t.id));
-  for (const [pool, ids] of Object.entries(adventure.treasurePools)) {
-    for (const id of ids) if (!treasureIds.has(id)) problems.push(`Pool ${pool}: tesoro desconocido ${id}`);
-    for (const id of duplicated(ids)) problems.push(`Pool ${pool}: tesoro repetido ${id}`);
+  const checkPools = (label: string, pools: Adventure["treasurePools"]) => {
+    for (const [pool, ids] of Object.entries(pools)) {
+      for (const id of ids) if (!treasureIds.has(id)) problems.push(`${label}${pool}: tesoro desconocido ${id}`);
+      for (const id of duplicated(ids)) problems.push(`${label}${pool}: tesoro repetido ${id}`);
+    }
+  };
+  checkPools("Pool ", adventure.treasurePools);
+  for (const difficulty of DIFFICULTIES) {
+    const own = adventure.difficulties[difficulty].treasurePools;
+    if (own) checkPools(`Pool ${DIFFICULTY_LABELS[difficulty]} `, own);
   }
 
   for (const [difficulty, reward] of Object.entries(adventure.rewards)) {
     if (reward.type === "card") checkCards(problems, `Recompensa ${difficulty}`, [reward.cardId]);
     if (reward.type === "cosmetic" && !ADVENTURE_CARD_BACK_IDS.has(reward.id)) {
       problems.push(`Recompensa ${difficulty}: dorso de carta desconocido ${reward.id}`);
+    }
+  }
+
+  for (const achievement of adventure.achievements) {
+    const { cosmetic } = achievement;
+    if (cosmetic && !ACHIEVEMENT_COSMETIC_IDS[cosmetic.type].has(cosmetic.id)) {
+      problems.push(`Logro ${achievement.id}: cosmético de aventura desconocido ${cosmetic.type} ${cosmetic.id}`);
     }
   }
 

@@ -103,7 +103,7 @@ describe("login-streak: longest run of consecutive economy days", () => {
     await checkIns(user.id, ["2026-09-20", "2026-09-21"]);
     await achievements.checkAndUpdateProgress(user.id);
     expect(await storedProgress(user.id, "gold-31")).toBe(7);
-    expect(await achievements.claimAchievement(user.id, "silver-17")).toEqual({ achievementId: "silver-17", coins: 500, coupons: 0 });
+    expect(await achievements.claimAchievement(user.id, "silver-17")).toEqual({ achievementId: "silver-17", coins: 500, coupons: 0, cosmetic: null });
   });
 
   it("only check-ins count (other claims of the same days don't)", async () => {

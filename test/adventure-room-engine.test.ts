@@ -34,9 +34,11 @@ afterAll(async () => {
 const room = (roomId: string) => roomManager.getRoom(roomId)!;
 const state = (roomId: string) => room(roomId).gameState!;
 
-async function battleFor(options: { battle?: number; seed?: string; passives?: string[]; deck?: { cardId: string; qty: number }[] } = {}) {
+async function battleFor(
+  options: { battle?: number; seed?: string; passives?: string[]; deck?: { cardId: string; qty: number }[]; difficulty?: "normal" | "hard" } = {},
+) {
   const user = await createUser({}, { stats: true });
-  const run = await adventure.createRun(user.id, { adventureId: ADVENTURE, difficulty: "normal", starterId: "charmander" });
+  const run = await adventure.createRun(user.id, { adventureId: ADVENTURE, difficulty: options.difficulty ?? "normal", starterId: "charmander" });
   await prisma.adventureRun.update({
     where: { id: run.id },
     data: {
@@ -124,20 +126,25 @@ describe("adventure rooms on game-core's engine", () => {
     client.socket.disconnect();
   });
 
-  it("the Metapod battle starts with the preset board, 1 Prize each, and the bonus cards after setup", async () => {
-    const { roomId, token } = await battleFor({ battle: 7 });
+  it.each([
+    ["normal", ["Caterpie"], "El rival empieza con Metapod activo y Caterpie en la banca"],
+    ["hard", ["Metapod", "Caterpie"], "El rival empieza con Metapod activo y Metapod y Caterpie en la banca"],
+  ] as const)("the Metapod battle (%s) starts with its preset board, 1 Prize vs 2, and the bonus cards after setup", async (difficulty, bench, setupLine) => {
+    const { roomId, token } = await battleFor({ battle: 7, difficulty });
     const s = state(roomId);
     expect(s.opponentActivePokemon?.pokemon.name).toBe("Metapod");
     expect(s.opponentActivePokemon?.previousEvolutions?.map((c) => c.name)).toEqual(["Caterpie"]);
-    expect(s.opponentBench.map((p) => p.pokemon.name)).toEqual(["Metapod", "Metapod"]);
-    expect([s.playerPrizes.length, s.opponentPrizes.length]).toEqual([1, 1]);
+    // The preset bench; in normal the AI may also bench the deck's third Caterpie at setup
+    expect(s.opponentBench.slice(0, bench.length).map((p) => p.pokemon.name)).toEqual(bench);
+    expect(s.opponentBench.slice(bench.length).every((p) => p.pokemon.name === "Caterpie")).toBe(true);
+    expect([s.playerPrizes.length, s.opponentPrizes.length]).toEqual([1, 2]);
     expect(s.playerHand.map((c) => c.name)).not.toContain("Pokémon Flute");
 
     const client = await join(token, roomId);
     expect(client.start.adventure.rules).toEqual([
-      "Mesa a 1 premio por jugador",
+      "Premios: tú 1, el rival 2",
       "Los Metapod del rival no dan premios",
-      "El rival empieza con Metapod activo y 2 Metapod en la banca",
+      setupLine,
       "Empiezas con Pokémon Flute, Gust of Wind y PlusPower en la mano",
     ]);
     await setUp(client, roomId);
@@ -147,7 +154,7 @@ describe("adventure rooms on game-core's engine", () => {
   }, 30_000);
 
   it("Knocking Out a Metapod gives no Prize; the AI promotes another", async () => {
-    const { roomId, token } = await battleFor({ battle: 7 });
+    const { roomId, token } = await battleFor({ battle: 7, difficulty: "hard" });
     const client = await join(token, roomId);
     await setUp(client, roomId);
 
@@ -174,7 +181,7 @@ describe("adventure rooms on game-core's engine", () => {
       expect(after.events.some((e) => e.message.includes("no da premio en esta mesa"))).toBe(true);
       expect(after.opponentDiscard.map((c) => c.name)).toEqual(expect.arrayContaining(["Metapod", "Caterpie"]));
       expect(after.gamePhase).toBe("PLAYING");
-      expect(after.opponentActivePokemon?.pokemon.name).toBe("Metapod");
+      expect(["Metapod", "Caterpie"]).toContain(after.opponentActivePokemon?.pokemon.name);
     }
     expect(knockedOut).toBe(true);
     client.socket.disconnect();

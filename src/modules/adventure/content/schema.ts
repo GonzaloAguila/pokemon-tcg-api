@@ -57,10 +57,11 @@ const opponentSchema = z
     /** Catalog id of the Pokémon shown on the map (default: the deck's first Pokémon). */
     lead: cardId.optional(),
     deck: deckSchema.optional(),
+    /** A deck per difficulty: hard is one deck, or one per starter (`byStarter`). */
     deckByDifficulty: z
       .object({
         normal: deckSchema,
-        hard: z.object({ byStarter: z.record(id, deckSchema) }).strict(),
+        hard: z.union([deckSchema, z.object({ byStarter: z.record(id, deckSchema) }).strict()]),
       })
       .strict()
       .optional(),
@@ -79,6 +80,11 @@ const battleSchema = z
     opponent: opponentSchema,
     treasurePool: z.enum(TREASURE_POOLS).nullable(),
     modifiers: z.array(modifierSchema).max(10),
+    /** A difficulty's own battle rules: they replace `modifiers` in runs of that difficulty. */
+    modifiersByDifficulty: z
+      .object({ normal: z.array(modifierSchema).max(10).optional(), hard: z.array(modifierSchema).max(10).optional() })
+      .strict()
+      .optional(),
   })
   .strict();
 
@@ -105,6 +111,23 @@ const treasureOfferSchema = z
   })
   .strict();
 
+/** The offer pools: treasure ids per pool a battle may name. */
+const treasurePoolsSchema = z.object({ tier1: z.array(id), major: z.array(id), tier2: z.array(id) }).strict();
+
+/**
+ * What changes with the difficulty. `description` is the one-line Spanish summary of the new-run
+ * screen; every other field, when present, replaces the adventure's own (`rules.hearts`,
+ * `treasurePools`, `treasureOffer`) in runs of that difficulty.
+ */
+const difficultySchema = z
+  .object({
+    description: text,
+    hearts: z.number().int().min(1).max(10).optional(),
+    treasurePools: treasurePoolsSchema.optional(),
+    treasureOffer: treasureOfferSchema.optional(),
+  })
+  .strict();
+
 const rewardSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("cosmetic"), cosmeticType: z.literal("cardBack"), id, name: text }).strict(),
   z.object({ type: z.literal("starter_unlock"), id, name: text }).strict(),
@@ -128,6 +151,10 @@ export type AchievementCondition = z.infer<typeof achievementConditionSchema>;
 
 export const ACHIEVEMENT_TIERS = ["bronze", "silver", "gold", "platinum", "legend"] as const;
 
+/** Cosmetic types an adventure achievement may grant on claim (prizes/catalog.ts ADVENTURE_*). */
+export const ACHIEVEMENT_COSMETIC_TYPES = ["playmat", "cardBack"] as const;
+export type AchievementCosmeticType = (typeof ACHIEVEMENT_COSMETIC_TYPES)[number];
+
 const achievementSchema = z
   .object({
     id: z.string().regex(/^adventure-[a-z0-9-]{1,60}$/, "los logros de aventura empiezan con 'adventure-'"),
@@ -135,6 +162,8 @@ const achievementSchema = z
     description: text,
     tier: z.enum(ACHIEVEMENT_TIERS),
     condition: achievementConditionSchema,
+    /** An exclusive cosmetic granted with the tier reward when the achievement is claimed. */
+    cosmetic: z.object({ type: z.enum(ACHIEVEMENT_COSMETIC_TYPES), id, name: text }).strict().optional(),
   })
   .strict();
 
@@ -169,7 +198,9 @@ export const adventureSchema = z
       .strict(),
     starters: z.array(starterSchema).min(1).max(10),
     battles: z.array(battleSchema).min(1).max(20),
-    treasurePools: z.object({ tier1: z.array(id), major: z.array(id), tier2: z.array(id) }).strict(),
+    /** Per difficulty: its description and what it changes (hearts, treasure pools, offer weights). */
+    difficulties: z.object({ normal: difficultySchema, hard: difficultySchema }).strict(),
+    treasurePools: treasurePoolsSchema,
     treasures: z.array(treasureSchema).min(1).max(100),
     treasureOffer: treasureOfferSchema,
     rewards: z.object({ normal: rewardSchema, hard: rewardSchema }).strict(),
@@ -183,4 +214,7 @@ export type AdventureBattle = AdventureContent["battles"][number];
 export type AdventureTreasure = AdventureContent["treasures"][number];
 export type AdventureReward = AdventureContent["rewards"]["normal"];
 export type AdventureAchievement = AdventureContent["achievements"][number];
+export type AchievementCosmetic = NonNullable<AdventureAchievement["cosmetic"]>;
+export type TreasurePools = AdventureContent["treasurePools"];
+export type TreasureOffer = AdventureContent["treasureOffer"];
 export type TreasureCard = z.infer<typeof treasureCardSchema>;
