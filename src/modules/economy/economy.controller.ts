@@ -8,6 +8,7 @@ import { ECONOMY } from "./config.js";
 import * as economyService from "./economy.service.js";
 import { listUnopenedPacks, openOwnedPack } from "./pack-inventory.js";
 import { getOdds } from "./odds.js";
+import { refreshProgressInBackground } from "../achievements/achievements.service.js";
 
 const router = Router();
 
@@ -92,12 +93,26 @@ router.get("/economy/odds", wrap(() => getOdds()));
 // but grants them nothing and doesn't use up the day (economyService.checkIn); every route that
 // grants or spends goes through requireVerifiedEmail (403 EMAIL_NOT_VERIFIED).
 router.get("/economy/status", requireAuth, wrap((req) => economyService.getEconomyStatus(req.user!.userId)));
-router.post("/economy/check-in", requireAuth, wrap((req) => economyService.checkIn(req.user!.userId)));
+router.post(
+  "/economy/check-in",
+  requireAuth,
+  wrap(async (req) => {
+    const result = await economyService.checkIn(req.user!.userId);
+    // A new login day: "Semana Activa", "Mes Dedicado", "Año Activo" progress without a match
+    if (result.emailVerified && !result.alreadyCheckedIn) refreshProgressInBackground(req.user!.userId, "check-in");
+    return result;
+  }),
+);
 router.post(
   "/economy/daily-pack",
   requireAuth,
   requireVerifiedEmail,
-  wrap((req) => economyService.claimDailyPack(req.user!.userId, parseBody(dailyPackSchema, req.body).packId)),
+  wrap(async (req) => {
+    const result = await economyService.claimDailyPack(req.user!.userId, parseBody(dailyPackSchema, req.body).packId);
+    // A pack opened (and maybe the day checked in)
+    refreshProgressInBackground(req.user!.userId, "daily pack");
+    return result;
+  }),
 );
 
 // Pack inventory
@@ -106,10 +121,12 @@ router.post(
   "/economy/packs/:userPackId/open",
   requireAuth,
   requireVerifiedEmail,
-  wrap((req) => {
+  wrap(async (req) => {
     const id = uuidSchema.safeParse(req.params.userPackId);
     if (!id.success) throw Errors.NotFound("Sobre");
-    return openOwnedPack(req.user!.userId, id.data, parseBody(openOwnedSchema, req.body).packId);
+    const result = await openOwnedPack(req.user!.userId, id.data, parseBody(openOwnedSchema, req.body).packId);
+    refreshProgressInBackground(req.user!.userId, "pack opening");
+    return result;
   }),
 );
 

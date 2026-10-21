@@ -2,6 +2,7 @@ import { LUCKY_DUEL_BASICS } from "@gonzaloaguila/game-core";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "../../lib/prisma.js";
 import * as usersService from "../users/users.service.js";
+import type { CardChangeReason } from "../users/card-ledger.js";
 import { Errors } from "../../middleware/error-handler.js";
 import { getAdventures } from "../adventure/content/load.js";
 import type { AchievementCondition } from "../adventure/content/schema.js";
@@ -42,6 +43,16 @@ const TIER_REWARDS: Record<string, { coins: number; coupons: number }> = {
 //   "lucky-win-with"   — a won Lucky Duel whose drawn Basic's name contains `starter` (and, with
 //                        `against`, whose rival's drawn Basic's name contains it).
 //
+// Activity achievements (data already stored; also checked after a check-in and after opening
+// packs, so they progress without a match):
+//   "packs-opened" — packs the user opened: card-history rows of a pack (bought, daily, inventory,
+//                    wheel/slots prize; one row per pack), or the legacy coin rows of pack
+//                    purchases when those are more (purchases from before the card history).
+//   "login-streak" — longest run of consecutive economy days with a check-in (EconomyClaim
+//                    "check_in", key = the economy day; only verified accounts check in). It is
+//                    computed over every check-in ever, so it never goes down.
+//   "login-days"   — User.loginDays (+1 per economy day on a verified check-in).
+//
 // Modo Aventura achievements come from the adventure files (content/adventures/*.json,
 // `achievements[]`, checker "adventure"): their `condition` is read from the user's
 // AdventureProgress row of that adventure (won runs only; abandoned runs count nothing). They
@@ -60,7 +71,10 @@ type CheckerType =
   | "lucky-streak"
   | "lucky-first-turn"
   | "lucky-win-with"
-  | "adventure";
+  | "adventure"
+  | "packs-opened"
+  | "login-streak"
+  | "login-days";
 export type AchievementStatus = "active" | "retired" | "unavailable";
 
 interface AchievementDef {
@@ -85,7 +99,7 @@ const RAW_DEFS: Omit<AchievementDef, "status">[] = [
   { id: "bronze-2",  name: "Coleccionista Novato", description: "Consigue tu primera carta", tier: "bronze", progressTarget: 1, checker: "collection" },
   { id: "bronze-3",  name: "Evolucionador",        description: "Evoluciona un Pokémon por primera vez", tier: "bronze", progressTarget: 1, checker: "manual" },
   { id: "bronze-4",  name: "Energía Vital",        description: "Adjunta 10 energías en total", tier: "bronze", progressTarget: 10, checker: "manual" },
-  { id: "bronze-5",  name: "Primer Sobre",         description: "Abre tu primer sobre de cartas", tier: "bronze", progressTarget: 1, checker: "manual" },
+  { id: "bronze-5",  name: "Primer Sobre",         description: "Abre tu primer sobre de cartas", tier: "bronze", progressTarget: 1, checker: "packs-opened" },
   { id: "bronze-6",  name: "Entrenador Dedicado",  description: "Juega 10 partidas online", tier: "bronze", progressTarget: 10, checker: "stats-games" },
   { id: "bronze-7",  name: "Knock Out",            description: "Debilita 10 Pokémon enemigos", tier: "bronze", progressTarget: 10, checker: "manual" },
   { id: "bronze-8",  name: "Mano Llena",           description: "Ten 10 cartas en mano al mismo tiempo", tier: "bronze", progressTarget: 1, checker: "manual" },
@@ -99,7 +113,7 @@ const RAW_DEFS: Omit<AchievementDef, "status">[] = [
 
   // Silver (12)
   { id: "silver-16", name: "Racha de 5",           description: "Gana 5 partidas online seguidas", tier: "silver", progressTarget: 5, checker: "stats-streak" },
-  { id: "silver-17", name: "Semana Activa",        description: "Inicia sesión 7 días seguidos", tier: "silver", progressTarget: 7, checker: "manual" },
+  { id: "silver-17", name: "Semana Activa",        description: "Entra 7 días seguidos", tier: "silver", progressTarget: 7, checker: "login-streak" },
   { id: "silver-18", name: "Intocable",            description: "Gana sin recibir daño en tu activo", tier: "silver", progressTarget: 1, checker: "manual" },
   { id: "silver-19", name: "Coleccionista",        description: "Consigue 25 cartas diferentes (de cualquier set)", tier: "silver", progressTarget: 25, checker: "collection" },
   { id: "silver-20", name: "Multi-deck",           description: "Gana con 3 decks diferentes", tier: "silver", progressTarget: 3, checker: "manual" },
@@ -115,7 +129,7 @@ const RAW_DEFS: Omit<AchievementDef, "status">[] = [
   { id: "gold-28",   name: "Racha de 10",          description: "Gana 10 partidas online seguidas", tier: "gold", progressTarget: 10, checker: "stats-streak" },
   { id: "gold-29",   name: "Centenario",           description: "Gana 100 partidas online", tier: "gold", progressTarget: 100, checker: "stats-wins" },
   { id: "gold-30",   name: "Colección 75%",        description: "Retirado: ahora son los hitos de colección por set", tier: "gold", progressTarget: 77, checker: "collection" },
-  { id: "gold-31",   name: "Mes Dedicado",         description: "Inicia sesión 30 días seguidos", tier: "gold", progressTarget: 30, checker: "manual" },
+  { id: "gold-31",   name: "Mes Dedicado",         description: "Entra 30 días seguidos", tier: "gold", progressTarget: 30, checker: "login-streak" },
   { id: "gold-32",   name: "Perfeccionista",       description: "Gana 10 partidas sin perder ningún Pokémon", tier: "gold", progressTarget: 10, checker: "manual" },
   { id: "gold-33",   name: "Domador",              description: "Usa todos los tipos de energía", tier: "gold", progressTarget: 7, checker: "manual" },
   { id: "gold-34",   name: "Veterano",             description: "Juega 200 partidas online", tier: "gold", progressTarget: 200, checker: "stats-games" },
@@ -127,17 +141,17 @@ const RAW_DEFS: Omit<AchievementDef, "status">[] = [
   { id: "platinum-38", name: "Racha de 20",        description: "Gana 20 partidas online seguidas", tier: "platinum", progressTarget: 20, checker: "stats-streak" },
   { id: "platinum-39", name: "Quinientos",         description: "Gana 500 partidas online", tier: "platinum", progressTarget: 500, checker: "stats-wins" },
   { id: "platinum-40", name: "Holo Completo",      description: "Consigue todas las cartas holo", tier: "platinum", progressTarget: 16, checker: "manual" },
-  { id: "platinum-41", name: "Año Activo",         description: "Inicia sesión 100 días", tier: "platinum", progressTarget: 100, checker: "manual" },
+  { id: "platinum-41", name: "Año Activo",         description: "Entra 100 días distintos", tier: "platinum", progressTarget: 100, checker: "login-days" },
   { id: "platinum-42", name: "Élite",              description: "Alcanza el top 100 del ranking", tier: "platinum", progressTarget: 1, checker: "manual" },
   { id: "platinum-43", name: "Millonario",         description: "Retirado: ya no se premia acumular monedas", tier: "platinum", progressTarget: 25000, checker: "coins" },
-  { id: "platinum-44", name: "Sin Derrotas",       description: "Gana 50 partidas sin perder", tier: "platinum", progressTarget: 50, checker: "manual" },
+  { id: "platinum-44", name: "Sin Derrotas",       description: "Gana 30 partidas online seguidas", tier: "platinum", progressTarget: 30, checker: "stats-streak" },
   { id: "platinum-45", name: "Campeón",            description: "Gana 3 torneos", tier: "platinum", progressTarget: 3, checker: "manual" },
 
   // Legend (5)
   { id: "legend-46", name: "Racha Legendaria",     description: "Gana 50 partidas online seguidas", tier: "legend", progressTarget: 50, checker: "stats-streak" },
   { id: "legend-47", name: "Mil Victorias",        description: "Gana 1000 partidas online", tier: "legend", progressTarget: 1000, checker: "stats-wins" },
   { id: "legend-48", name: "Colección Completa",   description: "Retirado: ahora son los hitos de colección por set", tier: "legend", progressTarget: 102, checker: "collection" },
-  { id: "legend-49", name: "Invencible",           description: "Gana 100 partidas sin perder", tier: "legend", progressTarget: 100, checker: "manual" },
+  { id: "legend-49", name: "Invencible",           description: "Gana 100 partidas online seguidas", tier: "legend", progressTarget: 100, checker: "stats-streak" },
   { id: "legend-50", name: "Leyenda Viviente",     description: "Reclama todos los demás logros disponibles", tier: "legend", progressTarget: 0, checker: "meta" },
 
   // Lucky Duel (vs AI and multiplayer)
@@ -304,11 +318,26 @@ export async function listEarnedAchievements(userId: string) {
 // ---------------------------------------------------------------------------
 
 export async function checkAndUpdateProgress(userId: string): Promise<ClaimableAchievement[]> {
+  // A real Promise (run once, awaited by several): Prisma's query promises are lazy thenables
+  const existingQuery = Promise.resolve(
+    prisma.userAchievement.findMany({
+      where: { userId },
+      select: { achievementId: true, progress: true, unlockedAt: true },
+    }),
+  );
+  // Data only some checkers read: queried (in parallel with the rest) only while one of their
+  // achievements is still unclaimed
+  const pending = (checker: CheckerType) =>
+    existingQuery.then((rows) => {
+      const claimed = new Set(rows.filter((r) => r.unlockedAt).map((r) => r.achievementId));
+      return ACHIEVEMENT_DEFS.some((d) => d.checker === checker && d.status === "active" && !claimed.has(d.id));
+    });
+
   // Load all needed data in parallel
-  const [user, stats, distinctCardCount, existingAchievements, adventureRows] = await Promise.all([
+  const [user, stats, distinctCardCount, existingAchievements, adventureRows, packsOpened, longestLoginStreak] = await Promise.all([
     prisma.user.findUnique({
       where: { id: userId },
-      select: { level: true },
+      select: { level: true, loginDays: true },
     }),
     prisma.userStats.findUnique({
       where: { userId },
@@ -328,11 +357,10 @@ export async function checkAndUpdateProgress(userId: string): Promise<ClaimableA
     // Novato, Coleccionista) say "de cualquier set". The Base Set ones (Colección 75% / Completa,
     // the hotfix's base-set-only count) are retired in favour of the per-set milestones.
     prisma.userCard.count({ where: { userId, quantity: { gt: 0 } } }),
-    prisma.userAchievement.findMany({
-      where: { userId },
-      select: { achievementId: true, progress: true, unlockedAt: true },
-    }),
+    existingQuery,
     prisma.adventureProgress.findMany({ where: { userId } }),
+    pending("packs-opened").then((needed) => (needed ? countPacksOpened(userId) : 0)),
+    pending("login-streak").then((needed) => (needed ? longestCheckInStreakOf(userId) : 0)),
   ]);
 
   if (!user) return [];
@@ -356,7 +384,7 @@ export async function checkAndUpdateProgress(userId: string): Promise<ClaimableA
     if (def.status !== "active") continue;
     // Claimed ones never change (skip their queries)
     if (existingMap.get(def.id)?.unlockedAt) continue;
-    if (!stats && def.checker !== "adventure") continue;
+    if (!stats && !CHECKERS_WITHOUT_STATS.has(def.checker)) continue;
 
     // Calculate current progress
     let currentProgress = 0;
@@ -384,6 +412,15 @@ export async function checkAndUpdateProgress(userId: string): Promise<ClaimableA
         break;
       case "adventure":
         currentProgress = adventureProgress(def, adventureById.get(def.adventureId!));
+        break;
+      case "packs-opened":
+        currentProgress = packsOpened;
+        break;
+      case "login-streak":
+        currentProgress = longestLoginStreak;
+        break;
+      case "login-days":
+        currentProgress = user.loginDays;
         break;
       case "lucky-first-turn":
       case "lucky-win-with":
@@ -425,6 +462,69 @@ export async function checkAndUpdateProgress(userId: string): Promise<ClaimableA
   }
 
   return newlyClaimable;
+}
+
+/**
+ * Check the user's achievements without waiting (after a check-in or opening packs): errors are
+ * logged, never thrown to the caller.
+ */
+export function refreshProgressInBackground(userId: string, trigger: string): void {
+  checkAndUpdateProgress(userId).catch((error) => console.error(`[achievements] check after ${trigger} failed for ${userId}:`, error));
+}
+
+// ---------------------------------------------------------------------------
+// Activity achievements (packs opened, check-ins; see the header)
+// ---------------------------------------------------------------------------
+
+/** Checkers that don't read UserStats (they progress for an account without that row too). */
+const CHECKERS_WITHOUT_STATS = new Set<CheckerType>(["adventure", "packs-opened", "login-streak", "login-days"]);
+
+/** card_transactions reasons of an opened pack (one row per pack). */
+const PACK_OPENING_REASONS: CardChangeReason[] = ["pack_purchase", "daily_pack", "stored_pack", "prize_pack"];
+
+/**
+ * Packs the user opened: their card-history rows, or the legacy coin rows of pack purchases
+ * (`transactions.type` "pack_purchase", one per purchase of 1-10 packs) when those are more —
+ * purchases made before the card history existed. Purchases since then write both rows, so the
+ * two are never added.
+ */
+async function countPacksOpened(userId: string): Promise<number> {
+  const [ledger, legacy] = await Promise.all([
+    prisma.cardTransaction.count({ where: { userId, reason: { in: PACK_OPENING_REASONS } } }),
+    prisma.transaction.count({ where: { userId, type: "pack_purchase" } }),
+  ]);
+  return Math.max(ledger, legacy);
+}
+
+async function longestCheckInStreakOf(userId: string): Promise<number> {
+  const rows = await prisma.economyClaim.findMany({ where: { userId, kind: "check_in" }, select: { key: true } });
+  return longestDayStreak(rows.map((r) => r.key));
+}
+
+const DAY_KEY = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/**
+ * Longest run of consecutive days among economy-day keys ("YYYY-MM-DD", already the Argentina
+ * calendar day: no time zone is applied here). Duplicates count once; malformed keys are ignored.
+ */
+export function longestDayStreak(keys: readonly string[]): number {
+  const days = new Set<number>();
+  for (const key of keys) {
+    const match = DAY_KEY.exec(key);
+    if (!match) continue;
+    const ms = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+    // Reject impossible dates (2026-02-30 would roll over to March)
+    if (new Date(ms).toISOString().slice(0, 10) !== key) continue;
+    days.add(ms / 86_400_000);
+  }
+  const sorted = [...days].sort((a, b) => a - b);
+  let best = 0;
+  let run = 0;
+  for (let i = 0; i < sorted.length; i++) {
+    run = i > 0 && sorted[i] === sorted[i - 1] + 1 ? run + 1 : 1;
+    best = Math.max(best, run);
+  }
+  return best;
 }
 
 // ---------------------------------------------------------------------------

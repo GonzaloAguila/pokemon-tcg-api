@@ -50,6 +50,27 @@ const FINISHED_ROOM_MS = 120_000;
 const MAX_AI_STEPS_PER_LOOP = 500;
 const MAX_AI_ERRORS = 3;
 
+/**
+ * How long the battle screen takes to show one `showCoinFlip` batch: the coin modal opens and
+ * starts (~1 s), each coin spins (~300 ms), then the results stay up (~1.5 s).
+ */
+export const COIN_ANIMATION = { startMs: 1_000, perCoinMs: 300, holdMs: 1_500 } as const;
+
+/**
+ * Pause the AI keeps after coins were shown (the AI's own step, or the human's action) before its
+ * next step or the game over: the batches play one after another. No coins = no pause.
+ */
+export function coinAnimationMs(batches: readonly number[]): number {
+  return batches
+    .filter((coins) => coins > 0)
+    .reduce((total, coins) => total + COIN_ANIMATION.startMs + COIN_ANIMATION.perCoinMs * coins + COIN_ANIMATION.holdMs, 0);
+}
+
+/** Coins of each showCoinFlip the room got from a human action (rooms.ts ActionResult). */
+function actionCoinBatches(result: ActionResult): number[] {
+  return [result.confusionCoinFlipInfo, result.coinFlipInfo].map((info) => (info ? info.results.length + (info.defenderResults?.length ?? 0) : 0));
+}
+
 /** One human input of the battle, in order: with the seed it replays the battle (bug repro). */
 export interface HumanInput {
   kind: "action" | "coinRequest";
@@ -71,6 +92,8 @@ interface Runtime {
   /** The lucky coin came up in the human's current action / coin request (marked after it). */
   luckyPending: boolean;
   aiLoop: Promise<void> | null;
+  /** The AI waits until then (ms epoch) for the coins last shown to finish animating. */
+  coinsShownUntil: number;
   aiErrors: number;
   finished: boolean;
   lastActivity: number;
@@ -107,7 +130,18 @@ export interface AdventureRoomsOptions {
   engine?: () => AdventureEngine | null;
   /** Multiplies every AI step's pause (tests: 0). */
   aiDelayScale?: number;
+  /** Multiplies the pause after coins (coinAnimationMs; tests: 0). */
+  coinPauseScale?: number;
+  /** How the AI waits (tests record the pauses). */
+  sleep?: (ms: number) => Promise<void>;
   snapshotDebounceMs?: number;
+}
+
+/** The AI seat's pauses, changeable at runtime (tests). */
+export interface AdventurePacing {
+  aiDelayScale: number;
+  coinPauseScale: number;
+  sleep: (ms: number) => Promise<void>;
 }
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -137,7 +171,7 @@ export class AdventureRooms implements AdventureBattleHost {
   private readonly manager: GameRoomManager;
   private readonly io: () => Server | null;
   private readonly engineOf: () => AdventureEngine | null;
-  private readonly aiDelayScale: number;
+  private pacing: AdventurePacing;
   private readonly snapshotDebounceMs: number;
   private sweepTimer?: ReturnType<typeof setInterval>;
 
@@ -145,8 +179,30 @@ export class AdventureRooms implements AdventureBattleHost {
     this.manager = options.manager;
     this.io = options.io;
     this.engineOf = options.engine ?? getAdventureEngine;
-    this.aiDelayScale = options.aiDelayScale ?? 1;
+    this.pacing = {
+      aiDelayScale: options.aiDelayScale ?? 1,
+      coinPauseScale: options.coinPauseScale ?? 1,
+      sleep: options.sleep ?? sleep,
+    };
     this.snapshotDebounceMs = options.snapshotDebounceMs ?? SNAPSHOT_DEBOUNCE_MS;
+  }
+
+  /** Change the AI's pauses (tests); returns the previous ones, to restore them. */
+  setPacing(pacing: Partial<AdventurePacing>): AdventurePacing {
+    const previous = this.pacing;
+    this.pacing = { ...previous, ...pacing };
+    return previous;
+  }
+
+  /** The coins just shown in the room hold the AI until they finish animating. */
+  private holdForCoins(runtime: Runtime, batches: readonly number[]): void {
+    const ms = coinAnimationMs(batches) * this.pacing.coinPauseScale;
+    if (ms > 0) runtime.coinsShownUntil = Math.max(runtime.coinsShownUntil, Date.now() + ms);
+  }
+
+  /** What is left of the coin animation hold (0 when none). */
+  private coinHoldLeft(runtime: Runtime): number {
+    return Math.max(0, runtime.coinsShownUntil - Date.now());
   }
 
   /** Evict idle rooms every minute (call once at server start). */
@@ -253,6 +309,7 @@ export class AdventureRooms implements AdventureBattleHost {
       },
       luckyPending: false,
       aiLoop: null,
+      coinsShownUntil: 0,
       aiErrors: 0,
       finished: false,
       lastActivity: Date.now(),
@@ -325,6 +382,8 @@ export class AdventureRooms implements AdventureBattleHost {
       void this.finishBattle(roomId, action.type === "surrender");
       return;
     }
+    // The human's attack / confusion coins play before the AI's turn goes on
+    this.holdForCoins(runtime, actionCoinBatches(result));
     this.scheduleAI(roomId);
   }
 
@@ -381,9 +440,10 @@ export class AdventureRooms implements AdventureBattleHost {
       }
       const peek = withRoomRandom(random, () => engine.nextAIStep(runtime.room.gameState!, runtime.plan));
       if (!peek) return;
-      const delay = engine.stepDelay(peek.step) * this.aiDelayScale;
+      // The step's own pause, or longer while coins shown before it are still animating
+      const delay = Math.max(engine.stepDelay(peek.step) * this.pacing.aiDelayScale, this.coinHoldLeft(runtime));
       // Always yield between steps, so a long AI turn never blocks the event loop
-      await (delay > 0 ? sleep(delay) : new Promise<void>((resolve) => setImmediate(resolve)));
+      await (delay > 0 ? this.pacing.sleep(delay) : new Promise<void>((resolve) => setImmediate(resolve)));
       if (!this.isLive(runtime) || !runtime.room.gameState) return;
 
       // The human may have acted during the pause: decide again on the current state
@@ -409,12 +469,18 @@ export class AdventureRooms implements AdventureBattleHost {
       runtime.room.turnStartedAt = Date.now();
       runtime.lastActivity = Date.now();
       this.emitAIStep(runtime, engine.stepActionType(next.step), coins);
+      this.holdForCoins(runtime, coins.map((c) => c.results.length));
       this.captureSnapshot(runtime);
       if (runtime.room.gameState.gamePhase === "GAME_OVER") {
-        runtime.room.status = "finished";
+        runtime.room.status = "finished"; // GAME_OVER: every human action is rejected meanwhile
+        // The coins that decided the game play before the game over
+        const hold = this.coinHoldLeft(runtime);
+        if (hold > 0) await this.pacing.sleep(hold);
+        const final = runtime.room.gameState;
+        if (!final) return;
         this.io()?.to(runtime.roomId).emit("gameOver", {
-          winner: runtime.room.gameState.gameResult === "victory" ? "player1" : "player2",
-          reason: runtime.room.gameState.events.at(-1)?.message ?? "Fin de la partida",
+          winner: final.gameResult === "victory" ? "player1" : "player2",
+          reason: final.events.at(-1)?.message ?? "Fin de la partida",
         });
         await this.finishBattle(runtime.roomId, false);
         return;

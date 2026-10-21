@@ -517,21 +517,23 @@ function broadcastActionResult(io: Server, roomId: string, actionType: string, r
     console.log(`[action] Sending state update. P1 socket: ${room.player1SocketId}, P2 socket: ${room.player2SocketId}`);
     console.log(`[action] State: P1 active=${!!result.gameState.playerActivePokemon}, P2 active=${!!result.gameState.opponentActivePokemon}`);
 
-    // Broadcast coin flip results to both players if present
-    if (result.coinFlipInfo) {
-      console.log(`[action] Broadcasting coin flip results: ${result.coinFlipInfo.attackName} - ${result.coinFlipInfo.results.join(", ")}`);
+    // Broadcast coin flip results to both players if present: a confused attacker's heads first
+    // (its own batch), then the attack's coins
+    for (const info of [result.confusionCoinFlipInfo, result.coinFlipInfo]) {
+      if (!info) continue;
+      console.log(`[action] Broadcasting coin flip results: ${info.attackName} - ${info.results.join(", ")}`);
       // results: the acting player's coins (flippedBy: who flipped each, when not all the
       // acting player — Knock Down); defenderResults: Transparency / Final Beam coin
       io.to(roomId).emit("showCoinFlip", {
-        attackName: result.coinFlipInfo.attackName,
-        results: result.coinFlipInfo.results,
-        count: result.coinFlipInfo.results.length,
-        ...(result.coinFlipInfo.flippedBy ? { flippedBy: result.coinFlipInfo.flippedBy } : {}),
+        attackName: info.attackName,
+        results: info.results,
+        count: info.results.length,
+        ...(info.flippedBy ? { flippedBy: info.flippedBy } : {}),
         // Rebellion (Gym Challenge): `powerCoins` power coins after the first `smokescreenCoins`
-        ...(result.coinFlipInfo.powerCoins ? { smokescreenCoins: result.coinFlipInfo.smokescreenCoins ?? 0, powerCoins: result.coinFlipInfo.powerCoins } : {}),
-        ...(result.coinFlipInfo.defenderResults ? { defenderResults: result.coinFlipInfo.defenderResults } : {}),
+        ...(info.powerCoins ? { smokescreenCoins: info.smokescreenCoins ?? 0, powerCoins: info.powerCoins } : {}),
+        ...(info.defenderResults ? { defenderResults: info.defenderResults } : {}),
         // Who flipped the defender coin when not the defending player (Shadow Images)
-        ...(result.coinFlipInfo.defenderFlippedBy ? { defenderFlippedBy: result.coinFlipInfo.defenderFlippedBy } : {}),
+        ...(info.defenderFlippedBy ? { defenderFlippedBy: info.defenderFlippedBy } : {}),
       });
     }
 

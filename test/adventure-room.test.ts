@@ -12,19 +12,24 @@ import { prisma } from "../src/lib/prisma.js";
 import * as adventure from "../src/modules/adventure/adventure.service.js";
 import { adventureRooms, roomManager } from "../src/socket/handlers.js";
 import { setAdventureEngine } from "../src/socket/adventure-engine.js";
+import { coinAnimationMs, type AdventurePacing } from "../src/socket/adventure-room.js";
 import { createStubEngine } from "./adventure-stub-engine.js";
 import { createUser } from "./helpers.js";
 import { nextEvent, startSocketServer, tokenFor } from "./socket-helpers.js";
 
 const ADVENTURE = "pueblo-paleta-bosque-verde";
 let server: Awaited<ReturnType<typeof startSocketServer>>;
+let pacing: AdventurePacing;
 
 beforeAll(async () => {
   setAdventureEngine(createStubEngine());
+  // No real waits after coins (the pacing tests record them instead)
+  pacing = adventureRooms.setPacing({ coinPauseScale: 0 });
   server = await startSocketServer();
 });
 
 afterAll(async () => {
+  adventureRooms.setPacing(pacing);
   setAdventureEngine(null);
   await server.close();
   await prisma.$disconnect();
@@ -268,4 +273,97 @@ describe("adventure battle room", () => {
     client.socket.disconnect();
     back.socket.disconnect();
   });
+});
+
+describe("adventure AI pacing after coins", () => {
+  it("coinAnimationMs: per batch 1 s + 300 ms per coin + 1.5 s, batches one after another; no coins, no pause", () => {
+    expect(coinAnimationMs([])).toBe(0);
+    expect(coinAnimationMs([0, 0])).toBe(0);
+    expect(coinAnimationMs([1])).toBe(2_800);
+    expect(coinAnimationMs([4])).toBe(3_700);
+    expect(coinAnimationMs([1, 0, 2])).toBe(2_800 + 3_100);
+  });
+
+  /** A battle the player loses by deck-out inside the AI's endTurn step, its pauses recorded. */
+  async function pacedBattle(endTurnCoins: number) {
+    setAdventureEngine(createStubEngine({ endTurnCoins, playerDeckSize: 16 }));
+    const pauses: { ms: number; phase: string }[] = [];
+    let roomId = "";
+    const previous = adventureRooms.setPacing({
+      coinPauseScale: 1,
+      sleep: async (ms) => {
+        pauses.push({ ms, phase: roomManager.getRoom(roomId)?.gameState?.gamePhase ?? "?" });
+      },
+    });
+    try {
+      // 16 cards: the player's deck runs out before the rival's 20 (they draw in the AI's endTurn step)
+      const battle = await battleFor({ seed: "abcdefabcdefabcdefabcdefabcdef12" });
+      roomId = battle.roomId;
+      const client = await join(battle.token, roomId);
+      const coins: number[] = [];
+      client.socket.on("showCoinFlip", (p: { results: string[] }) => coins.push(p.results.length));
+      const gameOver = nextEvent<{ winner: string }>(client.socket, "gameOver", 10_000);
+      await setUp(client, roomId);
+      await endTurnsUntilOver(client, roomId);
+      expect((await gameOver).winner).toBe("player2");
+      client.socket.disconnect();
+      return { pauses, coins };
+    } finally {
+      adventureRooms.setPacing({ coinPauseScale: previous.coinPauseScale, sleep: previous.sleep });
+      setAdventureEngine(createStubEngine());
+    }
+  }
+
+  it("after an AI step that showed coins, its next step and the game over wait for them", async () => {
+    const { pauses, coins } = await pacedBattle(2);
+    const expected = coinAnimationMs([2]);
+    expect(coins.length).toBeGreaterThan(1);
+    expect(coins.every((n) => n === 2)).toBe(true);
+    expect(pauses.length).toBeGreaterThan(0);
+    // The human answered at once: each wait is (almost) the whole animation, never more
+    for (const pause of pauses) {
+      expect(pause.ms).toBeGreaterThan(expected - 1_000);
+      expect(pause.ms).toBeLessThanOrEqual(expected);
+    }
+    // The coins of the step that ended the game play before gameOver
+    expect(pauses.at(-1)!.phase).toBe("GAME_OVER");
+    // Every AI turn but the first waited for the coins of the one before
+    expect(pauses.filter((p) => p.phase === "PLAYING").length).toBe(coins.length - 1);
+  }, 30_000);
+
+  it("without coins the AI doesn't wait", async () => {
+    const { pauses, coins } = await pacedBattle(0);
+    expect(coins).toEqual([]);
+    expect(pauses).toEqual([]);
+  }, 30_000);
+
+  it("the player's own attack coins hold the AI's next step too", async () => {
+    const pauses: number[] = [];
+    const previous = adventureRooms.setPacing({ coinPauseScale: 1, sleep: async (ms) => { pauses.push(ms); } });
+    try {
+      const deck = [{ cardId: "base-set-048-doduo", qty: 12 }, { cardId: "base-set-097-fighting-energy", qty: 12 }];
+      const { roomId, token } = await battleFor({ deck });
+      const client = await join(token, roomId);
+      await setUp(client, roomId);
+      let attacked = false;
+      for (let turn = 0; turn < 6 && !attacked; turn++) {
+        const state = room(roomId).gameState!;
+        const energy = state.playerHand.find((c) => c.kind === "energy");
+        if (energy && state.playerActivePokemon!.attachedEnergy.length === 0) {
+          await act(client, roomId, "attachEnergy", { cardId: energy.id, pokemonId: state.playerActivePokemon!.pokemon.id });
+        }
+        pauses.length = 0;
+        attacked = (await act(client, roomId, "attack", { attackIndex: 0 })).success; // Fury Attack: 2 coins, ends the turn
+        if (!attacked) await act(client, roomId, "endTurn");
+      }
+      expect(attacked).toBe(true);
+      // The AI's endTurn (no pause of its own in the stub) waited for the 2 coins
+      expect(pauses).toHaveLength(1);
+      expect(pauses[0]).toBeGreaterThan(coinAnimationMs([2]) - 1_000);
+      expect(pauses[0]).toBeLessThanOrEqual(coinAnimationMs([2]));
+      client.socket.disconnect();
+    } finally {
+      adventureRooms.setPacing({ coinPauseScale: previous.coinPauseScale, sleep: previous.sleep });
+    }
+  }, 30_000);
 });

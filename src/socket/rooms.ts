@@ -697,8 +697,13 @@ export interface ActionResult {
   winner?: "player1" | "player2";
   /** The game ended in a draw (Lucky Duel: both Actives Knocked Out at once): no winner. */
   draw?: boolean;
-  /** Coins every client animates (attacks, confusion): showCoinFlip to the room */
+  /** Coins every client animates (attacks, confusion tails): showCoinFlip to the room */
   coinFlipInfo?: CoinFlipInfo;
+  /**
+   * A confused attacker's heads: its own showCoinFlip ("Confusión"), sent BEFORE coinFlipInfo (the
+   * attack's coins, if any). Tails is coinFlipInfo itself (the attack doesn't happen).
+   */
+  confusionCoinFlipInfo?: CoinFlipInfo;
   /** Trainer/power coins: showCoinFlip to everyone but the player who already showed them (requestCoinFlip) */
   opponentCoinFlipInfo?: CoinFlipInfo;
   /** That player (default: the actor; differs when the opponent answered a Trainer's last step) */
@@ -1656,6 +1661,8 @@ export class GameRoomManager {
     // Coins shown to both players (attacks, confusion) / only to the opponent and spectators
     // (trainer and power coins: the acting client already showed them from requestCoinFlip)
     let actionCoinFlipInfo: CoinFlipInfo | undefined;
+    // A confused attacker's heads, shown before the attack's own coins
+    let confusionCoinFlipInfo: CoinFlipInfo | undefined;
     let opponentCoinFlipInfo: CoinFlipInfo | undefined;
     let coinsShownTo: PlayerKey | undefined;
     // Effect coins to forget once the action succeeded
@@ -1736,6 +1743,7 @@ export class GameRoomManager {
               break;
             }
             beforeAttack = afterFlip; // heads: continue the attack from the flipped state
+            confusionCoinFlipInfo = { attackName: "Confusión", results: [confusionCoin] };
           }
 
           // ── Attack (or Metronome copying the Defending Pokémon's attack) ──
@@ -2296,6 +2304,7 @@ export class GameRoomManager {
         winner,
         ...(draw ? { draw } : {}),
         winReason,
+        ...(confusionCoinFlipInfo ? { confusionCoinFlipInfo } : {}),
         ...(actionCoinFlipInfo ? { coinFlipInfo: actionCoinFlipInfo } : {}),
         ...(opponentCoinFlipInfo ? { opponentCoinFlipInfo, coinsShownTo: coinsShownTo ?? actorKey } : {}),
         ...(setupTimerStarted ? { setupTimerStarted } : {}),

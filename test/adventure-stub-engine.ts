@@ -1,7 +1,9 @@
 /**
  * A minimal AdventureEngine on plain game-core primitives, for the adventure room's plumbing
  * tests (adventure-room.test.ts). Its "AI" only sets up, readies, promotes, takes Prizes and ends
- * its turns; passives other than the lucky coin and battle modifiers are ignored.
+ * its turns (showing `endTurnCoins` coins when asked and with `playerDeckSize` cutting the
+ * player's deck, for the pacing tests); passives other than
+ * the lucky coin and battle modifiers are ignored.
  */
 import {
   GamePhase,
@@ -52,7 +54,7 @@ function hashSeed(text: string): number {
 type Passives = { player?: string[]; luckyCoinUsed?: { player?: boolean } };
 const passivesOf = (state: GameState) => (state as GameState & { passives?: Passives }).passives;
 
-export function createStubEngine(): AdventureEngine & { stepsApplied: number } {
+export function createStubEngine(stubOptions: { endTurnCoins?: number; playerDeckSize?: number } = {}): AdventureEngine & { stepsApplied: number } {
   const engine = {
     stepsApplied: 0,
     aiEventsSpeakFor: "ai" as const,
@@ -66,7 +68,7 @@ export function createStubEngine(): AdventureEngine & { stepsApplied: number } {
           return Array.from({ length: e.qty }, () => ({ ...template, id: `${side}-${template.name}-${n++}` }));
         });
       const state = {
-        playerDeck: shuffle(cards(config.playerDeck, "p")),
+        playerDeck: shuffle(cards(config.playerDeck, "p")).slice(0, stubOptions.playerDeckSize),
         playerHand: [], playerPrizes: [], playerDiscard: [], playerActivePokemon: null, playerBench: [],
         opponentDeck: shuffle(cards(config.opponentDeck, "o")),
         opponentHand: [], opponentPrizes: [], opponentDiscard: [], opponentActivePokemon: null, opponentBench: [],
@@ -109,6 +111,9 @@ export function createStubEngine(): AdventureEngine & { stepsApplied: number } {
         case "takePrize":
           return takePrize(state, 0, false);
         case "endTurn":
+          if (stubOptions.endTurnCoins) {
+            options.onCoins({ label: "Moneda de prueba", results: Array.from({ length: stubOptions.endTurnCoins }, () => options.flip()) });
+          }
           return swapSides(endTurn(swapSides(state), true));
       }
     },

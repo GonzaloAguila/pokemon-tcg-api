@@ -82,7 +82,7 @@ describe("adventure achievements", () => {
 
   it("doesn't move the Legend meta target, nor count for it", async () => {
     const { user, state } = await withProgress({ clearsNormal: 1 });
-    expect(state("legend-50").progressTarget).toBe(19);
+    expect(state("legend-50").progressTarget).toBe(25);
     await claimAchievement(user.id, "adventure-1-clear-normal");
     await checkAndUpdateProgress(user.id);
     expect((await listAchievements(user.id)).find((a) => a.id === "legend-50")!.progress).toBe(0);

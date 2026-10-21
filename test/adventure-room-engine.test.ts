@@ -15,13 +15,17 @@ import { nextEvent, startSocketServer, tokenFor } from "./socket-helpers.js";
 
 const ADVENTURE = "pueblo-paleta-bosque-verde";
 let server: Awaited<ReturnType<typeof startSocketServer>>;
+let pacing: ReturnType<typeof adventureRooms.setPacing>;
 
 beforeAll(async () => {
   setAdventureEngine(gameCoreAdventureEngine);
+  // The AI keeps its step pauses but doesn't wait for coin animations (adventure-room.test.ts)
+  pacing = adventureRooms.setPacing({ coinPauseScale: 0 });
   server = await startSocketServer();
 });
 
 afterAll(async () => {
+  adventureRooms.setPacing(pacing);
   setAdventureEngine(null);
   await server.close();
   await prisma.$disconnect();

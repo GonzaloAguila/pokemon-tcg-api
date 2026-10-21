@@ -13,6 +13,7 @@ import { prisma } from "../../lib/prisma.js";
 import * as boosterService from "./boosters.service.js";
 import * as usersService from "../users/users.service.js";
 import type { PackOpeningResult } from "./boosters.types.js";
+import { refreshProgressInBackground } from "../achievements/achievements.service.js";
 
 const router = Router();
 
@@ -102,6 +103,7 @@ router.post(
         return opened;
       }, { timeout: 20_000, maxWait: 5_000 }); // up to 10 packs: ~120 queries, Prisma's default 5 s isn't enough under load
 
+      refreshProgressInBackground(userId, "pack purchase");
       res.json({ ...packs[0], packs });
     } catch (error) {
       next(
