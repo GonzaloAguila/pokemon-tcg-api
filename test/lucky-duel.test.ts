@@ -448,7 +448,7 @@ describe("settleMatch: a draw", () => {
 // ---------------------------------------------------------------------------
 
 describe("POST /api/matches/ai/:matchId/finish: a Lucky Duel vs the AI", () => {
-  const LONG = matches.AI_MIN_DURATION_MS + 1000;
+  const LONG = (3 * 60_000) + 1000;
 
   it("accepts result draw (the loser's rewards) and records the mode", async () => {
     const u = await createUser({ coins: 100 }, { stats: true });

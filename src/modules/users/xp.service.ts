@@ -1,5 +1,4 @@
 import type { Db } from "./users.service.js";
-import { ECONOMY } from "../economy/config.js";
 import { startOfEconomyDay } from "../economy/economy-time.js";
 
 // ---------------------------------------------------------------------------
@@ -28,13 +27,6 @@ export const XP_REWARDS = {
 
 /** Most XP a user can earn per economy day (00:00 Argentina) across all modes (anti-farming). */
 export const DAILY_XP_CAP = 2000;
-
-/**
- * A game must reach this turn number to count (each player had a turn), so instant surrenders
- * between two accounts can't farm anything. Same rule for stats, coins and missions
- * (ECONOMY.antiFarming, see modules/matches).
- */
-export const MIN_TURN_FOR_XP = ECONOMY.antiFarming.minTurn;
 
 export type XpMode = keyof typeof XP_REWARDS;
 

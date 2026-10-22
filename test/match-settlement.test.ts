@@ -377,7 +377,7 @@ describe("single player vs AI (client-reported, bounded)", () => {
     await prisma.match.update({ where: { id: matchId }, data: { startedAt: new Date(Date.now() - ms) } });
     return matchId;
   }
-  const LONG = matches.AI_MIN_DURATION_MS + 1000;
+  const LONG = (3 * 60_000) + 1000;
 
   it("a finished game counts once (XP, coins, missions); reporting it again is rejected", async () => {
     const u = await createPlayer();

@@ -323,7 +323,7 @@ function endDraftGame(io: Server, gameRoomManager: GameRoomManager, gameRoomId: 
   if (!gameRoom || gameRoom.resultSettled) return;
   gameRoom.status = "finished";
   const winnerSide = winnerId === gameRoom.player1Id ? "player1" : "player2";
-  settleRoomResult(io, gameRoom, winnerSide, reason, { isDraft: true, forfeit: true });
+  settleRoomResult(io, gameRoom, winnerSide, reason, { isDraft: true });
   io.to(gameRoomId).emit("gameOver", { winner: winnerSide, reason });
 }
 

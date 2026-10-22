@@ -27,16 +27,12 @@ import { recordMissionEvent, type MissionCompletion } from "../economy/missions.
 // both players' table bet in the same transaction, when bets are enabled) and settled exactly
 // once when it ends (`settledAt` is claimed with a conditional update, so a second end event is
 // a no-op). Single player vs AI: the client reports the result (the engine runs in the
-// browser), so it earns little, with a minimum duration and a daily game limit.
+// browser), so it earns little, with a daily game limit.
 //
 // Anti-farming (ECONOMY.antiFarming): a game only COUNTS — stats, ranking, achievements, XP,
-// match coins and missions — if it reached turn 3 and lasted 2 minutes (AI: 3 minutes and the
-// first 10 games of the day), and the winner has fewer than 3 counted wins against that
-// opponent this economy day. Friendly tables never count. A game the loser forfeits before the
-// threshold (surrender, leave, disconnect, kick, no-show: `forfeit: true`) is an "early forfeit"
-// (ECONOMY.antiFarming.forfeit): it counts for the winner only against an established forfeiter
-// (verified email, 10 counted online games), at most 3 such wins per winner per economy day; the
-// forfeiter's loss is always recorded in the stats, without coins or XP.
+// match coins and missions — if the winner has fewer than 3 counted wins against that opponent
+// this economy day (AI: the first 10 games of the day). No minimum turn or duration: a game
+// counts however short it was, surrenders and disconnects included. Friendly tables never count.
 //
 // Per-opponent coin cap (ECONOMY.antiFarming.maxCoinsFromOpponentPerDay): a player wins at most
 // 200 coins per economy day from the same opponent (match coins of wins + net bet winnings,
@@ -61,8 +57,6 @@ export type MatchMode = MultiplayerMode | "ai";
 /** Highest bet any table can carry (legend tier). Lower tiers are capped by title, see users/titles.ts. */
 export const MAX_BET = 1000;
 
-/** A single-player game must last at least this long (server clock) to count. */
-export const AI_MIN_DURATION_MS = ECONOMY.antiFarming.aiMinDurationMs;
 /** Single-player games that count per user per economy day. */
 export const AI_DAILY_REWARDED_GAMES = ECONOMY.antiFarming.aiDailyCountedGames;
 
@@ -102,9 +96,8 @@ export function maxTableBet(gameMode: GameModeMarker, titleCap: number): number 
 
 /**
  * Online games (normal + ranked + draft) that counted for the user's stats. Losses by an early
- * forfeit (`matches.earlyForfeit`, see ECONOMY.antiFarming.forfeit) are in the stats but are left
- * out here: forfeiting games at turn 0 must not make an account eligible for bets, trades or
- * paid forfeit wins.
+ * forfeit (`matches.earlyForfeit`, games settled before 2026-10-22 under the old minimum turn /
+ * duration rule) are in the stats but are left out here.
  */
 export async function countedOnlineGames(db: Db, userId: string): Promise<number> {
   const s = await db.userStats.findUnique({ where: { userId } });
@@ -118,28 +111,6 @@ export async function countedOnlineGames(db: Db, userId: string): Promise<number
     },
   });
   return Math.max(0, total - forfeitLosses);
-}
-
-/**
- * Whether `userId` is an established account whose early forfeit pays the winner
- * (ECONOMY.antiFarming.forfeit): verified email (OAuth counts) and enough counted online games.
- */
-async function isEstablishedAccount(db: Db, userId: string): Promise<boolean> {
-  if (!(await hasVerifiedEmail(userId, db))) return false;
-  return (await countedOnlineGames(db, userId)) >= ECONOMY.antiFarming.forfeit.establishedMinOnlineGames;
-}
-
-/** Early-forfeit wins of `winnerId` that counted this economy day (other matches, all opponents). */
-async function paidForfeitWinsToday(db: Db, winnerId: string, excludeMatchId: string, now: Date): Promise<number> {
-  return db.match.count({
-    where: {
-      id: { not: excludeMatchId },
-      winnerId,
-      earlyForfeit: true,
-      counted: true,
-      settledAt: { gte: startOfEconomyDay(now) },
-    },
-  });
 }
 
 /**
@@ -279,9 +250,6 @@ export type SettleInput =
    * per-opponent win cap) but changes no win/loss stats or streaks (the stats model has no draws);
    * both players get the loser's participation rewards (XP, match coins, "game_played" mission).
    * `luckyDuel`: the drawn Basics and the starting side (Lucky Duel tables only).
-   * `forfeit`: the loser gave the game up (surrender, leave, disconnect timeout, turn-timer kick,
-   * setup timeout, no-show, draft forfeit); before the anti-farming threshold it is an "early
-   * forfeit" (ECONOMY.antiFarming.forfeit).
    */
   | {
       kind: "multiplayer";
@@ -290,7 +258,6 @@ export type SettleInput =
       reason: string;
       turnNumber: number;
       luckyDuel?: LuckyDuelStarters;
-      forfeit?: boolean;
     }
   /**
    * turnNumber: last turn reached, reported by the client (the AI game runs in the browser).
@@ -339,25 +306,11 @@ export interface PlayerSettlement {
   emailVerified: boolean;
   /** vs-AI Lucky Duel only. */
   luckyDuel?: LuckyDuelAiSettlement;
-  /**
-   * The loser forfeited before the anti-farming threshold (ECONOMY.antiFarming.forfeit). The
-   * forfeiter's loss is in their stats, without coins, XP or missions.
-   */
-  earlyForfeit: boolean;
-  /** Winner of an early forfeit that didn't count: why (null otherwise). */
-  forfeitBlockedBy: ForfeitBlockReason | null;
   /** Winner of a non-friendly online game: the per-opponent daily coin cap (null otherwise). */
   pairCap: PairCapSettlement | null;
   /** Loser: part of their table-bet stake refunded because the winner reached the per-opponent cap. */
   betRefundedByPairCap: number;
 }
-
-/**
- * Why an early-forfeit win didn't count: the forfeiter isn't an established account, the winner
- * already has ECONOMY.antiFarming.forfeit.maxPaidWinsPerDay paid forfeit wins today, or the
- * per-opponent counted-wins cap (maxCountedWinsPerOpponentPerDay) was reached.
- */
-export type ForfeitBlockReason = "forfeiter_not_established" | "daily_forfeit_limit" | "opponent_win_limit";
 
 /** The per-opponent daily coin cap (ECONOMY.antiFarming.maxCoinsFromOpponentPerDay) for the winner. */
 export interface PairCapSettlement {
@@ -378,8 +331,6 @@ export interface SettlementResult {
   betAmount: number;
   winnerId: string | null;
   counted: boolean;
-  /** See PlayerSettlement.earlyForfeit. */
-  earlyForfeit: boolean;
   players: PlayerSettlement[];
 }
 
@@ -466,8 +417,7 @@ async function settleMatchTx(tx: Db, matchId: string, input: SettleInput, now: D
   });
   if (count === 0) return null;
 
-  const rules = decided ? await countingRules(tx, match, mode, input, winnerId, now) : NOT_COUNTED;
-  const { counted, earlyForfeit } = rules;
+  const counted = decided && (await gameCounts(tx, match, mode, input, winnerId, now));
   const loserId = winnerId ? players.find((p) => p !== winnerId) ?? null : null;
   const verified = new Map<string, boolean>();
   for (const p of players) verified.set(p, (await hasVerifiedEmail(p, tx)) ?? false);
@@ -573,28 +523,21 @@ async function settleMatchTx(tx: Db, matchId: string, input: SettleInput, now: D
   }
 
   // Stats (multiplayer normal/draft, counted only). A draw changes no stats: there is no draw
-  // column, and neither streak breaks nor grows. An early forfeit that didn't count still records
-  // the forfeiter's loss (streak broken); the winner gets nothing
-  if (winnerId && (mode === "normal" || mode === "draft")) {
-    if (counted) {
-      for (const p of players) await recordMatchResult(p, mode, p === winnerId, tx);
-    } else if (earlyForfeit && loserId) {
-      await recordMatchResult(loserId, mode, false, tx);
-    }
+  // column, and neither streak breaks nor grows
+  if (winnerId && counted && (mode === "normal" || mode === "draft")) {
+    for (const p of players) await recordMatchResult(p, mode, p === winnerId, tx);
   }
 
-  // XP, match coins and missions (counted only; coins and missions need a verified email). The
-  // early forfeiter gets none of them, even when the win counted for the winner
+  // XP, match coins and missions (counted only; coins and missions need a verified email)
   const grants = new Map<string, ExperienceGrant>();
   const coinGrants = new Map<string, MatchCoinGrant>();
   const missions = new Map<string, MissionCompletion[]>();
   for (const p of players) {
     // A draw pays both players what a loser gets (participation): XP, match coins, game_played
     const outcome = p === winnerId ? "win" : "loss";
-    const rewarded = counted && !(earlyForfeit && p !== winnerId);
-    const grant = await grantExperience(tx, p, rewarded ? XP_REWARDS[mode][outcome] : 0, now);
+    const grant = await grantExperience(tx, p, counted ? XP_REWARDS[mode][outcome] : 0, now);
     if (grant) grants.set(p, grant);
-    if (!rewarded || !verified.get(p)) continue;
+    if (!counted || !verified.get(p)) continue;
     const pairLeft = pairCapApplies && p === winnerId ? pairRemaining : Number.POSITIVE_INFINITY;
     const coinGrant = await grantMatchCoins(tx, p, isAi ? "ai" : "online", outcome, matchId, now, pairLeft);
     coinGrants.set(p, coinGrant);
@@ -609,7 +552,6 @@ async function settleMatchTx(tx: Db, matchId: string, input: SettleInput, now: D
     where: { id: matchId },
     data: {
       counted,
-      earlyForfeit,
       player1Xp: (match.player1Id && grants.get(match.player1Id)?.gained) || 0,
       player2Xp: (match.player2Id && grants.get(match.player2Id)?.gained) || 0,
       player1Coins: coinsOf(match.player1Id),
@@ -635,7 +577,6 @@ async function settleMatchTx(tx: Db, matchId: string, input: SettleInput, now: D
     betAmount: bet,
     winnerId,
     counted,
-    earlyForfeit,
     players: players.map((p): PlayerSettlement => {
       const grant = grants.get(p);
       return {
@@ -654,8 +595,6 @@ async function settleMatchTx(tx: Db, matchId: string, input: SettleInput, now: D
         missionsCompleted: missions.get(p) ?? [],
         emailVerified: verified.get(p) ?? false,
         ...(luckyAi && p === match.player1Id ? { luckyDuel: luckyAi } : {}),
-        earlyForfeit,
-        forfeitBlockedBy: p === winnerId ? rules.forfeitBlockedBy : null,
         pairCap: p === winnerId ? pairCap : null,
         betRefundedByPairCap: p === loserId ? betWinningsCut : 0,
       };
@@ -684,66 +623,30 @@ async function recordLuckyDuelResult(tx: Db, userId: string, outcome: "win" | "l
   return { streak, aiStreak };
 }
 
-interface CountingRules {
-  counted: boolean;
-  /** The loser forfeited before minTurn / minDurationMs (non-friendly online game with a winner). */
-  earlyForfeit: boolean;
-  forfeitBlockedBy: ForfeitBlockReason | null;
-}
-
-const NOT_COUNTED: CountingRules = { counted: false, earlyForfeit: false, forfeitBlockedBy: null };
-
 /**
- * The anti-farming rules (see the header), plus ECONOMY.antiFarming.forfeit for a multiplayer
- * game the loser forfeited before the threshold. Needs the players' row locks (the per-opponent
- * and per-day counts can't race).
+ * The anti-farming rules (see the header). Needs the players' row locks (the per-opponent and
+ * per-day counts can't race).
  */
-async function countingRules(
+async function gameCounts(
   tx: Db,
   match: { id: string; player1Id: string | null; player2Id: string | null; startedAt: Date | null },
   mode: MatchMode,
   input: SettleInput,
   winnerId: string | null,
   now: Date,
-): Promise<CountingRules> {
-  const rules = ECONOMY.antiFarming;
-  if (mode === "friendly" || !match.startedAt) return NOT_COUNTED;
-  if (input.kind === "ai") {
-    return { ...NOT_COUNTED, counted: await aiGameCounts(tx, match, input, now) };
-  }
-  if (!match.player1Id || !match.player2Id) return NOT_COUNTED;
-  const elapsed = now.getTime() - match.startedAt.getTime();
-  const reachedThreshold = input.turnNumber >= rules.minTurn && elapsed >= rules.minDurationMs;
-
+): Promise<boolean> {
+  if (mode === "friendly" || !match.startedAt) return false;
+  if (input.kind === "ai") return aiGameCounts(tx, match, now);
+  if (!match.player1Id || !match.player2Id) return false;
   // A draw has no winner to cap (the per-opponent cap counts wins); no result counts for nobody
-  if (!winnerId) return { ...NOT_COUNTED, counted: reachedThreshold && input.draw === true };
+  if (!winnerId) return input.draw === true;
   const loserId = winnerId === match.player1Id ? match.player2Id : match.player1Id;
-  const underOpponentCap =
-    (await countedWinsAgainstToday(tx, winnerId, loserId, match.id, now)) < rules.maxCountedWinsPerOpponentPerDay;
-  if (reachedThreshold) return { ...NOT_COUNTED, counted: underOpponentCap };
-  if (!input.forfeit) return NOT_COUNTED;
-
-  // Early forfeit: the win counts only against an established forfeiter, within the caps
-  let forfeitBlockedBy: ForfeitBlockReason | null = null;
-  if (!(await isEstablishedAccount(tx, loserId))) forfeitBlockedBy = "forfeiter_not_established";
-  else if (!underOpponentCap) forfeitBlockedBy = "opponent_win_limit";
-  else if ((await paidForfeitWinsToday(tx, winnerId, match.id, now)) >= rules.forfeit.maxPaidWinsPerDay) {
-    forfeitBlockedBy = "daily_forfeit_limit";
-  }
-  return { counted: forfeitBlockedBy === null, earlyForfeit: true, forfeitBlockedBy };
+  return (await countedWinsAgainstToday(tx, winnerId, loserId, match.id, now)) < ECONOMY.antiFarming.maxCountedWinsPerOpponentPerDay;
 }
 
-/** vs AI: turn, duration and the counted games of the day. */
-async function aiGameCounts(
-  tx: Db,
-  match: { id: string; player1Id: string | null; startedAt: Date | null },
-  input: SettleInput,
-  now: Date,
-): Promise<boolean> {
-  const rules = ECONOMY.antiFarming;
-  if (!match.startedAt || input.turnNumber < rules.minTurn) return false;
-  const elapsed = now.getTime() - match.startedAt.getTime();
-  if (!match.player1Id || elapsed < rules.aiMinDurationMs) return false;
+/** vs AI: the counted games of the day. */
+async function aiGameCounts(tx: Db, match: { id: string; player1Id: string | null }, now: Date): Promise<boolean> {
+  if (!match.player1Id) return false;
   const countedToday = await tx.match.count({
     where: {
       id: { not: match.id },
@@ -753,7 +656,7 @@ async function aiGameCounts(
       settledAt: { gte: startOfEconomyDay(now) },
     },
   });
-  return countedToday < rules.aiDailyCountedGames;
+  return countedToday < ECONOMY.antiFarming.aiDailyCountedGames;
 }
 
 /**

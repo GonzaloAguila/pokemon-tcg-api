@@ -128,7 +128,7 @@ describe("vs AI Lucky Duel: the stake", () => {
 
   it("the normal vs-AI rewards still follow the anti-farming rules (a long counted game adds them)", async () => {
     const u = await createUser({ coins: 100 }, { stats: true });
-    const { matchId } = await matches.startAiMatch(u.id, "lucky-duel", new Date(Date.now() - matches.AI_MIN_DURATION_MS - 1000));
+    const { matchId } = await matches.startAiMatch(u.id, "lucky-duel", new Date(Date.now() - (3 * 60_000) - 1000));
     const res = await matches.finishAiMatch(u.id, matchId, "victory", 5);
     expect(res).toMatchObject({ counted: true, rewardCoins: ECONOMY.matchCoins.ai.win, luckyDuel: { payout: 40 } });
     // stake back + 20, the AI match coins and the "win 1 game" mission
