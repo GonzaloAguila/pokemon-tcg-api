@@ -446,6 +446,30 @@ describe.each(["p1", "p2"] as const)("Gym Challenge in multiplayer as %s", (acto
     expect(t.mine().playerDiscard.map((c) => c.id)).toContain("warp");
     expect(t.mine().isPlayerTurn).toBe(true);
   });
+
+  it("Blaine's Quiz #2: the guess is on the 10-second answer clock, also when the guesser is the side whose turn it is (offered by Chaos Gym)", async () => {
+    const t = setupGame(actor, {
+      myHand: [gc("Blaine's Quiz #2", "quiz2"), cardAs("Potion", "my-potion")],
+      theirHand: [cardAs("Potion", "their-potion")],
+      stadium: { card: gc("Chaos Gym", "chaos"), playedBy: "player" },
+    }, ["tails"]);
+    const played = await t.act("playTrainer", { cardId: "quiz2", selections: [] });
+    expect(played.success, played.error).toBe(true);
+    expect((await t.actAs(opp, "answerTrainerChoice", { selection: ["accept"] })).success).toBe(true);
+    const started = await t.actAs(opp, "startTrainer", { cardId: "quiz2", selections: [["their-potion"]] });
+    expect(started.success, started.error).toBe(true);
+    // The offered player's opponent guesses: the card's owner, whose turn it is
+    expect(t.room.gameState!.pendingTrainerChoice).toMatchObject({ chooser: "opponent", playedOffTurn: true });
+    expect(t.masked(actor).pendingTrainerChoice.step.answerTimeLimitMs).toBe(10_000);
+    expect(offTurnAnswerer(t.room.gameState)).toBe(VIEWER_KEY[actor]);
+    expect(t.manager.getClock(t.room)).toMatchObject({ kind: "answer", durationSeconds: 10 });
+    const auto = await t.manager.autoAnswerTimedOut(t.room.id);
+    expect(auto?.success, auto?.error).toBe(true);
+    expect(t.room.gameState!.pendingTrainerChoice).toBeUndefined();
+    expect(t.mine().pendingChaosOffer).toBeUndefined();
+    expect(t.mine().isPlayerTurn).toBe(true);
+    expect(t.manager.getClock(t.room)).toMatchObject({ kind: "turn", durationSeconds: 180 });
+  });
   // ── Fuchsia / Saffron City Gym, Shapeshift ──────────────────────────────────────
 
   it("Fuchsia City Gym: the stadium coin comes from requestCoinFlip (stadium); heads shuffles a Koga's Pokémon in", async () => {

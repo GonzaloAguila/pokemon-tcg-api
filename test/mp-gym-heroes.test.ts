@@ -576,6 +576,39 @@ describe.each(["p1", "p2"] as const)("Gym Heroes Trainers the other player answe
     expect(t.mine().playerDiscard.map((c) => c.id)).toContain("quiz-h");
   });
 
+  it("Blaine's Quiz #1: the guess has a 10-second answer clock (step.answerTimeLimitMs); unanswered, the server answers its default", async () => {
+    vi.useFakeTimers();
+    try {
+      const t = setupGame(actor, { myHand: [gh("Blaine's Quiz #1", "quiz-h"), cardAs("Charmander", "quiz-charmander")] });
+      const onAuto = vi.fn();
+      t.manager.setOnAutoAnswer(onAuto);
+      expect((await t.act("startTrainer", { cardId: "quiz-h", selections: [["quiz-charmander"]] })).success).toBe(true);
+      const step = t.masked(opp).pendingTrainerChoice.step;
+      expect(step.answerTimeLimitMs).toBe(10_000);
+      expect(t.room.turnTimerDuration).toBe(180);
+      expect(t.manager.getClock(t.room)).toMatchObject({ kind: "answer", userId: USER[opp], durationSeconds: 10, pausedUserId: USER[actor], pausedRemainingSeconds: 180 });
+      // A short grace for the network after the 10 seconds the answerer sees
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(onAuto).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(onAuto).toHaveBeenCalledTimes(1);
+      expect(onAuto.mock.calls[0][1]).toBe(VIEWER[opp]);
+      expect(onAuto.mock.calls[0][2]).toMatchObject({ type: "answerTrainerChoice", payload: { selection: step.defaultSelection } });
+      expect(t.room.pendingTrainer).toBeUndefined();
+      expect(t.mine().playerDiscard.map((c) => c.id)).toContain("quiz-h");
+      // Control (and the full turn clock) returns to the player whose turn it is
+      expect(t.manager.getClock(t.room)).toMatchObject({ kind: "turn", userId: USER[actor], durationSeconds: 180 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("other off-turn answers keep the table's clock (Erika: 180 s)", async () => {
+    const t = setupGame(actor, { myHand: [gh("Erika", "erika-h")], theirHand: [] });
+    expect((await t.act("startTrainer", { cardId: "erika-h", selections: [["1"]] })).success).toBe(true);
+    expect(t.manager.getClock(t.room)).toMatchObject({ kind: "answer", userId: USER[opp], durationSeconds: 180 });
+  });
+
   // ── Misty's Duel ─────────────────────────────────────────────────────────────────
 
   it("Misty's Duel: both pick off-turn; a pick is never shown before both are in; the winner redraws 5", async () => {
