@@ -226,8 +226,9 @@ export interface GameRoom {
 
   // An off-turn answer in progress (offTurnAnswerer): `side` answers, its clock started at
   // `startedAt` (also room.turnStartedAt meanwhile); the turn clock is paused with
-  // `turnRemainingMs` left. `autoAnswerFailed`: no default answer worked (requestKick allowed).
-  answerClock?: { side: PlayerKey; startedAt: number; turnRemainingMs: number; autoAnswerFailed?: boolean };
+  // `turnRemainingMs` left. `durationMs`: how long it lasts (the turn clock's duration, or a timed
+  // step's stepAnswerTimeLimitMs). `autoAnswerFailed`: no default answer worked (requestKick allowed).
+  answerClock?: { side: PlayerKey; startedAt: number; durationMs: number; turnRemainingMs: number; autoAnswerFailed?: boolean };
 
   /** Modo Aventura battle (see AdventureRoomInfo). */
   adventure?: AdventureRoomInfo;
@@ -330,7 +331,9 @@ export function awaitedSide(state: GameState | null | undefined): PlayerKey | nu
  * Surge's Treaty, Blaine's Quiz #1, Terror Strike, mid-attack reactions such as Flee or Bench
  * Guard of the defending side), or the head of Narrow Gym's Bench trim queue when it is theirs.
  * While one is pending the answer clock runs for them and the turn clock is paused
- * (GameRoomManager.updateClocks); when it runs out the server answers by default.
+ * (GameRoomManager.updateClocks); when it runs out the server answers by default. A timed step
+ * (`answerTimeLimitMs`: the Blaine's Quiz guesses) is on the answer clock whoever answers it, the
+ * side whose turn it is included (a quiz offered by Chaos Gym is guessed by that side).
  */
 export function offTurnAnswerer(state: GameState | null | undefined): PlayerKey | null {
   if (!state || state.gamePhase === "GAME_OVER" || state.gamePhase === "MULLIGAN" || state.gamePhase === "SETUP") return null;
@@ -339,7 +342,7 @@ export function offTurnAnswerer(state: GameState | null | undefined): PlayerKey 
   const trainerChoice = pendingTrainerChoiceOf(state);
   if (trainerChoice) {
     const answerer = trainerChoiceAnswerer(state, trainerChoice);
-    return answerer === turnSide ? null : answerer;
+    return answerer === turnSide && !trainerChoice.step.answerTimeLimitMs ? null : answerer;
   }
   // Chaos Gym: the accepted offer is played on the offered player's answer clock (default: give it up)
   const chaosPlayer = chaosOfferPlayer(state);
@@ -353,7 +356,10 @@ export function offTurnAnswerer(state: GameState | null | undefined): PlayerKey 
     const side: PlayerKey = benchTrim.side === "player" ? "player1" : "player2";
     return side === turnSide ? null : side;
   }
-  if (state.pendingAttackChoice) return state.pendingAttackChoice.step.chooser === "opponent" ? otherSide : null;
+  if (state.pendingAttackChoice) {
+    const step = state.pendingAttackChoice.step;
+    return step.chooser === "opponent" ? otherSide : step.answerTimeLimitMs ? turnSide : null;
+  }
   return null;
 }
 
@@ -410,6 +416,25 @@ function defaultAnswerAction(state: GameState, side: PlayerKey): { type: string;
   }
   return null;
 }
+
+/**
+ * How long the pending answer's clock lasts when its step asks for less than the table's turn
+ * clock (game-core `SelectionStep.answerTimeLimitMs`: the Blaine's Quiz guesses, 10 s), else
+ * undefined (the turn clock's duration). Same order as defaultAnswerAction.
+ */
+export function stepAnswerTimeLimitMs(state: GameState | null | undefined): number | undefined {
+  if (!state) return undefined;
+  const trainerChoice = pendingTrainerChoiceOf(state);
+  const step = trainerChoice ? trainerChoice.step : state.pendingAttackChoice?.step;
+  const limit = step?.answerTimeLimitMs;
+  return typeof limit === "number" && limit > 0 ? limit : undefined;
+}
+
+/**
+ * Extra time the server waits after a timed step's clock (stepAnswerTimeLimitMs) before answering
+ * by default: an answer sent at the last second the answerer saw still arrives in time.
+ */
+export const TIMED_ANSWER_GRACE_MS = 1_000;
 
 /**
  * Whose clock runs, sent with every game state (room-state.ts): `kind` "turn" = the awaited
@@ -1069,7 +1094,7 @@ export class GameRoomManager {
         kind: "answer",
         userId: userOf(answer.side),
         startedAt: answer.startedAt,
-        durationSeconds: room.turnTimerDuration,
+        durationSeconds: Math.round(answer.durationMs / 1000),
         pausedUserId: userOf(turnSide),
         pausedRemainingSeconds: Math.round(answer.turnRemainingMs / 1000),
       };
@@ -2612,9 +2637,13 @@ export class GameRoomManager {
       // The turn clock pauses with the time it had after its player's last action (every action
       // restarts the awaited player's clock): a full turn clock, kept across several answers
       const turnRemainingMs = room.answerClock?.turnRemainingMs ?? durationMs;
-      room.answerClock = { side: answerer, startedAt: now, turnRemainingMs };
+      // A timed step (the Blaine's Quiz guesses) gets only its own limit, plus a grace for the
+      // network before the server answers by default
+      const limitMs = stepAnswerTimeLimitMs(room.gameState);
+      const answerMs = limitMs !== undefined ? Math.min(limitMs, durationMs) : durationMs;
+      room.answerClock = { side: answerer, startedAt: now, durationMs: answerMs, turnRemainingMs };
       room.turnStartedAt = now;
-      this.scheduleAutoAnswer(room);
+      this.scheduleAutoAnswer(room, limitMs !== undefined ? answerMs + TIMED_ANSWER_GRACE_MS : answerMs);
       return;
     }
     this.cancelAnswerTimer(room.id);
@@ -2627,7 +2656,7 @@ export class GameRoomManager {
     room.turnStartedAt = now;
   }
 
-  private scheduleAutoAnswer(room: GameRoom): void {
+  private scheduleAutoAnswer(room: GameRoom, delayMs: number): void {
     this.cancelAnswerTimer(room.id);
     const timer = setTimeout(() => {
       this.answerTimers.delete(room.id);
@@ -2637,7 +2666,7 @@ export class GameRoomManager {
         const current = this.rooms.get(room.id);
         if (current?.answerClock) current.answerClock.autoAnswerFailed = true;
       });
-    }, room.turnTimerDuration * 1000);
+    }, delayMs);
     timer.unref?.();
     this.answerTimers.set(room.id, timer);
   }
