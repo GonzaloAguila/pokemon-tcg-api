@@ -22,6 +22,7 @@ import {
   WAITING_TABLE_IDLE_TTL_MS,
   WAITING_TABLE_OFFLINE_TTL_MS,
 } from "../src/socket/rooms.js";
+import { ECONOMY } from "../src/modules/economy/config.js";
 import { createUser, getBalances } from "./helpers.js";
 import { nextEvent, startSocketServer, tokenFor } from "./socket-helpers.js";
 
@@ -358,8 +359,10 @@ describe("joining a table whose creator is away", () => {
       expect(match).toMatchObject({ status: "finished", winnerId: joinerUser.id, betAmount: 40 });
       expect(match.winReason).toContain("no se presentó");
     });
-    expect(await coinsOf(creator.id)).toBe(60);
-    expect(await coinsOf(joinerUser.id)).toBeGreaterThanOrEqual(140);
+    // The pot, and a counted game for both (no minimum turn): match coins, the rival's win mission
+    expect(await coinsOf(creator.id)).toBe(60 + ECONOMY.matchCoins.online.loss);
+    const winMission = ECONOMY.missions.daily.find((m) => m.id === "win_game")!.rewardCoins;
+    expect(await coinsOf(joinerUser.id)).toBe(140 + ECONOMY.matchCoins.online.win + winMission);
 
     // The creator coming back finds nothing
     const late = await server.connect(tokenFor(creator));

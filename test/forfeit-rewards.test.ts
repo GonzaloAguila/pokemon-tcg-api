@@ -1,10 +1,11 @@
 /**
- * Early forfeits and the per-opponent daily coin cap (ECONOMY.antiFarming.forfeit,
- * ECONOMY.antiFarming.maxCoinsFromOpponentPerDay; owner, 2026-10-21):
- * - a forfeit before turn 3 / 2 minutes pays the winner a full counted win only when the forfeiter
- *   is an established account (verified email, 10 counted online games), at most 3 per winner per
- *   economy day; the forfeiter's loss is always recorded (no coins / XP) and doesn't count toward
- *   countedOnlineGames;
+ * Forfeits and short games, and the per-opponent daily coin cap (ECONOMY.antiFarming):
+ * - no minimum turn or duration (owner, 2026-10-22): a game counts for stats, XP, match coins and
+ *   missions however short it was — a turn-0 surrender, a disconnect, a first-turn Knock Out — for
+ *   both players, whoever forfeited it (the old "early forfeit" rule, established forfeiter and 3
+ *   paid forfeit wins a day, is gone). Kept: the winner's 3 counted wins per opponent per economy
+ *   day and friendly tables counting for nobody. Old early-forfeit losses (`matches.earlyForfeit`)
+ *   stay out of countedOnlineGames;
  * - a player wins at most 200 coins per economy day from the same opponent (match coins of wins +
  *   net bet winnings); the cut part of a pot goes back to the loser.
  */
@@ -53,8 +54,6 @@ async function createPlayer(options: { coins?: number; games?: number; verified?
   return user;
 }
 
-/** An established forfeiter (verified email, enough counted online games). */
-const established = (coins = 0) => createPlayer({ coins, games: RULES.forfeit.establishedMinOnlineGames });
 /** Eligible for Lucky Duel bets (verified email, 20 counted online games). */
 const bettor = (coins: number) => createPlayer({ coins, games: ECONOMY.tableBets.minOnlineGames });
 
@@ -72,7 +71,8 @@ async function open(
   return match;
 }
 
-const forfeit = (winnerId: string, turnNumber = 0) => ({ kind: "multiplayer", winnerId, reason: "rendición", turnNumber, forfeit: true }) as const;
+/** The loser gave the game up (surrender, leave, disconnect…) on `turnNumber`. */
+const surrender = (winnerId: string, turnNumber = 0) => ({ kind: "multiplayer", winnerId, reason: "rendición", turnNumber }) as const;
 const played = (winnerId: string, turnNumber = 10) => ({ kind: "multiplayer", winnerId, reason: "test", turnNumber }) as const;
 
 const stats = (userId: string) => prisma.userStats.findUniqueOrThrow({ where: { userId } });
@@ -91,137 +91,137 @@ function override<T extends object, K extends keyof T>(obj: T, key: K, value: T[
   });
 }
 
-describe("forfeits before the anti-farming threshold", () => {
-  it("an established forfeiter pays the winner a full counted win; the forfeiter only gets the loss", async () => {
+describe("forfeits and short games count (no minimum turn or duration)", () => {
+  it("a turn-0 surrender 20 seconds in is a full counted game for both: win rewards, loss rewards, stats", async () => {
     const winner = await createPlayer();
-    const forfeiter = await createPlayer({ games: RULES.forfeit.establishedMinOnlineGames, streak: 4 });
+    const forfeiter = await createPlayer({ streak: 4 });
     const { id } = await open(winner.id, forfeiter.id, { ageMs: 20_000 });
-    const res = await matches.settleMatch(id, forfeit(winner.id));
+    const res = await matches.settleMatch(id, surrender(winner.id));
 
-    expect(res).toMatchObject({ counted: true, earlyForfeit: true });
-    expect(player(res, winner.id)).toMatchObject({
-      outcome: "win",
-      counted: true,
-      earlyForfeit: true,
-      forfeitBlockedBy: null,
-      rewardCoins: ONLINE.win,
-      xpGained: XP_REWARDS.normal.win,
-    });
+    expect(res).toMatchObject({ counted: true, winnerId: winner.id });
+    expect(res).not.toHaveProperty("earlyForfeit");
+    expect(player(res, winner.id)).toMatchObject({ outcome: "win", counted: true, rewardCoins: ONLINE.win, xpGained: XP_REWARDS.normal.win });
+    expect(player(res, winner.id)).not.toHaveProperty("earlyForfeit");
+    expect(player(res, winner.id)).not.toHaveProperty("forfeitBlockedBy");
     expect(player(res, winner.id).missionsCompleted.map((m) => m.missionId)).toEqual(["win_game"]);
-    expect(player(res, forfeiter.id)).toMatchObject({ outcome: "loss", earlyForfeit: true, rewardCoins: 0, xpGained: 0, missionsCompleted: [] });
+    expect(player(res, forfeiter.id)).toMatchObject({ outcome: "loss", counted: true, rewardCoins: ONLINE.loss, xpGained: XP_REWARDS.normal.loss });
 
     expect(await stats(winner.id)).toMatchObject({ normalWins: 1, currentStreak: 1 });
-    expect(await stats(forfeiter.id)).toMatchObject({ normalLosses: RULES.forfeit.establishedMinOnlineGames / 2 + 1, currentStreak: 0, bestStreak: 4 });
-    expect(await txs(forfeiter.id)).toEqual([]);
-    expect(await prisma.userMission.count({ where: { userId: forfeiter.id } })).toBe(0);
+    expect(await stats(forfeiter.id)).toMatchObject({ normalLosses: 1, currentStreak: 0, bestStreak: 4 });
+    expect((await txs(forfeiter.id, ["match_reward"])).map((r) => r.amount)).toEqual([ONLINE.loss]);
+    expect(await prisma.userMission.count({ where: { userId: forfeiter.id } })).toBeGreaterThan(0);
     expect(await prisma.match.findUniqueOrThrow({ where: { id } })).toMatchObject({
       counted: true,
-      earlyForfeit: true,
+      earlyForfeit: false,
       winnerId: winner.id,
       player1Coins: ONLINE.win,
-      player2Coins: 0,
-      player2Xp: 0,
+      player2Coins: ONLINE.loss,
+      player1Xp: XP_REWARDS.normal.win,
+      player2Xp: XP_REWARDS.normal.loss,
     });
+    // The loss counts toward countedOnlineGames like any other game
+    expect(await matches.countedOnlineGames(prisma, forfeiter.id)).toBe(1);
   });
 
-  it("a new or unverified forfeiter: the win doesn't count, the forfeiter's loss is still recorded", async () => {
+  it("a new or unverified forfeiter: the win counts all the same (an unverified loser gets XP, no coins)", async () => {
     const winner = await createPlayer();
-    const newbie = await createPlayer({ games: RULES.forfeit.establishedMinOnlineGames - 1, streak: 2 });
-    const unverified = await createPlayer({ games: 30, verified: false });
+    const newbie = await createPlayer({ games: 2 });
+    const unverified = await createPlayer({ verified: false });
 
-    for (const forfeiter of [newbie, unverified]) {
-      const { id } = await open(forfeiter.id, winner.id);
-      const res = await matches.settleMatch(id, forfeit(winner.id, 2));
-      expect(res).toMatchObject({ counted: false, earlyForfeit: true });
-      expect(player(res, winner.id)).toMatchObject({ outcome: "win", counted: false, forfeitBlockedBy: "forfeiter_not_established", rewardCoins: 0, xpGained: 0 });
-      expect(player(res, forfeiter.id)).toMatchObject({ outcome: "loss", forfeitBlockedBy: null, rewardCoins: 0, xpGained: 0 });
-      expect(await prisma.match.findUniqueOrThrow({ where: { id } })).toMatchObject({ counted: false, earlyForfeit: true });
-    }
-    expect(await stats(winner.id)).toMatchObject({ normalWins: 0, normalLosses: 0, currentStreak: 0 });
-    expect(await txs(winner.id)).toEqual([]);
-    expect(await stats(newbie.id)).toMatchObject({ normalLosses: 4 + 1, currentStreak: 0 });
+    const vsNewbie = await open(newbie.id, winner.id);
+    const r1 = await matches.settleMatch(vsNewbie.id, surrender(winner.id, 2));
+    expect(r1).toMatchObject({ counted: true });
+    expect(player(r1, winner.id)).toMatchObject({ outcome: "win", counted: true, rewardCoins: ONLINE.win, xpGained: XP_REWARDS.normal.win });
+    expect(player(r1, newbie.id)).toMatchObject({ outcome: "loss", rewardCoins: ONLINE.loss, xpGained: XP_REWARDS.normal.loss });
+    expect(await matches.countedOnlineGames(prisma, newbie.id)).toBe(3);
 
-    // The recorded forfeit losses don't make an account established (or eligible for bets/trades)
-    expect(await matches.countedOnlineGames(prisma, newbie.id)).toBe(RULES.forfeit.establishedMinOnlineGames - 1);
-    const again = await open(newbie.id, winner.id);
-    expect(player(await matches.settleMatch(again.id, forfeit(winner.id)), winner.id).forfeitBlockedBy).toBe("forfeiter_not_established");
-    expect(await matches.countedOnlineGames(prisma, newbie.id)).toBe(RULES.forfeit.establishedMinOnlineGames - 1);
+    const vsUnverified = await open(unverified.id, winner.id);
+    const r2 = await matches.settleMatch(vsUnverified.id, surrender(winner.id));
+    expect(player(r2, winner.id)).toMatchObject({ counted: true, rewardCoins: ONLINE.win });
+    expect(player(r2, unverified.id)).toMatchObject({ outcome: "loss", rewardCoins: 0, xpGained: XP_REWARDS.normal.loss, missionsCompleted: [] });
+    expect(await txs(unverified.id)).toEqual([]);
+
+    expect(await stats(winner.id)).toMatchObject({ normalWins: 2, currentStreak: 2 });
+    expect(await stats(unverified.id)).toMatchObject({ normalLosses: 1 });
   });
 
-  it("at most 3 paid forfeit wins per winner per economy day, whatever the opponents", async () => {
+  it("no daily limit on forfeit wins: 4 turn-0 surrenders by 4 opponents all count", async () => {
     const winner = await createPlayer();
-    const opponents = await Promise.all([1, 2, 3, 4].map(() => established()));
-    const results: [boolean, string | null, number][] = [];
+    const opponents = await Promise.all([1, 2, 3, 4].map(() => createPlayer()));
+    const results: [boolean, number][] = [];
     for (const o of opponents) {
       const { id } = await open(o.id, winner.id, { ageMs: 30_000 });
-      const p = player(await matches.settleMatch(id, forfeit(winner.id)), winner.id);
-      results.push([p.counted, p.forfeitBlockedBy, p.rewardCoins]);
+      const p = player(await matches.settleMatch(id, surrender(winner.id)), winner.id);
+      results.push([p.counted, p.rewardCoins]);
     }
-    expect(RULES.forfeit.maxPaidWinsPerDay).toBe(3);
-    expect(results).toEqual([
-      [true, null, ONLINE.win],
-      [true, null, ONLINE.win],
-      [true, null, ONLINE.win],
-      [false, "daily_forfeit_limit", 0],
-    ]);
-    expect(await stats(winner.id)).toMatchObject({ normalWins: 3 });
-    // The 4th forfeiter still gets the loss
-    expect(await stats(opponents[3].id)).toMatchObject({ normalLosses: RULES.forfeit.establishedMinOnlineGames / 2 + 1 });
-
-    // A normal win (past the threshold) isn't limited by the forfeit cap
-    const fifth = await createPlayer();
-    const { id } = await open(winner.id, fifth.id);
-    expect(player(await matches.settleMatch(id, played(winner.id)), winner.id)).toMatchObject({ counted: true, earlyForfeit: false, rewardCoins: ONLINE.win });
+    expect(results).toEqual(opponents.map(() => [true, ONLINE.win]));
+    expect(await stats(winner.id)).toMatchObject({ normalWins: 4 });
+    for (const o of opponents) expect(await stats(o.id)).toMatchObject({ normalLosses: 1 });
   });
 
-  it("the per-opponent counted-wins cap still applies to forfeit wins", async () => {
+  it("the per-opponent counted-wins cap still stops a 4th win against the same opponent, short or not", async () => {
+    expect(RULES.maxCountedWinsPerOpponentPerDay).toBe(3);
     const winner = await createPlayer();
-    const forfeiter = await established();
+    const loser = await createPlayer();
     const counted: boolean[] = [];
-    // 2 normal wins + 1 forfeit win count; the next forfeit doesn't (3 counted wins vs this opponent)
-    for (const input of [played(winner.id), played(winner.id), forfeit(winner.id), forfeit(winner.id)]) {
-      const { id } = await open(winner.id, forfeiter.id);
+    for (const input of [played(winner.id), surrender(winner.id), played(winner.id, 1), surrender(winner.id)]) {
+      const { id } = await open(winner.id, loser.id, { ageMs: 10_000 });
       counted.push(player(await matches.settleMatch(id, input), winner.id).counted);
     }
     expect(counted).toEqual([true, true, true, false]);
+    // The 4th counts for nobody: no stats, coins or XP for either player
+    expect(await stats(winner.id)).toMatchObject({ normalWins: 3 });
+    expect(await stats(loser.id)).toMatchObject({ normalLosses: 3 });
     const last = await prisma.match.findFirstOrThrow({ where: { winnerId: winner.id }, orderBy: { settledAt: "desc" } });
-    expect(last).toMatchObject({ earlyForfeit: true, counted: false });
+    expect(last).toMatchObject({ counted: false, earlyForfeit: false, player1Coins: 0, player2Coins: 0, player1Xp: 0, player2Xp: 0 });
   });
 
-  it("a forfeit past the threshold is a normal counted game (the loser gets its loss rewards)", async () => {
+  it("a Knock Out on turn 1 a few seconds in counts; friendly tables still count for nobody", async () => {
+    const a = await createPlayer();
+    const b = await createPlayer();
+    const ko = await open(a.id, b.id, { ageMs: 5_000 });
+    const res = await matches.settleMatch(ko.id, played(a.id, 1));
+    expect(res).toMatchObject({ counted: true });
+    expect(player(res, a.id)).toMatchObject({ rewardCoins: ONLINE.win, xpGained: XP_REWARDS.normal.win });
+    expect(player(res, b.id)).toMatchObject({ rewardCoins: ONLINE.loss, xpGained: XP_REWARDS.normal.loss });
+    expect(await stats(a.id)).toMatchObject({ normalWins: 1 });
+    expect(await stats(b.id)).toMatchObject({ normalLosses: 1 });
+
+    // Friendly: nothing at all, however long it lasted
+    for (const input of [surrender(a.id), played(a.id)]) {
+      const friendly = await open(a.id, b.id, { mode: "friendly" });
+      const r = await matches.settleMatch(friendly.id, input);
+      expect(r).toMatchObject({ counted: false });
+      expect(player(r, a.id)).toMatchObject({ rewardCoins: 0, xpGained: 0 });
+      expect(player(r, b.id)).toMatchObject({ rewardCoins: 0, xpGained: 0 });
+    }
+    expect(await stats(a.id)).toMatchObject({ normalWins: 1 });
+    expect(await stats(b.id)).toMatchObject({ normalLosses: 1 });
+  });
+
+  it("a draft forfeit on turn 1 counts for both", async () => {
     const winner = await createPlayer();
     const forfeiter = await createPlayer();
-    const { id } = await open(winner.id, forfeiter.id);
-    const res = await matches.settleMatch(id, forfeit(winner.id, 5));
-    expect(res).toMatchObject({ counted: true, earlyForfeit: false });
-    expect(player(res, winner.id)).toMatchObject({ rewardCoins: ONLINE.win, forfeitBlockedBy: null });
-    expect(player(res, forfeiter.id)).toMatchObject({ rewardCoins: ONLINE.loss, xpGained: XP_REWARDS.normal.loss });
-    expect(await stats(forfeiter.id)).toMatchObject({ normalLosses: 1 });
-  });
-
-  it("an early end that isn't a forfeit, and friendly tables, are unchanged", async () => {
-    const a = await createPlayer();
-    const b = await established();
-    // Not a forfeit (e.g. a Knock Out on turn 1): counts for nobody, no stats
-    const ko = await open(a.id, b.id, { ageMs: 30_000 });
-    const res = await matches.settleMatch(ko.id, played(a.id, 1));
-    expect(res).toMatchObject({ counted: false, earlyForfeit: false });
-    expect(await stats(b.id)).toMatchObject({ normalLosses: RULES.forfeit.establishedMinOnlineGames / 2 });
-    // Friendly: nothing at all
-    const friendly = await open(a.id, b.id, { mode: "friendly" });
-    expect(await matches.settleMatch(friendly.id, forfeit(a.id))).toMatchObject({ counted: false, earlyForfeit: false });
-    expect(await stats(b.id)).toMatchObject({ normalLosses: RULES.forfeit.establishedMinOnlineGames / 2 });
-    expect(await stats(a.id)).toMatchObject({ normalWins: 0 });
-  });
-
-  it("draft forfeits follow the same rule", async () => {
-    const winner = await createPlayer();
-    const forfeiter = await established();
     const { id } = await open(winner.id, forfeiter.id, { mode: "draft", ageMs: 10_000 });
-    const res = await matches.settleMatch(id, forfeit(winner.id, 1));
-    expect(player(res, winner.id)).toMatchObject({ counted: true, earlyForfeit: true, xpGained: XP_REWARDS.draft.win });
+    const res = await matches.settleMatch(id, surrender(winner.id, 1));
+    expect(player(res, winner.id)).toMatchObject({ counted: true, xpGained: XP_REWARDS.draft.win });
+    expect(player(res, forfeiter.id)).toMatchObject({ counted: true, xpGained: XP_REWARDS.draft.loss });
     expect(await stats(winner.id)).toMatchObject({ draftWins: 1 });
     expect(await stats(forfeiter.id)).toMatchObject({ draftLosses: 1 });
+  });
+
+  it("old early-forfeit losses (matches.earlyForfeit) still stay out of countedOnlineGames", async () => {
+    const winner = await createPlayer();
+    const old = await createPlayer({ games: 4 }); // 2 wins, 2 losses
+    const { id } = await open(winner.id, old.id);
+    // A row settled under the old rule: the loss is in the stats, flagged as an early forfeit
+    await prisma.match.update({ where: { id }, data: { status: "finished", winnerId: winner.id, earlyForfeit: true, settledAt: new Date() } });
+    expect(await matches.countedOnlineGames(prisma, old.id)).toBe(3);
+    // A new short loss is counted
+    const fresh = await open(winner.id, old.id, { ageMs: 10_000 });
+    await matches.settleMatch(fresh.id, surrender(winner.id));
+    expect(await stats(old.id)).toMatchObject({ normalLosses: 3 });
+    expect(await matches.countedOnlineGames(prisma, old.id)).toBe(4);
   });
 });
 
@@ -360,7 +360,7 @@ describe("per-opponent daily coin cap", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Socket: a surrender is settled as a forfeit (matchSettled payload)
+// Socket: a turn-0 surrender is a counted game (matchSettled payload)
 // ---------------------------------------------------------------------------
 
 describe("matchSettled after a surrender", () => {
@@ -369,9 +369,9 @@ describe("matchSettled after a surrender", () => {
     for (const s of sockets.splice(0)) s.disconnect();
   });
 
-  it("an established player surrendering on turn 0 pays the winner; both get the forfeit fields", async () => {
+  it("a surrender on turn 0 pays the winner a win and the loser a loss; no forfeit fields", async () => {
     const winner = await createPlayer();
-    const forfeiter = await established();
+    const forfeiter = await createPlayer({ streak: 2 });
     const s1 = await server.connect(tokenFor(winner));
     const s2 = await server.connect(tokenFor(forfeiter));
     sockets.push(s1, s2);
@@ -389,13 +389,24 @@ describe("matchSettled after a surrender", () => {
       roomId,
       outcome: "win",
       counted: true,
-      earlyForfeit: true,
-      forfeitBlockedBy: null,
       rewardCoins: ONLINE.win,
+      xpGained: XP_REWARDS.normal.win,
       pairCap: { limit: 200, coinsWonToday: ONLINE.win, rewardCoinsCut: 0, betWinningsCut: 0, reached: false },
       betRefundedByPairCap: 0,
     });
-    expect(toForfeiter).toMatchObject({ outcome: "loss", earlyForfeit: true, forfeitBlockedBy: null, rewardCoins: 0, xpGained: 0, pairCap: null, betRefundedByPairCap: 0 });
-    expect(await stats(forfeiter.id)).toMatchObject({ normalLosses: RULES.forfeit.establishedMinOnlineGames / 2 + 1, currentStreak: 0 });
+    expect(toForfeiter).toMatchObject({
+      outcome: "loss",
+      counted: true,
+      rewardCoins: ONLINE.loss,
+      xpGained: XP_REWARDS.normal.loss,
+      pairCap: null,
+      betRefundedByPairCap: 0,
+    });
+    for (const payload of [toWinner, toForfeiter]) {
+      expect(payload).not.toHaveProperty("earlyForfeit");
+      expect(payload).not.toHaveProperty("forfeitBlockedBy");
+    }
+    expect(await stats(winner.id)).toMatchObject({ normalWins: 1, currentStreak: 1 });
+    expect(await stats(forfeiter.id)).toMatchObject({ normalLosses: 1, currentStreak: 0 });
   });
 });

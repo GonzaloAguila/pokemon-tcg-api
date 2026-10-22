@@ -151,15 +151,17 @@ describe("table bets (when re-enabled)", () => {
     expect(row.settledAt).not.toBeNull();
   });
 
-  it("a game that ends before turn 3 refunds the bet instead of paying it", async () => {
+  it("a game that ends before the payout turn refunds the bet instead of paying it (the game still counts)", async () => {
     const a = await createPlayer(50, { eligibleForBets: true });
     const b = await createPlayer(50, { eligibleForBets: true });
     const { id } = await openPlayed({ player1Id: a.id, player2Id: b.id, mode: "normal", betAmount: 50 });
-    const result = await matches.settleMatch(id, win(a.id, 0));
-    expect(result?.counted).toBe(false);
-    expect((await getBalances(a.id)).coins).toBe(50);
-    expect((await getBalances(b.id)).coins).toBe(50);
-    expect(await txTypes(b.id)).toEqual([["bet_stake", -50], ["bet_refund", 50]]);
+    const result = await matches.settleMatch(id, win(a.id, ECONOMY.tableBets.minTurnForPayout - 1));
+    // The payout turn is about the pot only: rewards have no minimum turn
+    expect(result?.counted).toBe(true);
+    expect(await txTypes(a.id, ["bet_stake", "bet_win", "bet_refund"])).toEqual([["bet_stake", -50], ["bet_refund", 50]]);
+    expect(await txTypes(b.id, ["bet_stake", "bet_win", "bet_refund"])).toEqual([["bet_stake", -50], ["bet_refund", 50]]);
+    expect((await getBalances(a.id)).coins).toBe(50 + ONLINE.win + WIN_MISSION);
+    expect((await getBalances(b.id)).coins).toBe(50 + ONLINE.loss);
   });
 
   it("charges nobody when a player can't cover the bet", async () => {
@@ -269,25 +271,31 @@ describe("counted games (anti-farming) and match rewards", () => {
     expect(ai.xpGained).toBeGreaterThan(0);
   });
 
-  it("a surrender in the mulligan (turn 0) counts for nobody", async () => {
+  it("a surrender in the mulligan (turn 0) counts for both (no minimum turn)", async () => {
     const a = await createPlayer();
     const b = await createPlayer();
     const { id } = await openPlayed({ player1Id: a.id, player2Id: b.id, mode: "normal", betAmount: 0 });
     const res = await matches.settleMatch(id, win(b.id, 0));
-    expect(res?.counted).toBe(false);
-    expect(res?.players.map((p) => [p.outcome, p.rewardCoins, p.xpGained])).toEqual([["loss", 0, 0], ["win", 0, 0]]);
-    expect((await profile(b.id)).stats).toMatchObject({ normalWins: 0, normalLosses: 0, currentStreak: 0 });
-    expect((await profile(a.id)).stats).toMatchObject({ normalWins: 0, normalLosses: 0 });
-    expect(await txTypes(b.id)).toEqual([]);
+    expect(res?.counted).toBe(true);
+    expect(res?.players.map((p) => [p.outcome, p.rewardCoins, p.xpGained])).toEqual([
+      ["loss", ONLINE.loss, XP_REWARDS.normal.loss],
+      ["win", ONLINE.win, XP_REWARDS.normal.win],
+    ]);
+    expect((await profile(b.id)).stats).toMatchObject({ normalWins: 1, normalLosses: 0, currentStreak: 1 });
+    expect((await profile(a.id)).stats).toMatchObject({ normalWins: 0, normalLosses: 1 });
+    expect(await txTypes(b.id)).toEqual([["match_reward", ONLINE.win], ["mission_reward", WIN_MISSION]]);
+    expect(await txTypes(a.id)).toEqual([["match_reward", ONLINE.loss]]);
   });
 
-  it("a game shorter than 2 minutes doesn't count, even past turn 3", async () => {
+  it("a game of a few seconds counts like any other (no minimum duration)", async () => {
     const a = await createPlayer();
     const b = await createPlayer();
-    const { id } = await openPlayed({ player1Id: a.id, player2Id: b.id, mode: "normal", betAmount: 0 }, 60_000);
+    const { id } = await openPlayed({ player1Id: a.id, player2Id: b.id, mode: "normal", betAmount: 0 }, 5_000);
     const res = await matches.settleMatch(id, win(a.id, 12));
-    expect(res?.counted).toBe(false);
-    expect((await profile(a.id)).stats).toMatchObject({ normalWins: 0 });
+    expect(res?.counted).toBe(true);
+    expect(res?.players[0]).toMatchObject({ outcome: "win", rewardCoins: ONLINE.win, xpGained: XP_REWARDS.normal.win });
+    expect((await profile(a.id)).stats).toMatchObject({ normalWins: 1 });
+    expect((await profile(b.id)).stats).toMatchObject({ normalLosses: 1 });
   });
 
   it("only 3 wins per day against the same opponent count", async () => {
@@ -372,16 +380,15 @@ describe("counted games (anti-farming) and match rewards", () => {
 });
 
 describe("single player vs AI (client-reported, bounded)", () => {
-  async function startedAgo(userId: string, ms: number) {
+  // No minimum duration: a game finished right after its start counts
+  async function start(userId: string) {
     const { matchId } = await matches.startAiMatch(userId);
-    await prisma.match.update({ where: { id: matchId }, data: { startedAt: new Date(Date.now() - ms) } });
     return matchId;
   }
-  const LONG = (3 * 60_000) + 1000;
 
   it("a finished game counts once (XP, coins, missions); reporting it again is rejected", async () => {
     const u = await createPlayer();
-    const matchId = await startedAgo(u.id, LONG);
+    const matchId = await start(u.id);
     const res = await matches.finishAiMatch(u.id, matchId, true, 8);
     expect(res).toMatchObject({ counted: true, xpGained: XP_REWARDS.ai.win, level: 1, experience: XP_REWARDS.ai.win, rewardCoins: AI.win });
     expect(res.missionsCompleted.map((m) => m.missionId)).toEqual(["win_game"]);
@@ -391,25 +398,27 @@ describe("single player vs AI (client-reported, bounded)", () => {
     expect((await profile(u.id)).stats).toMatchObject({ normalWins: 0, normalLosses: 0 });
   });
 
-  it("a game shorter than the minimum or before turn 3 is recorded without rewards", async () => {
+  it("a game finished seconds after its start, or before turn 3, counts too (no minimum duration or turn)", async () => {
     const u = await createPlayer();
     const { matchId } = await matches.startAiMatch(u.id);
     const res = await matches.finishAiMatch(u.id, matchId, true, 8);
-    expect(res).toMatchObject({ counted: false, xpGained: 0, rewardCoins: 0 });
+    expect(res).toMatchObject({ counted: true, xpGained: XP_REWARDS.ai.win, rewardCoins: AI.win });
     await expect(matches.finishAiMatch(u.id, matchId, true, 8)).rejects.toMatchObject({ statusCode: 409 });
 
-    const early = await startedAgo(u.id, LONG);
-    expect(await matches.finishAiMatch(u.id, early, true, 2)).toMatchObject({ counted: false, rewardCoins: 0 });
-    expect((await getBalances(u.id)).coins).toBe(0);
+    const early = await start(u.id);
+    expect(await matches.finishAiMatch(u.id, early, false, 0)).toMatchObject({ counted: true, xpGained: XP_REWARDS.ai.loss, rewardCoins: AI.loss });
+    // Two counted games: both match coins, "win a game" and "play 2 games" missions
+    expect((await getBalances(u.id)).coins).toBe(AI.win + AI.loss + WIN_MISSION + PLAY_MISSION);
+    expect((await profile(u.id)).experience).toBe(XP_REWARDS.ai.win + XP_REWARDS.ai.loss);
   });
 
   it("only the first games of the day count", async () => {
     const u = await createPlayer();
     for (let i = 0; i < matches.AI_DAILY_REWARDED_GAMES; i++) {
-      const id = await startedAgo(u.id, LONG);
+      const id = await start(u.id);
       expect((await matches.finishAiMatch(u.id, id, false, 5)).xpGained).toBe(XP_REWARDS.ai.loss);
     }
-    const extra = await startedAgo(u.id, LONG);
+    const extra = await start(u.id);
     expect(await matches.finishAiMatch(u.id, extra, true, 5)).toMatchObject({ counted: false, xpGained: 0, rewardCoins: 0 });
     expect((await profile(u.id)).experience).toBe(XP_REWARDS.ai.loss * matches.AI_DAILY_REWARDED_GAMES);
   });
@@ -417,7 +426,7 @@ describe("single player vs AI (client-reported, bounded)", () => {
   it("someone else's match or an abandoned start can't be finished", async () => {
     const u = await createPlayer();
     const other = await createPlayer();
-    const mine = await startedAgo(u.id, LONG);
+    const mine = await start(u.id);
     await expect(matches.finishAiMatch(other.id, mine, true, 5)).rejects.toMatchObject({ statusCode: 404 });
 
     // Starting a new game drops the unfinished one
@@ -440,7 +449,6 @@ describe("single player vs AI (client-reported, bounded)", () => {
       expect((await app.request("POST", `/api/matches/ai/${matchId}/finish`, { token, body: { result: "victory", turnNumber: -1 } })).status).toBe(422);
       expect((await app.request("POST", "/api/matches/ai/not-a-uuid/finish", { token, body: { result: "victory", turnNumber: 5 } })).status).toBe(404);
 
-      await prisma.match.update({ where: { id: matchId }, data: { startedAt: new Date(Date.now() - LONG) } });
       const done = await app.request("POST", `/api/matches/ai/${matchId}/finish`, {
         token,
         body: { result: "victory", turnNumber: 6, xp: 999_999, xpGained: 999_999, rewardCoins: 999_999 },

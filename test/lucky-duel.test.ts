@@ -431,10 +431,11 @@ describe("settleMatch: a draw", () => {
     expect(await prisma.match.findUniqueOrThrow({ where: { id: match.id } })).toMatchObject({ status: "finished", winnerId: null });
   });
 
-  it("a draw before turn 3 counts for nobody; without `draw` a null winner stays 'no result'", async () => {
-    const early = await played();
+  it("a draw on turn 2, seconds in, counts too (no minimum turn or duration); without `draw` a null winner stays 'no result'", async () => {
+    const early = await played(10_000);
     const r1 = await matches.settleMatch(early.match.id, { kind: "multiplayer", winnerId: null, draw: true, reason: "Empate", turnNumber: 2 });
-    for (const p of r1!.players) expect(p).toMatchObject({ outcome: "draw", counted: false, xpGained: 0 });
+    expect(r1).toMatchObject({ winnerId: null, counted: true });
+    for (const p of r1!.players) expect(p).toMatchObject({ outcome: "draw", counted: true, xpGained: XP_REWARDS.normal.loss });
 
     const none = await played();
     const r2 = await matches.settleMatch(none.match.id, { kind: "multiplayer", winnerId: null, reason: "x", turnNumber: 8 });
@@ -448,8 +449,6 @@ describe("settleMatch: a draw", () => {
 // ---------------------------------------------------------------------------
 
 describe("POST /api/matches/ai/:matchId/finish: a Lucky Duel vs the AI", () => {
-  const LONG = (3 * 60_000) + 1000;
-
   it("accepts result draw (the loser's rewards) and records the mode", async () => {
     const u = await createUser({ coins: 100 }, { stats: true });
     await prisma.userStats.update({ where: { userId: u.id }, data: { currentStreak: 3, bestStreak: 3 } });
@@ -458,7 +457,6 @@ describe("POST /api/matches/ai/:matchId/finish: a Lucky Duel vs the AI", () => {
     try {
       // The mode is the one the game started with (lucky-duel-coins.test.ts: the stake)
       const { matchId } = (await app.request("POST", "/api/matches/ai", { token, body: { mode: "lucky-duel" } })).body;
-      await prisma.match.update({ where: { id: matchId }, data: { startedAt: new Date(Date.now() - LONG) } });
       expect((await app.request("POST", `/api/matches/ai/${matchId}/finish`, { token, body: { result: "draw", turnNumber: 6, mode: "chaos" } })).status).toBe(422);
       const done = await app.request("POST", `/api/matches/ai/${matchId}/finish`, { token, body: { result: "draw", turnNumber: 6, mode: "lucky-duel" } });
       expect(done.status).toBe(200);
@@ -468,7 +466,6 @@ describe("POST /api/matches/ai/:matchId/finish: a Lucky Duel vs the AI", () => {
 
       // Old clients (no mode) keep working
       const second = (await app.request("POST", "/api/matches/ai", { token })).body.matchId;
-      await prisma.match.update({ where: { id: second }, data: { startedAt: new Date(Date.now() - LONG) } });
       const won = await app.request("POST", `/api/matches/ai/${second}/finish`, { token, body: { result: "victory", turnNumber: 6 } });
       expect(won.body).toMatchObject({ outcome: "win", xpGained: XP_REWARDS.ai.win });
       expect(await prisma.match.findUniqueOrThrow({ where: { id: second } })).toMatchObject({ winnerId: u.id, winReason: "victory" });
@@ -529,25 +526,27 @@ describe("Lucky Duel tables with a bet (standard table bets off)", () => {
     }
   }
 
-  it("a draw refunds each player's own stake once (balances back to before the game)", async () => {
+  it("a draw refunds each player's own stake once (balances back to before the game, plus the draw's match coins)", async () => {
     const t = await betTable(20);
     await revealBoth(t);
-    // Before turn 3: the draw counts for nobody, so nothing but the refund moves coins
+    // Turn 2: the stakes come back; the draw also counts (no minimum turn), so both get the
+    // loser's match coins on top
     const turnSocket = await armDraw(t, 2);
     const settled = Promise.all([nextEvent<Any>(t.s1, "matchSettled", 8000), nextEvent<Any>(t.s2, "matchSettled", 8000)]);
     const over = nextEvent<Any>(t.s1, "gameOver");
     turnSocket.emit("action", { roomId: t.roomId, action: act("endTurn") });
     expect(await over).toEqual({ winner: null, reason: "Empate" });
-    for (const s of await settled) expect(s).toMatchObject({ outcome: "draw", betAmount: 20, coinsDelta: 0, counted: false, coins: 100 });
-    expect(await coins(t.p1.id)).toBe(100);
-    expect(await coins(t.p2.id)).toBe(100);
+    const afterDraw = 100 + ECONOMY.matchCoins.online.loss;
+    for (const s of await settled) expect(s).toMatchObject({ outcome: "draw", betAmount: 20, coinsDelta: 0, counted: true, coins: afterDraw });
+    expect(await coins(t.p1.id)).toBe(afterDraw);
+    expect(await coins(t.p2.id)).toBe(afterDraw);
 
     // Settling again (another end path, a retry) refunds nothing more
     const room = roomManager.getRoom(t.roomId)!;
     settleRoomResult(null, room, "draw", "Empate");
     expect(await matches.settleMatch(room.matchId!, { kind: "multiplayer", winnerId: null, draw: true, reason: "Empate", turnNumber: 2 })).toBeNull();
     for (const p of [t.p1, t.p2]) {
-      expect(await coins(p.id)).toBe(100);
+      expect(await coins(p.id)).toBe(afterDraw);
       expect(await betRows(p.id)).toEqual([["bet_stake", -20], ["bet_refund", 20]]);
     }
     expect(await prisma.match.findUniqueOrThrow({ where: { id: room.matchId! } })).toMatchObject({ status: "finished", winnerId: null, betAmount: 20 });
@@ -568,7 +567,6 @@ describe("Lucky Duel tables with a bet (standard table bets off)", () => {
     await revealBoth(t);
     const room = roomManager.getRoom(t.roomId)!;
     room.gameState!.turnNumber = 4;
-    await prisma.match.update({ where: { id: room.matchId! }, data: { startedAt: new Date(Date.now() - 5 * 60_000) } });
     const settled = nextEvent<Any>(t.s2, "matchSettled", 8000);
     const over = nextEvent<Any>(t.s1, "gameOver");
     t.s1.emit("action", { roomId: t.roomId, action: act("surrender") });
@@ -583,7 +581,6 @@ describe("Lucky Duel tables with a bet (standard table bets off)", () => {
     await revealBoth(t);
     const room = roomManager.getRoom(t.roomId)!;
     room.gameState!.turnNumber = 3;
-    await prisma.match.update({ where: { id: room.matchId! }, data: { startedAt: new Date(Date.now() - 5 * 60_000) } });
     const over = nextEvent<Any>(t.s2, "gameOver");
     t.s1.emit("leaveRoom", { roomId: t.roomId });
     expect((await over).winner).toBe("player2");
@@ -685,9 +682,15 @@ describe("Lucky Duel tables with a bet (standard table bets off)", () => {
     turnSocket.emit("action", { roomId: t.roomId, action: act("endTurn") });
     expect((await over).winner).toBe(state.isPlayerTurn ? "player2" : "player1");
     const [won, lost] = await settled;
-    // Too short to count (no match coins): only the pot moves
-    expect(won).toMatchObject({ outcome: "win", betAmount: 100, coinsDelta: 100, counted: false, coins: 300 });
-    expect(lost).toMatchObject({ outcome: "loss", betAmount: 100, coinsDelta: -100, counted: false, coins: 100 });
+    // The pot, plus a counted game however short: match coins (and the winner's "win 1 game" mission)
+    expect(won).toMatchObject({
+      outcome: "win",
+      betAmount: 100,
+      coinsDelta: 100,
+      counted: true,
+      coins: 300 + ECONOMY.matchCoins.online.win + WIN_MISSION_COINS,
+    });
+    expect(lost).toMatchObject({ outcome: "loss", betAmount: 100, coinsDelta: -100, counted: true, coins: 100 + ECONOMY.matchCoins.online.loss });
     expect(await betRows(winner.id)).toEqual([["bet_stake", -100], ["bet_win", 200]]);
     expect(await betRows(loser.id)).toEqual([["bet_stake", -100]]);
     expect(await prisma.match.findUniqueOrThrow({ where: { id: room.matchId! } })).toMatchObject({ status: "finished", winnerId: winner.id, betAmount: 100 });
@@ -699,16 +702,15 @@ describe("Lucky Duel tables with a bet (standard table bets off)", () => {
     const over = nextEvent<Any>(t.s2, "gameOver");
     t.s1.emit("action", { roomId: t.roomId, action: act("surrender") });
     expect((await over).winner).toBe("player2");
-    // The forfeiter is an established account (ECONOMY.antiFarming.forfeit): the early win also
-    // counts (match coins + the win mission), within the per-opponent coin cap (100 + 25 < 200)
+    // A turn-0 surrender counts like any game (no minimum turn): match coins + the win mission,
+    // within the per-opponent coin cap (100 + 25 < 200); the forfeiter gets the loser's match coins
     expect(await settled).toMatchObject({
       outcome: "win",
       coinsDelta: 100,
       counted: true,
-      earlyForfeit: true,
       coins: 300 + ECONOMY.matchCoins.online.win + WIN_MISSION_COINS,
     });
-    expect(await coins(t.p1.id)).toBe(100);
+    expect(await coins(t.p1.id)).toBe(100 + ECONOMY.matchCoins.online.loss);
   });
 
   it("leaving on turn 1 forfeits the pot like at any bet table", async () => {
@@ -718,9 +720,9 @@ describe("Lucky Duel tables with a bet (standard table bets off)", () => {
     const over = nextEvent<Any>(t.s2, "gameOver");
     t.s1.emit("leaveRoom", { roomId: t.roomId });
     expect((await over).winner).toBe("player2");
-    // Pot + the early forfeit's counted win (established forfeiter): match coins + win mission
+    // Pot + a counted game however short: match coins (+ the winner's win mission)
     await eventually(async () => expect(await coins(t.p2.id)).toBe(150 + ECONOMY.matchCoins.online.win + WIN_MISSION_COINS));
-    expect(await coins(t.p1.id)).toBe(50);
+    expect(await coins(t.p1.id)).toBe(50 + ECONOMY.matchCoins.online.loss);
   });
 
   it("a game closed without a result (admin) refunds both stakes", async () => {
