@@ -1094,7 +1094,8 @@ export class GameRoomManager {
         kind: "answer",
         userId: userOf(answer.side),
         startedAt: answer.startedAt,
-        durationSeconds: Math.round(answer.durationMs / 1000),
+        // Not rounded: the turn clock's own duration is reported as is (a timed step's is whole seconds)
+        durationSeconds: answer.durationMs / 1000,
         pausedUserId: userOf(turnSide),
         pausedRemainingSeconds: Math.round(answer.turnRemainingMs / 1000),
       };
