@@ -22,7 +22,7 @@ import { economyRouter } from "../src/modules/economy/index.js";
 import { getAllSets, getCardById, getCardsBySet, searchCards } from "../src/modules/catalog/catalog.service.js";
 import {
   STANDARD_BOOSTER_IDS,
-  TRAINER_BOOSTER_ID,
+  GYM_TRAINER_BOOSTER_ID,
   boosterIdForSet,
   getPackById,
   getPackOdds,
@@ -89,10 +89,10 @@ describe("a set in development (Gym Challenge flagged): hidden everywhere", () =
       await app.close();
     }
 
-    // Trainer booster: none of the set's Trainers
-    const trainerOdds = getPackOdds(TRAINER_BOOSTER_ID)!;
+    // Gym Trainer booster (still sold for Gym Heroes): none of the set's Trainers
+    const trainerOdds = getPackOdds(GYM_TRAINER_BOOSTER_ID)!;
     expect(Object.keys(trainerOdds.cardChances).some((id) => gcIds.has(id))).toBe(false);
-    for (let i = 0; i < 100; i++) expect(openPack(TRAINER_BOOSTER_ID).cards.some((c) => gcIds.has(c.card.id))).toBe(false);
+    for (let i = 0; i < 100; i++) expect(openPack(GYM_TRAINER_BOOSTER_ID).cards.some((c) => gcIds.has(c.card.id))).toBe(false);
 
     // Drafts and Fichas de canje
     expect(draftPool.some((c) => gcIds.has(c.id))).toBe(false);

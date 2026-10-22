@@ -37,6 +37,7 @@ describe("set registry consumers", () => {
       "gym-heroes-booster",
       "gym-challenge-booster",
       "trainer-booster", // market-only, see trainer-booster.test.ts
+      "gym-trainer-booster",
     ]);
     for (const packId of STANDARD_BOOSTER_IDS) {
       const pack = getAllPacks().find((p) => p.id === packId)!;

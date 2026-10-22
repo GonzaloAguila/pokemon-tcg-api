@@ -25,7 +25,7 @@ import * as achievements from "../src/modules/achievements/achievements.service.
 import {
   SECOND_RARE_CHANCE,
   STANDARD_BOOSTER_IDS,
-  TRAINER_BOOSTER_ID,
+  TRAINER_BOOSTER_IDS,
   openPack,
   getPackOdds,
 } from "../src/modules/boosters/boosters.service.js";
@@ -568,7 +568,7 @@ describe("odds", () => {
   it("boosters hold no basic Energy: 1 rare, 4 uncommons (the 4th a second rare with SECOND_RARE_CHANCE), 6 commons", () => {
     const n = 3000;
     let secondRare = 0;
-    for (const packId of [...STANDARD_BOOSTER_IDS, TRAINER_BOOSTER_ID]) {
+    for (const packId of [...STANDARD_BOOSTER_IDS, ...TRAINER_BOOSTER_IDS]) {
       for (let i = 0; i < 50; i++) {
         const cards = openPack(packId).cards;
         expect(cards).toHaveLength(11);
@@ -601,7 +601,7 @@ describe("odds", () => {
   it("every pack costs the same; wheel and slots probabilities add up to 1", () => {
     const odds = getOdds();
     expect(new Set(odds.packs.map((p) => p.price))).toEqual(new Set([ECONOMY.packs.price]));
-    expect(odds.packs.map((p) => p.packId).sort()).toEqual([...STANDARD_BOOSTER_IDS, "trainer-booster"].sort());
+    expect(odds.packs.map((p) => p.packId).sort()).toEqual([...STANDARD_BOOSTER_IDS, ...TRAINER_BOOSTER_IDS].sort());
     const sum = (xs: { probability: number }[]) => xs.reduce((n, x) => n + x.probability, 0);
     expect(sum(odds.wheel.segments)).toBeCloseTo(1, 5);
     expect(sum(odds.slots.patterns)).toBeCloseTo(1, 5);

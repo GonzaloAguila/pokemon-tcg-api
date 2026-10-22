@@ -11,7 +11,7 @@ import { economyRouter } from "../src/modules/economy/index.js";
 import { boostersRouter } from "../src/modules/boosters/index.js";
 import { getOdds } from "../src/modules/economy/odds.js";
 import { ECONOMY } from "../src/modules/economy/config.js";
-import { STANDARD_BOOSTER_IDS, TRAINER_BOOSTER_ID, getPackOdds, isOpenableCard, openPack } from "../src/modules/boosters/boosters.service.js";
+import { GYM_TRAINER_BOOSTER_ID, STANDARD_BOOSTER_IDS, TRAINER_BOOSTER_IDS, getPackOdds, isOpenableCard, openPack } from "../src/modules/boosters/boosters.service.js";
 import { ALL_VARIANTS } from "../src/modules/prizes/catalog.js";
 import { startHttpApp } from "./http-helpers.js";
 
@@ -83,16 +83,16 @@ describe("Gym Heroes: catalog, packs and economy", () => {
     expect(isOpenableCard(ALL_CARDS.find((c) => c.name === "Brock's Rhydon")!, new Set(["Brock's Rhydon"]))).toBe(true); // Trainers only
     const unsupported = ALL_CARDS.filter((c) => c.kind === "trainer" && UNSUPPORTED_TRAINERS.includes(c.name));
     expect(unsupported.every((c) => !isOpenableCard(c))).toBe(true);
-    for (const packId of [TRAINER_BOOSTER_ID, ...STANDARD_BOOSTER_IDS]) {
+    for (const packId of [...TRAINER_BOOSTER_IDS, ...STANDARD_BOOSTER_IDS]) {
       const odds = getPackOdds(packId)!;
       for (const c of unsupported) expect(odds.cardChances[c.id]).toBeUndefined();
     }
     const ids = new Set(unsupported.map((c) => c.id));
     for (let i = 0; i < 300; i++) {
-      expect(openPack(TRAINER_BOOSTER_ID).cards.some((c) => ids.has(c.card.id))).toBe(false);
+      expect(openPack(GYM_TRAINER_BOOSTER_ID).cards.some((c) => ids.has(c.card.id))).toBe(false);
     }
-    // Supported Gym Heroes Trainers do come in the Trainer booster
-    expect(getPackOdds(TRAINER_BOOSTER_ID)!.cardChances["gym-heroes-116-recall"]).toBeGreaterThan(0);
+    // Supported Gym Heroes Trainers do come in the Gym Trainer booster
+    expect(getPackOdds(GYM_TRAINER_BOOSTER_ID)!.cardChances["gym-heroes-116-recall"]).toBeGreaterThan(0);
   });
 
   it("the economy config lists the set: booster, milestone card back, title and holo variant", async () => {

@@ -11,6 +11,7 @@
 import {
   CARD_SETS,
   getSetById,
+  getSetForCard,
   isBasicEnergy,
   UNSUPPORTED_TRAINERS,
   type Card,
@@ -152,35 +153,65 @@ function initializeDefaultPacks(): void {
 }
 
 /**
- * Trainers-only booster, sold in the market only: 11 Trainers of every set (1 rare slot with
- * 33% holo, 4 uncommons — the fourth a second rare with SECOND_RARE_CHANCE —, 6 commons), no
- * Energy. Not a STANDARD_BOOSTER_ID, so the daily free
- * pack, the welcome packs and prize packs keep giving set boosters.
+ * Trainers-only boosters, sold in the market only: 11 Trainers of a group of sets (1 rare slot
+ * with 33% holo, 4 uncommons — the fourth a second rare with SECOND_RARE_CHANCE —, 6 commons), no
+ * Energy. One booster per era so each Trainer stays findable as sets are added (player
+ * suggestion, 2026-10-22). Not STANDARD_BOOSTER_IDS, so the daily free pack, the welcome packs and
+ * prize packs keep giving set boosters. A new set's Trainers go in one of these groups.
  */
+/** Classic Trainers (the original id: it was the one Trainer booster before the split). */
 export const TRAINER_BOOSTER_ID = "trainer-booster";
+export const GYM_TRAINER_BOOSTER_ID = "gym-trainer-booster";
 
-const TRAINER_BOOSTER: BoosterPackType = {
-  id: TRAINER_BOOSTER_ID,
-  name: "Entrenadores",
-  description: "Contains 11 random Trainer cards from every expansion. Includes 1 guaranteed Rare!",
-  setId: "trainers",
-  trainersOnly: true,
-  image: "/packs/trainers/booster_oak.png",
-  cardCount: 11,
-  slots: [
-    { rarity: "rare", count: 1, holoChance: 0.33 },
-    { rarity: "uncommon", count: 3, upgradeChance: 0.01 },
-    { rarity: "uncommon", count: 1, upgradeChance: SECOND_RARE_CHANCE },
-    { rarity: "common", count: 6 },
-  ],
-  energyCount: 0,
-  price: ECONOMY.packs.price,
-  available: true,
-};
+const TRAINER_BOOSTER_SLOTS: BoosterPackType["slots"] = [
+  { rarity: "rare", count: 1, holoChance: 0.33 },
+  { rarity: "uncommon", count: 3, upgradeChance: 0.01 },
+  { rarity: "uncommon", count: 1, upgradeChance: SECOND_RARE_CHANCE },
+  { rarity: "common", count: 6 },
+];
+
+const TRAINER_BOOSTERS: (Pick<BoosterPackType, "id" | "name" | "description" | "setId" | "image"> & { trainerSetIds: string[] })[] = [
+  {
+    id: TRAINER_BOOSTER_ID,
+    name: "Entrenadores Clásicos",
+    description: "Contains 11 random Trainer cards from Base Set, Jungle, Fossil and Team Rocket. Includes 1 guaranteed Rare!",
+    setId: "trainers",
+    trainerSetIds: ["base-set", "jungle", "fossil", "team-rocket"],
+    image: "/packs/trainers/booster_oak.png",
+  },
+  {
+    id: GYM_TRAINER_BOOSTER_ID,
+    name: "Entrenadores de Gimnasio",
+    description: "Contains 11 random Trainer cards from Gym Heroes and Gym Challenge. Includes 1 guaranteed Rare!",
+    setId: "gym-trainers",
+    trainerSetIds: ["gym-heroes", "gym-challenge"],
+    image: "/packs/trainers-gym/booster_brock.png",
+  },
+];
+
+/** Ids of the Trainer boosters on sale (a group whose sets are all in development isn't). */
+export const TRAINER_BOOSTER_IDS: string[] = [];
+
+function initializeTrainerBoosters(): void {
+  for (const { trainerSetIds, ...def } of TRAINER_BOOSTERS) {
+    const releasedSetIds = trainerSetIds.filter(isReleasedSet);
+    if (releasedSetIds.length === 0) continue;
+    packTypes.set(def.id, {
+      ...def,
+      trainerSetIds: releasedSetIds,
+      cardCount: 11,
+      slots: TRAINER_BOOSTER_SLOTS,
+      energyCount: 0,
+      price: ECONOMY.packs.price,
+      available: true,
+    });
+    TRAINER_BOOSTER_IDS.push(def.id);
+  }
+}
 
 // Initialize on module load
 initializeDefaultPacks();
-packTypes.set(TRAINER_BOOSTER.id, TRAINER_BOOSTER);
+initializeTrainerBoosters();
 
 // =============================================================================
 // Pack Types (read-only; there is no admin CRUD)
@@ -222,15 +253,18 @@ export function isOpenableCard(card: Card, unsupported: ReadonlySet<string> = UN
   return !(card.kind === "trainer" && unsupported.has(card.name));
 }
 
-const ALL_TRAINERS: Card[] = RELEASED_CARDS.filter((card) => card.kind === "trainer" && isOpenableCard(card));
+type PackPool = Pick<BoosterPackType, "setId" | "trainerSetIds">;
 
 /**
- * Cards a pack draws from: every playable Trainer for the Trainer booster; for a set booster its
- * set in game-core's registry without the Trainers (they only come in the Trainer booster) and
- * without basic Energy (Base Set prints them as commons; boosters never give them).
+ * Cards a pack draws from: the playable Trainers of its sets for a Trainer booster; for a set
+ * booster its set in game-core's registry without the Trainers (they only come in the Trainer
+ * boosters) and without basic Energy (Base Set prints them as commons; boosters never give them).
  */
-function setCards(pack: Pick<BoosterPackType, "setId" | "trainersOnly">): Card[] {
-  if (pack.trainersOnly) return ALL_TRAINERS;
+function setCards(pack: PackPool): Card[] {
+  if (pack.trainerSetIds) {
+    const setIds = new Set(pack.trainerSetIds);
+    return RELEASED_CARDS.filter((card) => card.kind === "trainer" && isOpenableCard(card) && setIds.has(getSetForCard(card)?.id ?? ""));
+  }
   return (getSetById(pack.setId)?.cards ?? []).filter(
     (card) => card.kind !== "trainer" && !isBasicEnergy(card) && isOpenableCard(card),
   );
@@ -241,7 +275,7 @@ function setCards(pack: Pick<BoosterPackType, "setId" | "trainersOnly">): Card[]
  * non-holo rares — Jungle, Fossil, Team Rocket — therefore always give a holo in the rare slot);
  * "rare-nonholo" is the non-holo rares, or that same "rare" pool when the set has none.
  */
-function getCardsByRarity(pack: Pick<BoosterPackType, "setId" | "trainersOnly">, rarity: string): Card[] {
+function getCardsByRarity(pack: PackPool, rarity: string): Card[] {
   const cards = setCards(pack);
   if (cards.length === 0) return [];
   if (rarity === "rare-nonholo") {
@@ -264,8 +298,8 @@ function getCardsByRarity(pack: Pick<BoosterPackType, "setId" | "trainersOnly">,
  * Get basic energy cards from a set (excludes special energies like Double Colorless).
  * Sets without basic Energy (Jungle) use the first registry set that has them (Base Set).
  */
-function getEnergyCards(pack: Pick<BoosterPackType, "setId" | "trainersOnly">): Card[] {
-  const energy = (pack.trainersOnly ? [] : (getSetById(pack.setId)?.cards ?? [])).filter(isBasicEnergy);
+function getEnergyCards(pack: PackPool): Card[] {
+  const energy = (pack.trainerSetIds ? [] : (getSetById(pack.setId)?.cards ?? [])).filter(isBasicEnergy);
   if (energy.length > 0) return energy;
   return CARD_SETS.map((set) => set.cards.filter(isBasicEnergy)).find((cards) => cards.length > 0) ?? [];
 }

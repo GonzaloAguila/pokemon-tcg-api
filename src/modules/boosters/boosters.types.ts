@@ -25,10 +25,10 @@ export interface BoosterPackType {
   id: string;
   name: string;
   description: string;
-  /** Set the cards come from; "trainers" for a Trainers-only booster (every set) */
+  /** Set the cards come from; for a Trainers-only booster an id of its own ("trainers", "gym-trainers") */
   setId: string;
-  /** Cards come from every set's Trainers instead of `setId` */
-  trainersOnly?: boolean;
+  /** Trainers-only booster: cards come from these sets' Trainers instead of `setId` */
+  trainerSetIds?: string[];
   /** Image/artwork for the pack */
   image: string;
   /** Total cards in pack */

@@ -18,7 +18,7 @@ import { REWARD_PACK_SET_IDS } from "../src/socket/draft-rewards.js";
 import { RELEASED_SETS } from "../src/lib/released-sets.js";
 import {
   STANDARD_BOOSTER_IDS,
-  TRAINER_BOOSTER_ID,
+  GYM_TRAINER_BOOSTER_ID,
   getPackById,
   getPackOdds,
   isOpenableCard,
@@ -77,8 +77,8 @@ describe("Gym Challenge released", () => {
     expect(holos).toBeGreaterThan(100);
   });
 
-  it("its Trainers come in the Trainer booster unless the engine lists them as unsupported", () => {
-    const odds = getPackOdds(TRAINER_BOOSTER_ID)!;
+  it("its Trainers come in the Gym Trainer booster unless the engine lists them as unsupported", () => {
+    const odds = getPackOdds(GYM_TRAINER_BOOSTER_ID)!;
     expect(odds.cardChances["gym-challenge-018-giovanni"]).toBeGreaterThan(0);
     const giovanni = GC.cards.find((c) => c.id === "gym-challenge-018-giovanni")!;
     expect(isOpenableCard(giovanni, new Set(["Giovanni"]))).toBe(false);
