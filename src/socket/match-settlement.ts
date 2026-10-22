@@ -58,7 +58,8 @@ export function settleRoomResult(
   winner: PlayerKey | "draw" | null,
   reason: string,
   // The mode (draft or not) comes from the match row; isDraft is kept for the existing callers
-  options: { isDraft?: boolean } = {},
+  // `noShow`: the loser never showed up at their table (settleMatch: no rewards for them)
+  options: { isDraft?: boolean; noShow?: boolean } = {},
 ): void {
   // Adventure battles never settle a match (adventure-room.ts applies their result to the run)
   if (!room || room.resultSettled || room.adventure) return;
@@ -83,6 +84,7 @@ export function settleRoomResult(
     // A Lucky Duel also says so in its reason (the row's gameMode was set when it opened)
     reason: room.config.mode === "lucky-duel" ? `Lucky Duel: ${reason}` : reason,
     turnNumber: room.gameState?.turnNumber ?? 0,
+    ...(options.noShow ? { noShow: true } : {}),
     ...(room.config.mode === "lucky-duel" && room.luckyDuelStarters ? { luckyDuel: luckyDuelStarters(room) } : {}),
   })
     .then((result) => {

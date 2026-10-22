@@ -250,6 +250,8 @@ export type SettleInput =
    * per-opponent win cap) but changes no win/loss stats or streaks (the stats model has no draws);
    * both players get the loser's participation rewards (XP, match coins, "game_played" mission).
    * `luckyDuel`: the drawn Basics and the starting side (Lucky Duel tables only).
+   * `noShow`: the loser never showed up at their table: their loss is in the stats, without XP,
+   * match coins or missions (the winner's win counts as usual).
    */
   | {
       kind: "multiplayer";
@@ -258,6 +260,7 @@ export type SettleInput =
       reason: string;
       turnNumber: number;
       luckyDuel?: LuckyDuelStarters;
+      noShow?: boolean;
     }
   /**
    * turnNumber: last turn reached, reported by the client (the AI game runs in the browser).
@@ -528,16 +531,18 @@ async function settleMatchTx(tx: Db, matchId: string, input: SettleInput, now: D
     for (const p of players) await recordMatchResult(p, mode, p === winnerId, tx);
   }
 
-  // XP, match coins and missions (counted only; coins and missions need a verified email)
+  // XP, match coins and missions (counted only; coins and missions need a verified email). A
+  // no-show loser gets none of them
   const grants = new Map<string, ExperienceGrant>();
   const coinGrants = new Map<string, MatchCoinGrant>();
   const missions = new Map<string, MissionCompletion[]>();
   for (const p of players) {
     // A draw pays both players what a loser gets (participation): XP, match coins, game_played
     const outcome = p === winnerId ? "win" : "loss";
-    const grant = await grantExperience(tx, p, counted ? XP_REWARDS[mode][outcome] : 0, now);
+    const rewarded = counted && !(input.kind === "multiplayer" && input.noShow && p === loserId);
+    const grant = await grantExperience(tx, p, rewarded ? XP_REWARDS[mode][outcome] : 0, now);
     if (grant) grants.set(p, grant);
-    if (!counted || !verified.get(p)) continue;
+    if (!rewarded || !verified.get(p)) continue;
     const pairLeft = pairCapApplies && p === winnerId ? pairRemaining : Number.POSITIVE_INFINITY;
     const coinGrant = await grantMatchCoins(tx, p, isAi ? "ai" : "online", outcome, matchId, now, pairLeft);
     coinGrants.set(p, coinGrant);
@@ -636,7 +641,8 @@ async function gameCounts(
   now: Date,
 ): Promise<boolean> {
   if (mode === "friendly" || !match.startedAt) return false;
-  if (input.kind === "ai") return aiGameCounts(tx, match, now);
+  // A Lucky Duel left unfinished (settled as a defeat when another vs-AI game starts) pays nothing
+  if (input.kind === "ai") return !input.abandoned && aiGameCounts(tx, match, now);
   if (!match.player1Id || !match.player2Id) return false;
   // A draw has no winner to cap (the per-opponent cap counts wins); no result counts for nobody
   if (!winnerId) return input.draw === true;

@@ -66,8 +66,8 @@ async function gameRewardCoins(userId: string): Promise<number> {
 }
 /**
  * The balance without the normal game rewards: what the Lucky Duel stake alone moved. Every
- * vs-AI game counts (no minimum turn or duration), abandoned Lucky Duels included, so match coins
- * and missions come on top of the stake.
+ * finished vs-AI game counts (no minimum turn or duration), so match coins and missions come on
+ * top of the stake (an abandoned Lucky Duel pays nothing).
  */
 const stakeCoins = async (userId: string) => (await coins(userId)) - (await gameRewardCoins(userId));
 /** Only the Lucky Duel ledger rows (stake, win, refund, streak bonus). */
@@ -266,10 +266,9 @@ describe("vs AI Lucky Duel: the daily staked games", () => {
       expect(start.luckyDuel).toMatchObject({ stake: CFG.stake, stakedGamesLeft: CFG.dailyStakedGames - i });
     }
     expect(await stakeCoins(u.id)).toBe(0);
-    // Each start settled the previous game as an abandoned defeat, and those count (match coins,
-    // "play 2 games"): empty the balance so the next start really has no coins
-    expect(await gameRewardCoins(u.id)).toBeGreaterThan(0);
-    await prisma.user.update({ where: { id: u.id }, data: { coins: 0 } });
+    // Each start settled the previous game as an abandoned defeat, which pays nothing
+    expect(await gameRewardCoins(u.id)).toBe(0);
+    expect(await coins(u.id)).toBe(0);
     const res = await app.request("GET", "/api/matches/ai/lucky-duel", { token: tokenFor(u) });
     expect(res.body).toMatchObject({ stake: 0, stakedGamesLeft: 0 });
 
@@ -281,7 +280,9 @@ describe("vs AI Lucky Duel: the daily staked games", () => {
     await prisma.match.update({ where: { id: unstaked.body.matchId }, data: { startedAt: startedLongAgo() } });
     const won = await matches.finishAiMatch(u.id, unstaked.body.matchId, "victory", 2);
     expect(won.luckyDuel).toMatchObject({ stake: 0, payout: 0, streak: 1, streakBonus: 0 });
-    expect(await coins(u.id)).toBe(0);
+    // No stake moved; the win's normal vs-AI rewards apply (abandoned games used no counted slot)
+    expect(await stakeCoins(u.id)).toBe(0);
+    expect(won).toMatchObject({ counted: true, rewardCoins: AI_COINS.win });
     expect(await prisma.transaction.count({ where: { userId: u.id, type: "lucky_duel_stake" } })).toBe(CFG.dailyStakedGames);
   });
 
@@ -326,16 +327,16 @@ describe("vs AI Lucky Duel: abandon on a new start", () => {
     const next = await matches.startAiMatch(u.id, "lucky-duel");
     expect(next.luckyDuel).toEqual({ stake: 20, streak: 0, stakedGamesLeft: CFG.dailyStakedGames - 4 });
     expect(await stakeCoins(u.id)).toBe(100);
-    // The abandoned game is a counted defeat (no minimum turn): the loser's vs-AI match coins and XP
+    // The abandoned game is a defeat that pays nothing (no match coins, XP or missions)
     expect(await prisma.match.findUniqueOrThrow({ where: { id: left } })).toMatchObject({
       status: "finished",
       winnerId: null,
       winReason: "lucky-duel: abandoned",
       settledAt: expect.any(Date),
       finalTurn: 0,
-      counted: true,
-      player1Coins: AI_COINS.loss,
-      player1Xp: XP_REWARDS.ai.loss,
+      counted: false,
+      player1Coins: 0,
+      player1Xp: 0,
     });
     expect(await luckyStats(u.id)).toEqual({ luckyDuelStreak: 0, luckyDuelBestStreak: 2, luckyDuelAiStreak: 0 });
     const before = await coins(u.id);
@@ -359,9 +360,9 @@ describe("vs AI Lucky Duel: abandon on a new start", () => {
     const { matchId: left } = await matches.startAiMatch(u.id, "lucky-duel");
     await expect(matches.startAiMatch(u.id, "lucky-duel")).rejects.toMatchObject({ statusCode: 400 });
     expect(await prisma.match.findUniqueOrThrow({ where: { id: left } })).toMatchObject({ winReason: "lucky-duel: abandoned" });
-    // The stake is gone; the abandoned defeat's match coins don't cover a new stake
+    // The stake is gone and the abandoned defeat pays nothing
     expect(await stakeCoins(u.id)).toBe(0);
-    expect(await coins(u.id)).toBeLessThan(CFG.stake);
+    expect(await coins(u.id)).toBe(0);
   });
 
   it("two starts at once: one game stays open, the other is abandoned, each stake taken once", async () => {

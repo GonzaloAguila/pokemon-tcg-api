@@ -349,7 +349,7 @@ async function settleNoShow(io: Server, room: GameRoom): Promise<void> {
     console.error(`[noShow] Could not open the match of room ${room.id}:`, err);
   }
   room.status = "finished";
-  settleRoomResult(io, room, "player2", `no-show: ${reason}`);
+  settleRoomResult(io, room, "player2", `no-show: ${reason}`, { noShow: true });
   const payload = {
     roomId: room.id,
     mode: room.config.mode,

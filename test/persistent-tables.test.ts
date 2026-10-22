@@ -351,7 +351,8 @@ describe("joining a table whose creator is away", () => {
     });
     expect(await victory).toMatchObject({ roomId, betAmount: 40, opponentUsername: creator.username });
     expect(await joinerSettled).toMatchObject({ outcome: "win", betAmount: 40, coinsDelta: 40 });
-    expect(await creatorSettled).toMatchObject({ outcome: "loss", betAmount: 40, coinsDelta: -40 });
+    // The absent creator's loss pays nothing (no match coins, XP or missions)
+    expect(await creatorSettled).toMatchObject({ outcome: "loss", betAmount: 40, coinsDelta: -40, rewardCoins: 0, xpGained: 0 });
     expect(roomManager.getRoom(roomId)).toBeUndefined();
 
     await eventually(async () => {
@@ -359,8 +360,8 @@ describe("joining a table whose creator is away", () => {
       expect(match).toMatchObject({ status: "finished", winnerId: joinerUser.id, betAmount: 40 });
       expect(match.winReason).toContain("no se presentó");
     });
-    // The pot, and a counted game for both (no minimum turn): match coins, the rival's win mission
-    expect(await coinsOf(creator.id)).toBe(60 + ECONOMY.matchCoins.online.loss);
+    // The pot, and a counted win for the rival (match coins, win mission); nothing for the creator
+    expect(await coinsOf(creator.id)).toBe(60);
     const winMission = ECONOMY.missions.daily.find((m) => m.id === "win_game")!.rewardCoins;
     expect(await coinsOf(joinerUser.id)).toBe(140 + ECONOMY.matchCoins.online.win + winMission);
 
