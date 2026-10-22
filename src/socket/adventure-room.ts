@@ -23,6 +23,7 @@ import { Prisma, type AdventureRun } from "@prisma/client";
 import { GamePhase, startPlayingPhase, type GameState } from "@gonzaloaguila/game-core";
 import { prisma } from "../lib/prisma.js";
 import { getAdventure } from "../modules/adventure/content/load.js";
+import { battleObjective } from "../modules/adventure/content/difficulty.js";
 import { describeModifier } from "../modules/adventure/content/modifiers.js";
 import { battleConfig, battleRules } from "../modules/adventure/run-logic.js";
 import {
@@ -110,6 +111,8 @@ export interface AdventureGameStartInfo {
   passives: string[];
   /** The battle's rules ("Reglas de la mesa"), Spanish lines. */
   rules: string[];
+  /** What the battle asks beyond the usual (content `objective`), shown on the board; null = none */
+  objective: string | null;
   rival: { name: string; trainerClass: string };
 }
 
@@ -303,7 +306,8 @@ export class AdventureRooms implements AdventureBattleHost {
         hearts: run.hearts,
         maxHearts: run.maxHearts,
         passives: run.passives,
-        rules: battleRules(adventure, battle.index, run.difficulty).map(describeModifier),
+        rules: battleRules(adventure, battle.index, run.difficulty, run.starterId).map(describeModifier),
+        objective: battleObjective(battle, run.difficulty),
         rival: { name: rival.name, trainerClass: rival.trainerClass },
       },
       luckyPending: false,

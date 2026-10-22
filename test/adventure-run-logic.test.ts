@@ -52,7 +52,7 @@ describe("newRun", () => {
     const run = fresh();
     expect(run).toMatchObject({
       adventureId: "pueblo-paleta-bosque-verde",
-      adventureVersion: 3,
+      adventureVersion: 4,
       status: "active",
       phase: "pre_battle",
       currentBattle: 1,
@@ -144,11 +144,16 @@ describe("hard mode", () => {
     const boss = battleConfig(runAtBattle(5, fresh("charmander", "hard")), adventure);
     expect(boss.modifiers).toContainEqual({ type: "prizeCount", opponent: 2 });
     expect(battleConfig(runAtBattle(5), adventure).modifiers).toEqual([]);
-    expect(battleRules(adventure, 5, "hard")).toEqual(boss.modifiers);
+    expect(battleRules(adventure, 5, "hard", "charmander")).toEqual(boss.modifiers);
 
     const final = battleConfig(runAtBattle(10, fresh("squirtle", "hard")), adventure);
     expect(final.opponentDeck[0].cardId).toBe("base-set-044-bulbasaur");
-    expect(final.modifiers.map((m) => m.type)).toEqual(["prizeCount", "bonusCards", "opponentPassives"]);
+    expect(final.modifiers.map((m) => m.type)).toEqual(["prizeCount", "bonusCards", "opponentPassives", "opponentSetup"]);
+    expect(final.modifiers.find((m) => m.type === "opponentSetup")).toEqual({
+      type: "opponentSetup",
+      active: ["base-set-044-bulbasaur"],
+      bench: [["base-set-058-pikachu"]],
+    });
   });
 });
 
@@ -176,7 +181,7 @@ describe("offers", () => {
     expect(offerCandidates(fresh(), adventure, 1)).toContain("t1-evolucion");
   });
 
-  it("excludes passives already owned and card treasures that would pass 40 cards", () => {
+  it("excludes passives already owned; card treasures stay on offer with a full deck (trimmed before the next battle)", () => {
     const run = { ...fresh(), passives: ["lucky_coin" as const] };
     expect(offerCandidates(run, adventure, 1)).not.toContain("t1-moneda");
     expect(offerCandidates(run, adventure, 6)).toContain("t1-energia");
@@ -184,11 +189,15 @@ describe("offers", () => {
 
     const full = { ...fresh(), deck: [...fresh().deck.filter((e) => e.cardId !== FIRE), { cardId: FIRE, qty: 27 }] }; // 40 cards
     expect(size(full)).toBe(40);
-    const candidates = offerCandidates(full, adventure, 1);
-    expect(candidates.sort()).toEqual(["t1-moneda"]);
+    expect(offerCandidates(full, adventure, 1).sort()).toEqual([...adventure.treasurePools.tier1].sort());
 
-    const at39 = { ...full, deck: full.deck.map((e) => (e.cardId === FIRE ? { ...e, qty: 26 } : e)) };
-    expect(offerCandidates(at39, adventure, 1)).not.toContain("t1-pociones"); // +2 → 41
+    // Taking one goes over 40; the next battle won't start until the player trims the deck
+    const won = applyBattleResult(startBattle(full, adventure), adventure, { victory: true }).run;
+    const over = chooseTreasure({ ...won, pendingOffer: ["t1-pociones"] }, adventure, { treasureId: "t1-pociones" });
+    expect(size(over)).toBe(42);
+    expect(() => startBattle(over, adventure)).toThrow(RunRuleError);
+    const trimmed = editDeck(over, adventure, { remove: [{ cardId: FIRE, qty: 2 }], energies: [] });
+    expect(startBattle(trimmed, adventure).phase).toBe("in_battle");
   });
 });
 
@@ -308,18 +317,25 @@ describe("offers by rarity", () => {
     }
   });
 
-  it("falls back to fewer treasures when there are fewer candidates", () => {
-    const full = { ...fresh(), deck: [...fresh().deck.filter((e) => e.cardId !== FIRE), { cardId: FIRE, qty: 27 }] }; // 40 cards
-    expect(generateOffer(full, adventure, 1)).toEqual(["t1-moneda"]); // a lone passive is still offered
-    expect(generateOffer({ ...full, passives: ["lucky_coin"] }, adventure, 1)).toEqual([]);
-    const late = generateOffer(full, adventure, 6); // only the two passives fit; one per offer
-    expect(late).toHaveLength(1);
-    expect(["t2-mano", "t1-energia"]).toContain(late[0]);
-    const major = generateOffer(full, adventure, 5); // Corazón extra or Atajo
-    expect(major).toHaveLength(1);
-    // A victory with nothing to offer goes straight to the next battle
-    const lonely = { ...full, passives: ["lucky_coin" as const] };
-    expect(applyBattleResult(startBattle(lonely, adventure), adventure, { victory: true }).run).toMatchObject({ phase: "pre_battle", currentBattle: 2 });
+  it("a full deck still gets 3 treasures (owner report: battle 9 offered only 1)", () => {
+    const full = { ...fresh("charmander", "hard"), deck: [...fresh().deck.filter((e) => e.cardId !== FIRE), { cardId: FIRE, qty: 27 }] }; // 40 cards
+    for (const battle of [1, 5, 6, 9]) {
+      for (const seed of ["a", "b", "c", "d"]) expect(generateOffer({ ...full, seed }, adventure, battle)).toHaveLength(3);
+    }
+  });
+
+  it("falls back to fewer treasures only when the pool runs out; then the passive cap gives way", () => {
+    const withTier1 = (ids: string[]) => variant((a) => (a.treasurePools = { ...a.treasurePools, tier1: ids }));
+    // Two passives and nothing else: both offered (the one-passive cap gives way)
+    expect(generateOffer(fresh(), withTier1(["t1-moneda", "t1-energia"]), 1).sort()).toEqual(["t1-energia", "t1-moneda"]);
+    // One passive the run already has: nothing to offer, the victory goes straight to the next battle
+    const lonelyAdventure = withTier1(["t1-moneda"]);
+    const lonely = { ...fresh(), passives: ["lucky_coin" as const] };
+    expect(generateOffer(lonely, lonelyAdventure, 1)).toEqual([]);
+    expect(applyBattleResult(startBattle(lonely, lonelyAdventure), lonelyAdventure, { victory: true }).run).toMatchObject({
+      phase: "pre_battle",
+      currentBattle: 2,
+    });
   });
 
   it("live runs keep working: every treasure id of content version 1 still resolves", () => {
@@ -334,8 +350,8 @@ describe("offers by rarity", () => {
     const won = applyBattleResult(startBattle(runAtBattle(2), adventure), adventure, { victory: true }).run;
     const run = chooseTreasure({ ...won, adventureVersion: 1, pendingOffer: ["t1-energia", "t1-bill", "t1-moneda"] }, adventure, { treasureId: "t1-energia" });
     expect(run).toMatchObject({ currentBattle: 3, passives: ["start_attached_energy"], treasuresTaken: ["t1-energia"] });
-    expect(adventure.version).toBe(3);
-    expect(fresh().adventureVersion).toBe(3);
+    expect(adventure.version).toBe(4);
+    expect(fresh().adventureVersion).toBe(4);
   });
 
   it("live hard runs of version 2 keep their hearts and stored offer; later offers use the hard pools", () => {

@@ -16,7 +16,7 @@ import { claimOnce, hasClaim } from "../economy/claims.js";
 import { checkAndUpdateProgress } from "../achievements/achievements.service.js";
 import { cardOf } from "./content/cards.js";
 import { getAdventure, getAdventures, type Adventure } from "./content/load.js";
-import { battleModifiers, difficultyRules, rivalDeckOf } from "./content/difficulty.js";
+import { battleModifiers, battleObjective, difficultyRules, rivalDeckOf } from "./content/difficulty.js";
 import { describeModifier } from "./content/modifiers.js";
 import { DIFFICULTIES, type AdventureBattle, type AdventureReward, type Difficulty } from "./content/schema.js";
 import { achievementCosmeticView } from "./cosmetics.js";
@@ -127,8 +127,9 @@ function leadOf(battle: AdventureBattle, deck: readonly CardEntry[]): string | n
   return battle.opponent.lead ?? deck.find((e) => isPokemonCard(cardOf(e.cardId)))?.cardId ?? null;
 }
 
-/** The battle's rules as Spanish lines, in a run of that difficulty. */
-const rulesOf = (battle: AdventureBattle, difficulty: Difficulty) => battleModifiers(battle, difficulty).map(describeModifier);
+/** The battle's rules as Spanish lines, in a run of that difficulty and starter. */
+const rulesOf = (battle: AdventureBattle, difficulty: Difficulty, starterId: string) =>
+  battleModifiers(battle, difficulty, starterId).map(describeModifier);
 
 function treasureView(adventure: Adventure, state: RunState, id: string) {
   const treasure = adventure.treasures.find((t) => t.id === id);
@@ -174,7 +175,8 @@ export function serializeRun(row: AdventureRun) {
           id: battle.id,
           location: battle.location,
           opponent: { name: battle.opponent.name, trainerClass: battle.opponent.trainerClass, lead: leadOf(battle, rivalDeck) },
-          rules: rulesOf(battle, state.difficulty),
+          rules: rulesOf(battle, state.difficulty, state.starterId),
+          objective: battleObjective(battle, state.difficulty),
         }
       : null,
     createdAt: row.createdAt,
@@ -312,7 +314,8 @@ export async function getAdventureDetail(userId: string, adventureId: string) {
         treasurePool: battle.treasurePool,
         beaten,
         current: battle.index === current,
-        rules: beaten || battle.index === current ? rulesOf(battle, difficulty) : null,
+        rules: beaten || battle.index === current ? rulesOf(battle, difficulty, active?.starterId ?? "") : null,
+        objective: beaten || battle.index === current ? battleObjective(battle, difficulty) : null,
         rivalDeck: beaten ? deck : null,
       };
     }),

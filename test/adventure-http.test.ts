@@ -374,13 +374,15 @@ describe("GET /api/adventures", () => {
     const run = (await app.request("GET", "/api/adventure/runs/active", { token })).body;
     expect(run.currentBattleInfo).toMatchObject({
       index: 5,
-      rules: ["El rival juega con 2 premios", "El rival empieza con Potion en la mano"],
+      rules: ["El rival juega con 2 premios", "El rival empieza con Potion en la mano", "El rival empieza con Venonat activo y Kakuna en la banca"],
+      objective: "El rival gana con 2 premios: cuida a tus Pokémon.",
     });
     const detail = (await app.request("GET", `/api/adventures/${ADVENTURE}`, { token })).body;
     expect(detail.battles[4].rules).toEqual(run.currentBattleInfo.rules);
     expect(detail.battles[0].rules).toEqual([]);
-    expect(detail.battles[0].rivalDeck).toContainEqual({ cardId: "base-set-040-raticate", qty: 1 });
-    expect(detail.battles[1].rules).toEqual(["El rival empieza con Doduo activo y Pidgey en la banca"]);
+    expect(detail.battles[4].objective).toBe(run.currentBattleInfo.objective);
+    expect(detail.battles[0].rivalDeck).toContainEqual({ cardId: "base-set-040-raticate", qty: 2 });
+    expect(detail.battles[1].rules).toEqual(["El rival empieza con Doduo activo y Pidgey y Jigglypuff en la banca"]);
     expect(detail.treasurePools.tier1).toContain("h1-kangaskhan");
     expect(detail.treasurePools.tier1).not.toContain("t1-pociones");
     expect(detail.battles[9].opponent.lead).toBe("base-set-044-bulbasaur");

@@ -1,6 +1,6 @@
 {
   "id": "pueblo-paleta-bosque-verde",
-  "version": 3,
+  "version": 4,
   "name": "De Pueblo Paleta al Bosque Verde",
   "description": "Elige tu inicial y abre camino por la Ruta 1, Ciudad Verde, la Ruta 22 y el Bosque Verde hasta las puertas de Ciudad Plateada, donde te espera tu rival.",
   "rules": { "hearts": 3, "prizeCount": 3, "openingHand": 7, "minDeckSize": 20, "maxDeckSize": 40, "maxCopies": null },
@@ -68,17 +68,19 @@
           ],
           "hard": [
             { "cardId": "base-set-061-rattata", "qty": 4 },
-            { "cardId": "base-set-040-raticate", "qty": 1 },
+            { "cardId": "base-set-040-raticate", "qty": 2 },
             { "cardId": "base-set-057-pidgey", "qty": 3 },
             { "cardId": "base-set-022-pidgeotto", "qty": 1 },
             { "cardId": "base-set-094-potion", "qty": 1 },
             { "cardId": "base-set-091-bill", "qty": 1 },
+            { "cardId": "base-set-084-pluspower", "qty": 1 },
             { "cardId": "base-set-097-fighting-energy", "qty": 9 }
           ]
         }
       },
       "treasurePool": "tier1",
-      "modifiers": []
+      "modifiers": [],
+      "modifiersByDifficulty": { "hard": [{ "type": "opponentSetup", "active": ["base-set-061-rattata"], "bench": [["base-set-057-pidgey"]] }] }
     },
     {
       "index": 2,
@@ -96,19 +98,23 @@
           ],
           "hard": [
             { "cardId": "base-set-057-pidgey", "qty": 3 },
-            { "cardId": "base-set-022-pidgeotto", "qty": 1 },
+            { "cardId": "base-set-022-pidgeotto", "qty": 2 },
             { "cardId": "base-set-048-doduo", "qty": 3 },
             { "cardId": "jungle-034-dodrio", "qty": 1 },
             { "cardId": "jungle-054-jigglypuff", "qty": 2 },
+            { "cardId": "jungle-016-wigglytuff", "qty": 1 },
             { "cardId": "base-set-094-potion", "qty": 1 },
             { "cardId": "base-set-091-bill", "qty": 1 },
-            { "cardId": "base-set-097-fighting-energy", "qty": 8 }
+            { "cardId": "base-set-084-pluspower", "qty": 1 },
+            { "cardId": "base-set-097-fighting-energy", "qty": 9 }
           ]
         }
       },
       "treasurePool": "tier1",
       "modifiers": [],
-      "modifiersByDifficulty": { "hard": [{ "type": "opponentSetup", "active": ["base-set-048-doduo"], "bench": [["base-set-057-pidgey"]] }] }
+      "modifiersByDifficulty": {
+        "hard": [{ "type": "opponentSetup", "active": ["base-set-048-doduo"], "bench": [["base-set-057-pidgey"], ["jungle-054-jigglypuff"]] }]
+      }
     },
     {
       "index": 3,
@@ -133,15 +139,22 @@
             { "cardId": "jungle-056-meowth", "qty": 2 },
             { "cardId": "jungle-042-persian", "qty": 1 },
             { "cardId": "base-set-057-pidgey", "qty": 2 },
+            { "cardId": "base-set-022-pidgeotto", "qty": 1 },
             { "cardId": "base-set-091-bill", "qty": 1 },
-            { "cardId": "base-set-084-pluspower", "qty": 1 },
+            { "cardId": "base-set-084-pluspower", "qty": 2 },
+            { "cardId": "base-set-093-gust-of-wind", "qty": 1 },
             { "cardId": "base-set-097-fighting-energy", "qty": 8 }
           ]
         }
       },
       "treasurePool": "tier1",
       "modifiers": [],
-      "modifiersByDifficulty": { "hard": [{ "type": "opponentSetup", "active": ["base-set-061-rattata"], "bench": [["jungle-056-meowth"]] }] }
+      "modifiersByDifficulty": {
+        "hard": [
+          { "type": "opponentSetup", "active": ["base-set-061-rattata"], "bench": [["jungle-056-meowth"]] },
+          { "type": "opponentPassives", "passives": ["start_attached_energy"] }
+        ]
+      }
     },
     {
       "index": 4,
@@ -161,6 +174,7 @@
           ],
           "hard": [
             { "cardId": "base-set-035-magikarp", "qty": 1 },
+            { "cardId": "base-set-006-gyarados", "qty": 1 },
             { "cardId": "base-set-059-poliwag", "qty": 3 },
             { "cardId": "base-set-038-poliwhirl", "qty": 2 },
             { "cardId": "base-set-065-staryu", "qty": 3 },
@@ -170,13 +184,18 @@
             { "cardId": "base-set-090-super-potion", "qty": 1 },
             { "cardId": "base-set-084-pluspower", "qty": 1 },
             { "cardId": "base-set-091-bill", "qty": 1 },
-            { "cardId": "base-set-102-water-energy", "qty": 9 }
+            { "cardId": "base-set-102-water-energy", "qty": 10 }
           ]
         }
       },
       "treasurePool": "tier1",
       "modifiers": [],
-      "modifiersByDifficulty": { "hard": [{ "type": "opponentPassives", "passives": ["start_attached_energy"] }] }
+      "modifiersByDifficulty": {
+        "hard": [
+          { "type": "opponentPassives", "passives": ["start_attached_energy"] },
+          { "type": "opponentSetup", "active": ["base-set-065-staryu"], "bench": [["base-set-059-poliwag"]] }
+        ]
+      }
     },
     {
       "index": 5,
@@ -200,13 +219,16 @@
           "hard": [
             { "cardId": "base-set-069-weedle", "qty": 4 },
             { "cardId": "base-set-033-kakuna", "qty": 3 },
-            { "cardId": "base-set-017-beedrill", "qty": 1 },
+            { "cardId": "base-set-017-beedrill", "qty": 2 },
             { "cardId": "jungle-063-venonat", "qty": 2 },
+            { "cardId": "jungle-013-venomoth", "qty": 1 },
             { "cardId": "base-set-045-caterpie", "qty": 2 },
             { "cardId": "base-set-054-metapod", "qty": 1 },
             { "cardId": "base-set-094-potion", "qty": 1 },
             { "cardId": "base-set-095-switch", "qty": 1 },
             { "cardId": "base-set-091-bill", "qty": 1 },
+            { "cardId": "base-set-084-pluspower", "qty": 1 },
+            { "cardId": "base-set-093-gust-of-wind", "qty": 1 },
             { "cardId": "base-set-099-grass-energy", "qty": 9 }
           ]
         }
@@ -216,9 +238,11 @@
       "modifiersByDifficulty": {
         "hard": [
           { "type": "prizeCount", "opponent": 2 },
-          { "type": "bonusCards", "side": "opponent", "cards": [{ "cardId": "base-set-094-potion", "qty": 1 }], "to": "hand" }
+          { "type": "bonusCards", "side": "opponent", "cards": [{ "cardId": "base-set-094-potion", "qty": 1 }], "to": "hand" },
+          { "type": "opponentSetup", "active": ["jungle-063-venonat"], "bench": [["base-set-069-weedle", "base-set-033-kakuna"]] }
         ]
-      }
+      },
+      "objectiveByDifficulty": { "hard": "El rival gana con 2 premios: cuida a tus Pokémon." }
     },
     {
       "index": 6,
@@ -242,17 +266,24 @@
             { "cardId": "base-set-067-voltorb", "qty": 2 },
             { "cardId": "jungle-002-electrode", "qty": 1 },
             { "cardId": "base-set-053-magnemite", "qty": 2 },
+            { "cardId": "base-set-009-magneton", "qty": 1 },
             { "cardId": "base-set-020-electabuzz", "qty": 1 },
-            { "cardId": "base-set-084-pluspower", "qty": 1 },
+            { "cardId": "base-set-084-pluspower", "qty": 2 },
             { "cardId": "base-set-094-potion", "qty": 1 },
             { "cardId": "base-set-091-bill", "qty": 1 },
+            { "cardId": "base-set-093-gust-of-wind", "qty": 1 },
             { "cardId": "base-set-100-lightning-energy", "qty": 9 }
           ]
         }
       },
       "treasurePool": "tier2",
       "modifiers": [],
-      "modifiersByDifficulty": { "hard": [{ "type": "opponentPassives", "passives": ["lucky_coin"] }] }
+      "modifiersByDifficulty": {
+        "hard": [
+          { "type": "opponentPassives", "passives": ["lucky_coin"] },
+          { "type": "opponentSetup", "active": ["base-set-020-electabuzz"], "bench": [["base-set-058-pikachu"]] }
+        ]
+      }
     },
     {
       "index": 7,
@@ -308,7 +339,7 @@
           {
             "type": "opponentSetup",
             "active": ["base-set-045-caterpie", "base-set-054-metapod"],
-            "bench": [["base-set-045-caterpie", "base-set-054-metapod"], ["base-set-045-caterpie"]]
+            "bench": [["base-set-045-caterpie", "base-set-054-metapod"], ["base-set-045-caterpie", "base-set-054-metapod"]]
           },
           {
             "type": "bonusCards",
@@ -321,7 +352,8 @@
             "to": "hand"
           }
         ]
-      }
+      },
+      "objective": "Los Metapod del rival no dan premios: consigue tu premio de otra forma."
     },
     {
       "index": 8,
@@ -351,7 +383,8 @@
             { "cardId": "base-set-084-pluspower", "qty": 2 },
             { "cardId": "base-set-091-bill", "qty": 1 },
             { "cardId": "base-set-095-switch", "qty": 1 },
-            { "cardId": "base-set-097-fighting-energy", "qty": 8 }
+            { "cardId": "base-set-093-gust-of-wind", "qty": 1 },
+            { "cardId": "base-set-097-fighting-energy", "qty": 9 }
           ]
         }
       },
@@ -360,9 +393,11 @@
       "modifiersByDifficulty": {
         "hard": [
           { "type": "opponentPassives", "passives": ["start_attached_energy"] },
-          { "type": "opponentSetup", "active": ["base-set-047-diglett"], "bench": [["base-set-062-sandshrew"]] }
+          { "type": "opponentSetup", "active": ["base-set-047-diglett"], "bench": [["base-set-062-sandshrew"]] },
+          { "type": "prizeCount", "opponent": 2 }
         ]
-      }
+      },
+      "objectiveByDifficulty": { "hard": "El rival gana con 2 premios: cuida a tus Pokémon." }
     },
     {
       "index": 9,
@@ -394,6 +429,8 @@
             { "cardId": "base-set-084-pluspower", "qty": 2 },
             { "cardId": "base-set-091-bill", "qty": 1 },
             { "cardId": "base-set-094-potion", "qty": 1 },
+            { "cardId": "base-set-090-super-potion", "qty": 1 },
+            { "cardId": "base-set-092-energy-removal", "qty": 1 },
             { "cardId": "base-set-097-fighting-energy", "qty": 11 }
           ]
         }
@@ -402,10 +439,12 @@
       "modifiers": [],
       "modifiersByDifficulty": {
         "hard": [
-          { "type": "opponentSetup", "active": ["base-set-056-onix"], "bench": [["base-set-052-machop"]] },
-          { "type": "opponentPassives", "passives": ["start_attached_energy"] }
+          { "type": "opponentSetup", "active": ["base-set-056-onix"], "bench": [["base-set-052-machop"], ["fossil-047-geodude"]] },
+          { "type": "opponentPassives", "passives": ["start_attached_energy"] },
+          { "type": "prizeCount", "opponent": 2 }
         ]
-      }
+      },
+      "objectiveByDifficulty": { "hard": "El rival gana con 2 premios: cuida a tus Pokémon." }
     },
     {
       "index": 10,
@@ -435,22 +474,26 @@
                 { "cardId": "base-set-002-blastoise", "qty": 1 },
                 { "cardId": "base-set-057-pidgey", "qty": 2 },
                 { "cardId": "base-set-022-pidgeotto", "qty": 1 },
-                { "cardId": "base-set-094-potion", "qty": 2 },
+                { "cardId": "base-set-094-potion", "qty": 1 },
+                { "cardId": "base-set-090-super-potion", "qty": 1 },
                 { "cardId": "base-set-091-bill", "qty": 2 },
                 { "cardId": "base-set-093-gust-of-wind", "qty": 1 },
-                { "cardId": "base-set-084-pluspower", "qty": 1 },
-                { "cardId": "base-set-102-water-energy", "qty": 7 }
+                { "cardId": "base-set-084-pluspower", "qty": 2 },
+                { "cardId": "base-set-092-energy-removal", "qty": 1 },
+                { "cardId": "base-set-102-water-energy", "qty": 9 }
               ],
               "squirtle": [
                 { "cardId": "base-set-044-bulbasaur", "qty": 4 },
                 { "cardId": "base-set-030-ivysaur", "qty": 3 },
                 { "cardId": "base-set-015-venusaur", "qty": 1 },
                 { "cardId": "base-set-058-pikachu", "qty": 3 },
-                { "cardId": "base-set-094-potion", "qty": 2 },
+                { "cardId": "base-set-094-potion", "qty": 1 },
+                { "cardId": "base-set-090-super-potion", "qty": 1 },
                 { "cardId": "base-set-091-bill", "qty": 2 },
                 { "cardId": "base-set-093-gust-of-wind", "qty": 1 },
-                { "cardId": "base-set-084-pluspower", "qty": 1 },
-                { "cardId": "base-set-099-grass-energy", "qty": 5 },
+                { "cardId": "base-set-084-pluspower", "qty": 2 },
+                { "cardId": "base-set-092-energy-removal", "qty": 1 },
+                { "cardId": "base-set-099-grass-energy", "qty": 7 },
                 { "cardId": "base-set-100-lightning-energy", "qty": 2 }
               ],
               "bulbasaur": [
@@ -459,25 +502,45 @@
                 { "cardId": "base-set-004-charizard", "qty": 1 },
                 { "cardId": "base-set-057-pidgey", "qty": 2 },
                 { "cardId": "base-set-022-pidgeotto", "qty": 1 },
-                { "cardId": "base-set-094-potion", "qty": 2 },
+                { "cardId": "base-set-094-potion", "qty": 1 },
+                { "cardId": "base-set-090-super-potion", "qty": 1 },
                 { "cardId": "base-set-091-bill", "qty": 2 },
                 { "cardId": "base-set-093-gust-of-wind", "qty": 1 },
-                { "cardId": "base-set-084-pluspower", "qty": 1 },
-                { "cardId": "base-set-098-fire-energy", "qty": 7 }
+                { "cardId": "base-set-084-pluspower", "qty": 2 },
+                { "cardId": "base-set-092-energy-removal", "qty": 1 },
+                { "cardId": "base-set-098-fire-energy", "qty": 10 }
               ]
             }
           }
         }
       },
       "treasurePool": null,
-      "modifiers": [],
+      "modifiers": [{ "type": "opponentSetup", "active": ["base-set-057-pidgey"], "bench": [["base-set-061-rattata"]] }],
       "modifiersByDifficulty": {
-        "hard": [
-          { "type": "prizeCount", "opponent": 2 },
-          { "type": "bonusCards", "side": "opponent", "cards": [{ "cardId": "base-set-084-pluspower", "qty": 1 }], "to": "hand" },
-          { "type": "opponentPassives", "passives": ["start_attached_energy"] }
-        ]
-      }
+        "hard": {
+          "byStarter": {
+            "charmander": [
+              { "type": "prizeCount", "opponent": 2 },
+              { "type": "bonusCards", "side": "opponent", "cards": [{ "cardId": "base-set-084-pluspower", "qty": 1 }], "to": "hand" },
+              { "type": "opponentPassives", "passives": ["start_attached_energy"] },
+              { "type": "opponentSetup", "active": ["base-set-063-squirtle"], "bench": [["base-set-057-pidgey"]] }
+            ],
+            "squirtle": [
+              { "type": "prizeCount", "opponent": 2 },
+              { "type": "bonusCards", "side": "opponent", "cards": [{ "cardId": "base-set-084-pluspower", "qty": 1 }], "to": "hand" },
+              { "type": "opponentPassives", "passives": ["start_attached_energy"] },
+              { "type": "opponentSetup", "active": ["base-set-044-bulbasaur"], "bench": [["base-set-058-pikachu"]] }
+            ],
+            "bulbasaur": [
+              { "type": "prizeCount", "opponent": 2 },
+              { "type": "bonusCards", "side": "opponent", "cards": [{ "cardId": "base-set-084-pluspower", "qty": 1 }], "to": "hand" },
+              { "type": "opponentPassives", "passives": ["start_attached_energy"] },
+              { "type": "opponentSetup", "active": ["base-set-046-charmander"], "bench": [["base-set-057-pidgey"]] }
+            ]
+          }
+        }
+      },
+      "objectiveByDifficulty": { "hard": "El rival gana con 2 premios: cuida a tus Pokémon." }
     }
   ],
   "difficulties": {

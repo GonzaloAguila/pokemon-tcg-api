@@ -50,6 +50,9 @@ export const modifierSchema = z.union([
   z.object({ type: z.literal("opponentPassives"), passives: z.array(passiveSchema).min(1).max(5) }).strict(),
 ]);
 
+const modifierListSchema = z.array(modifierSchema).max(10);
+const objectiveText = z.string().min(1).max(160);
+
 const opponentSchema = z
   .object({
     name: text,
@@ -80,11 +83,21 @@ const battleSchema = z
     opponent: opponentSchema,
     treasurePool: z.enum(TREASURE_POOLS).nullable(),
     modifiers: z.array(modifierSchema).max(10),
-    /** A difficulty's own battle rules: they replace `modifiers` in runs of that difficulty. */
+    /**
+     * A difficulty's own battle rules: they replace `modifiers` in runs of that difficulty. Hard
+     * may give one list per starter (`byStarter`), like its decks (e.g. the final rival's setup).
+     */
     modifiersByDifficulty: z
-      .object({ normal: z.array(modifierSchema).max(10).optional(), hard: z.array(modifierSchema).max(10).optional() })
+      .object({
+        normal: modifierListSchema.optional(),
+        hard: z.union([modifierListSchema, z.object({ byStarter: z.record(id, modifierListSchema) }).strict()]).optional(),
+      })
       .strict()
       .optional(),
+    /** What the battle asks of the player beyond the usual (a short Spanish line on the board and the map). */
+    objective: objectiveText.optional(),
+    /** A difficulty's own objective: replaces `objective` in runs of that difficulty. */
+    objectiveByDifficulty: z.object({ normal: objectiveText.optional(), hard: objectiveText.optional() }).strict().optional(),
   })
   .strict();
 

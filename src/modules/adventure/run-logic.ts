@@ -60,9 +60,14 @@ function addCards(deck: readonly CardEntry[], entries: readonly CardEntry[]): Ca
  * within min/max, copies by name when `rules.maxCopies` is a number, basic Energy unlimited),
  * plus at least one Basic Pokémon (a deck without one could never start).
  */
-export function deckProblem(deck: readonly CardEntry[], adventure: Adventure): string | null {
+/**
+ * Why a deck can't be played, or null. `allowOversize`: a deck over the max size is fine for now
+ * (a treasure taken with a full deck; the player trims it before the next battle).
+ */
+export function deckProblem(deck: readonly CardEntry[], adventure: Adventure, options: { allowOversize?: boolean } = {}): string | null {
   const { minDeckSize, maxDeckSize, maxCopies } = adventure.rules;
-  const problem = validateDeckEntries(deck, { minSize: minDeckSize, maxSize: maxDeckSize, maxCopies });
+  const maxSize = options.allowOversize ? Number.MAX_SAFE_INTEGER : maxDeckSize;
+  const problem = validateDeckEntries(deck, { minSize: minDeckSize, maxSize, maxCopies });
   if (problem) return problem;
   if (!deck.some((e) => isBasicPokemonCard(cardOf(e.cardId)))) return "El mazo necesita al menos un Pokémon básico";
   return null;
@@ -140,18 +145,21 @@ function treasureById(adventure: Adventure, id: string): AdventureTreasure {
   return treasure;
 }
 
-/** Whether taking a card treasure keeps the deck within the rules (max size, copies). */
+/**
+ * Whether taking a card treasure keeps the deck within the rules (copies). Going over the max size
+ * is allowed: the player trims the deck before the next battle (startBattle checks it), so a full
+ * deck still gets card treasures (it used to leave an offer of 1 passive, owner report 2026-10-22).
+ */
 function cardsFit(run: RunState, adventure: Adventure, treasure: AdventureTreasure): boolean {
   if (treasure.kind !== "cards") return true;
   const deck = addCards(run.deck, resolveTreasureCards(treasure, starterOf(adventure, run.starterId)));
-  return deckProblem(deck, adventure) === null;
+  return deckProblem(deck, adventure, { allowOversize: true }) === null;
 }
 
 /**
  * Treasures that can be offered after `battleIndex`: the battle's pool (in the run difficulty's
- * `treasurePools`) minus passives the run
- * already has and card treasures that would break the deck rules (over the max size; no copy
- * limit in adventure mode).
+ * `treasurePools`) minus passives the run already has and card treasures that would break the
+ * deck rules (copies; the max size can be exceeded until the next battle, see cardsFit).
  */
 export function offerCandidates(run: RunState, adventure: Adventure, battleIndex: number): string[] {
   const pool = battleAt(adventure, battleIndex).treasurePool;
@@ -180,7 +188,7 @@ function weightedOrder(ids: readonly string[], adventure: Adventure, difficulty:
 /**
  * Up to 3 distinct candidates, always the same for the same run seed and battle (the offer is
  * stored in `pendingOffer`, so reloading never rerolls it). Drawn by rarity weight, with:
- * at most `treasureOffer.maxPassives` passives; at least one card treasure whenever a candidate
+ * at most `treasureOffer.maxPassives` passives (unless card treasures run out); at least one card treasure whenever a candidate
  * has one; treasures the run hasn't taken yet first (a card treasure already taken only fills a
  * slot nothing else can).
  */
@@ -206,6 +214,11 @@ export function generateOffer(run: RunState, adventure: Adventure, battleIndex: 
     }
     offer.push(id);
   }
+  // Not enough card treasures left: the passive cap gives way rather than offering fewer than 3
+  for (const id of queue) {
+    if (offer.length === OFFER_SIZE) break;
+    if (!offer.includes(id)) offer.push(id);
+  }
   return offer;
 }
 
@@ -226,6 +239,7 @@ export function chooseTreasure(run: RunState, adventure: Adventure, choice: Trea
   next.treasuresTaken = [...run.treasuresTaken, treasure.id];
   if (treasure.kind === "cards") {
     if (!cardsFit(run, adventure, treasure)) throw new RunRuleError("Ese tesoro no entra en tu mazo");
+    // Over the max size now: the player trims the deck on the map before the next battle
     next.deck = addCards(run.deck, resolveTreasureCards(treasure, starterOf(adventure, run.starterId)));
   } else {
     next.passives = [...run.passives, treasure.passive];
@@ -310,9 +324,9 @@ export function rivalDeckFor(adventure: Adventure, battleIndex: number, difficul
   return deck;
 }
 
-/** The battle's rules (modifiers) in a run of that difficulty. */
-export function battleRules(adventure: Adventure, battleIndex: number, difficulty: Difficulty): BattleModifier[] {
-  return battleModifiers(battleAt(adventure, battleIndex), difficulty);
+/** The battle's rules (modifiers) in a run of that difficulty and starter. */
+export function battleRules(adventure: Adventure, battleIndex: number, difficulty: Difficulty, starterId: string): BattleModifier[] {
+  return battleModifiers(battleAt(adventure, battleIndex), difficulty, starterId);
 }
 
 /** What `createAdventureGame` needs for the run's current battle. */
@@ -324,7 +338,7 @@ export function battleConfig(run: RunState, adventure: Adventure): AdventureGame
     prizeCount: adventure.rules.prizeCount,
     openingHand: adventure.rules.openingHand,
     playerPassives: [...run.passives],
-    modifiers: battleModifiers(battle, run.difficulty).map((m) => structuredClone(m)),
+    modifiers: battleModifiers(battle, run.difficulty, run.starterId).map((m) => structuredClone(m)),
   };
 }
 

@@ -24,9 +24,36 @@ export function difficultyRules(adventure: AdventureContent, difficulty: Difficu
   };
 }
 
-/** The battle's rules in a run of that difficulty (its own list replaces `modifiers`). */
-export function battleModifiers(battle: AdventureBattle, difficulty: Difficulty): BattleModifier[] {
-  return (battle.modifiersByDifficulty?.[difficulty] ?? battle.modifiers) as BattleModifier[];
+/**
+ * The battle's rules in a run of that difficulty and starter (the difficulty's own list replaces
+ * `modifiers`; a hard `byStarter` gives the run's starter's, or `modifiers` without one).
+ */
+export function battleModifiers(battle: AdventureBattle, difficulty: Difficulty, starterId: string): BattleModifier[] {
+  const own = battle.modifiersByDifficulty?.[difficulty];
+  if (!own) return battle.modifiers as BattleModifier[];
+  if (Array.isArray(own)) return own as BattleModifier[];
+  return (own.byStarter[starterId] ?? battle.modifiers) as BattleModifier[];
+}
+
+/** Every list of rules a battle has, labelled (" (difícil, charmander)"), for the validator. */
+export function battleModifierLists(battle: AdventureBattle): { label: string; difficulty: Difficulty | null; starterId: string | null; modifiers: BattleModifier[] }[] {
+  const lists: { label: string; difficulty: Difficulty | null; starterId: string | null; modifiers: BattleModifier[] }[] = [
+    { label: "", difficulty: null, starterId: null, modifiers: battle.modifiers as BattleModifier[] },
+  ];
+  const { normal, hard } = battle.modifiersByDifficulty ?? {};
+  if (normal) lists.push({ label: " (normal)", difficulty: "normal", starterId: null, modifiers: normal as BattleModifier[] });
+  if (hard && Array.isArray(hard)) lists.push({ label: " (difícil)", difficulty: "hard", starterId: null, modifiers: hard as BattleModifier[] });
+  if (hard && !Array.isArray(hard)) {
+    for (const [starterId, modifiers] of Object.entries(hard.byStarter)) {
+      lists.push({ label: ` (difícil, ${starterId})`, difficulty: "hard", starterId, modifiers: modifiers as BattleModifier[] });
+    }
+  }
+  return lists;
+}
+
+/** The battle's objective line in a run of that difficulty, or null. */
+export function battleObjective(battle: AdventureBattle, difficulty: Difficulty): string | null {
+  return battle.objectiveByDifficulty?.[difficulty] ?? battle.objective ?? null;
 }
 
 /**

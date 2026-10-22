@@ -128,7 +128,7 @@ describe("adventure rooms on game-core's engine", () => {
 
   it.each([
     ["normal", ["Caterpie"], "El rival empieza con Metapod activo y Caterpie en la banca"],
-    ["hard", ["Metapod", "Caterpie"], "El rival empieza con Metapod activo y Metapod y Caterpie en la banca"],
+    ["hard", ["Metapod", "Metapod"], "El rival empieza con Metapod activo y 2 Metapod en la banca"],
   ] as const)("the Metapod battle (%s) starts with its preset board, 1 Prize vs 2, and the bonus cards after setup", async (difficulty, bench, setupLine) => {
     const { roomId, token } = await battleFor({ battle: 7, difficulty });
     const s = state(roomId);
@@ -147,6 +147,7 @@ describe("adventure rooms on game-core's engine", () => {
       setupLine,
       "Empiezas con Pokémon Flute, Gust of Wind y PlusPower en la mano",
     ]);
+    expect(client.start.adventure.objective).toBe("Los Metapod del rival no dan premios: consigue tu premio de otra forma.");
     await setUp(client, roomId);
     const hand = state(roomId).playerHand.map((c) => c.name);
     for (const bonus of ["Pokémon Flute", "Gust of Wind", "PlusPower"]) expect(hand).toContain(bonus);

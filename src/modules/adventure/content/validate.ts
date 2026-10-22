@@ -6,7 +6,7 @@ import { isLimitedInDeck, isPokemonCard, ALL_CARDS } from "@gonzaloaguila/game-c
 import { ADVENTURE_CARD_BACKS, ADVENTURE_PLAYMATS } from "../../prizes/catalog.js";
 import type { BattleModifier, CardEntry } from "../engine-types.js";
 import { adventureCardProblem, cardOf, isBasicPokemonCard } from "./cards.js";
-import { battleModifiers } from "./difficulty.js";
+import { battleModifierLists, battleModifiers, rivalDeckOf } from "./difficulty.js";
 import { adventureSchema, DIFFICULTIES, type AchievementCosmeticType, type AdventureBattle, type AdventureContent, type Difficulty } from "./schema.js";
 
 export type Adventure = AdventureContent;
@@ -148,24 +148,31 @@ function checkBattle(problems: string[], adventure: Adventure, battle: Adventure
     else if (!isPokemonCard(cardOf(battle.opponent.lead))) problems.push(`${where}, lead: no es un Pokémon`);
   }
 
-  // Each list of rules on its own: the base one and every difficulty's replacement
-  checkModifierList(problems, where, battle.modifiers as BattleModifier[]);
-  for (const difficulty of DIFFICULTIES) {
-    const own = battle.modifiersByDifficulty?.[difficulty];
-    if (own) checkModifierList(problems, `${where} (${DIFFICULTY_LABELS[difficulty]})`, own as BattleModifier[]);
+  // Each list of rules on its own: the base one and every difficulty's (and starter's) replacement
+  for (const list of battleModifierLists(battle)) checkModifierList(problems, `${where}${list.label}`, list.modifiers);
+  const hardRules = battle.modifiersByDifficulty?.hard;
+  if (hardRules && !Array.isArray(hardRules)) {
+    for (const starter of adventure.starters) {
+      if (!hardRules.byStarter[starter.id]) problems.push(`${where}: faltan las reglas difíciles para el inicial ${starter.id}`);
+    }
+    for (const key of Object.keys(hardRules.byStarter)) {
+      if (!adventure.starters.some((s) => s.id === key)) problems.push(`${where}: reglas difíciles para un inicial desconocido ${key}`);
+    }
   }
 
-  // Each difficulty's rules against the decks it plays with
+  // Each difficulty's rules against the deck it plays with, for every starter
   const reported = new Set<string>();
   const report = (problem: string) => {
     if (!reported.has(problem)) problems.push(problem);
     reported.add(problem);
   };
   for (const difficulty of DIFFICULTIES) {
-    const modifiers = battleModifiers(battle, difficulty);
-    const setup = modifiers.find((m) => m.type === "opponentSetup");
-    for (const { label, deck, difficulties } of decks) {
-      if (!difficulties.includes(difficulty) || deck.some((e) => adventureCardProblem(e.cardId))) continue;
+    for (const starter of adventure.starters) {
+      const deck = rivalDeckOf(battle, difficulty, starter.id);
+      if (!deck || deck.some((e) => adventureCardProblem(e.cardId))) continue;
+      const label = decks.find((d) => d.deck === deck)?.label ?? "";
+      const modifiers = battleModifiers(battle, difficulty, starter.id);
+      const setup = modifiers.find((m) => m.type === "opponentSetup");
       if (!setup && !deck.some((e) => isBasicPokemonCard(cardOf(e.cardId)))) {
         report(`${where}: el mazo del rival${label} no tiene Pokémon básicos`);
       }
