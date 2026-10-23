@@ -7,6 +7,7 @@ import {
   decks as themeDeckList,
 } from "@gonzaloaguila/game-core";
 import type { GameState } from "@gonzaloaguila/game-core";
+import type { DeckSource } from "../modules/achievements/challenge-decks.js";
 import {
   GameRoomManager,
   NO_PRIZE_OWED_CODE,
@@ -161,10 +162,14 @@ async function resolveAndStartGame(roomManager: GameRoomManager, roomId: string)
     const deck1 = p1Cards ?? fallback1 ?? [];
     const deck2 = p2Cards ?? fallback2 ?? [];
 
-    return roomManager.startGame(roomId, {
-      player1Cards: deck1,
-      player2Cards: deck2,
-    });
+    // Challenge achievements count only the players' own decks (not a theme deck nor the fallback)
+    const sourceOf = (cards: GameCard[] | null, deckId: string | null): DeckSource =>
+      !cards ? "fallback" : deckId && UUID_RE.test(deckId) ? "user" : "theme";
+    return roomManager.startGame(
+      roomId,
+      { player1Cards: deck1, player2Cards: deck2 },
+      { player1: sourceOf(p1Cards, room.player1DeckId), player2: sourceOf(p2Cards, room.player2DeckId) },
+    );
   }
 
   // Both are theme decks (or missing) — use the standard theme deck path

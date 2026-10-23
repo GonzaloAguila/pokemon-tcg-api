@@ -112,6 +112,8 @@ import type { RoomChatMessage } from "./room-chat.js";
 import type { RoomCosmetics } from "./room-cosmetics.js";
 import type { RoomEmoteLoadouts } from "./room-emotes.js";
 import type { DeckRank } from "../modules/decks/deck-rank.js";
+import type { DeckSource } from "../modules/achievements/challenge-decks.js";
+import { createChallengeTracker, observe as observeChallenge, type ChallengeTracker } from "./challenge-tracker.js";
 
 /** Table type: a normal table, or Lucky Duel (random Basic and deck, no Bench, no Prizes). */
 export type TableMode = (typeof TABLE_MODES)[number];
@@ -179,6 +181,8 @@ export interface GameRoom {
    * match row at settlement for the Lucky Duel achievements (the in-game card ids are random).
    */
   luckyDuelStarters?: { player1: string; player2: string };
+  /** The current game's challenge tracker (normal and draft games; none for Lucky Duel and server AI battles) */
+  challengeTracker?: ChallengeTracker;
   /** Started for players who may be absent (draft round): if neither shows up, nobody wins. */
   checkIn?: boolean;
   /** A draft tournament game: not listed in the lobby. */
@@ -1554,6 +1558,8 @@ export class GameRoomManager {
   async startGame(
     roomId: string,
     resolvedDecks?: { player1Cards: GameCard[]; player2Cards: GameCard[] },
+    // Where each deck came from (challenge achievements): handlers.ts resolveAndStartGame knows
+    deckSources: { player1: DeckSource; player2: DeckSource } = resolvedDecks ? { player1: "user", player2: "user" } : { player1: "theme", player2: "theme" },
   ): Promise<GameState> {
     const room = this.rooms.get(roomId);
     if (!room) throw new RoomNotFoundError();
@@ -1624,6 +1630,7 @@ export class GameRoomManager {
     };
 
     room.gameState = gameState;
+    room.challengeTracker = createChallengeTracker(gameState, deckSources);
     room.turnStartedAt = Date.now();
     return room.gameState;
   }
@@ -1649,6 +1656,8 @@ export class GameRoomManager {
     gameState = { ...gameState, events: neutralizeEvents(gameState.events, 0, "Jugador 1", "Jugador 2") };
 
     room.gameState = gameState;
+    // Random server-built decks: no challenge achievements
+    room.challengeTracker = undefined;
     room.turnStartedAt = Date.now();
     return room.gameState;
   }
@@ -1713,6 +1722,7 @@ export class GameRoomManager {
     };
 
     room.gameState = gameState;
+    room.challengeTracker = createChallengeTracker(gameState, { player1: "draft", player2: "draft" });
     room.turnStartedAt = Date.now();
     return room.gameState;
   }
@@ -2607,6 +2617,7 @@ export class GameRoomManager {
         }
       }
 
+      if (room.challengeTracker) observeChallenge(room.challengeTracker, room.gameState, newState, action);
       room.gameState = newState;
       if (consumedCoinKey && room.effectCoins) delete room.effectCoins[consumedCoinKey];
       if (nextPendingTrainer === null) delete room.pendingTrainer;
