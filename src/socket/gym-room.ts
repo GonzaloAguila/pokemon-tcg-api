@@ -164,7 +164,11 @@ export class GymRooms {
           modifiers: [],
         }),
     );
-    const state: GameState = { ...created, events: neutralizeEvents(created.events, 0, "Jugador 1", "Jugador 2") };
+    // createAdventureGame opens the log with an adventure line: a gym battle names its leader instead
+    const events = created.events.map((e) =>
+      e.message === "Batalla de aventura inicializada" ? { ...e, message: `Comienza la batalla contra ${leader.name}` } : e,
+    );
+    const state: GameState = { ...created, events: neutralizeEvents(events, 0, "Jugador 1", "Jugador 2") };
 
     // The challenger's own cosmetics (owned only) are read before the room exists: nothing awaits after
     let player1: SeatCosmetics;

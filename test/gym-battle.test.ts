@@ -205,6 +205,10 @@ describe("gym leader battles", () => {
       gym: { leaderId: "brock", name: "Brock", title: "Líder del Gimnasio de Ciudad Plateada", mode: "normal", medalId: "boulder", avatarId: "gym-brock" },
     });
     expect(start.gameState.gamePhase).toBe("MULLIGAN");
+    // The log opens naming the leader, not the adventure
+    const messages = start.gameState.events.map((e: { message: string }) => e.message);
+    expect(messages[0]).toBe("Comienza la batalla contra Brock");
+    expect(messages.join(" ")).not.toMatch(/aventura/i);
     expect((await tablesInBattle)[0]).toMatchObject({ inBattle: true, queueLength: 1 });
     expect(a.queue.at(-1)).toMatchObject({ status: "playing", roomId });
 
