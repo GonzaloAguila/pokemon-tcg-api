@@ -20,7 +20,7 @@
  */
 import type { Server } from "socket.io";
 import { Prisma, type AdventureRun } from "@prisma/client";
-import { GamePhase, startPlayingPhase, type GameState } from "@gonzaloaguila/game-core";
+import type { GameState } from "@gonzaloaguila/game-core";
 import { prisma } from "../lib/prisma.js";
 import { getAdventure } from "../modules/adventure/content/load.js";
 import { battleObjective } from "../modules/adventure/content/difficulty.js";
@@ -35,9 +35,11 @@ import {
   type BattleSnapshot,
 } from "../modules/adventure/adventure.service.js";
 import { neutralizeEvents, withRoomRandom, type ActionResult, type CoinFlipRequest, type GameRoom, type GameRoomManager } from "./rooms.js";
-import { maskRoomState } from "./room-state.js";
 import { userRoom } from "./io-registry.js";
-import { getAdventureEngine, type AdventureEngine, type AICoins, type AIPlan, type Coin, type SeededRng } from "./adventure-engine.js";
+import { getAdventureEngine, type AdventureEngine, type AIPlan, type Coin } from "./adventure-engine.js";
+import { AISeatDriver, actionCoinBatches, rngCoin, type AISeat, type AISeatHooks, type AISeatPacing } from "./ai-seat.js";
+
+export { COIN_ANIMATION, coinAnimationMs } from "./ai-seat.js";
 
 /** Events kept in the snapshot (the client got the older ones live). */
 export const SNAPSHOT_EVENTS = 200;
@@ -46,30 +48,6 @@ const SNAPSHOT_DEBOUNCE_MS = 1_000;
 const IDLE_EVICT_MS = 30 * 60_000;
 /** How long a finished battle's room stays (game-over screen), like rooms.ts FINISHED_ROOM_TTL_MS. */
 const FINISHED_ROOM_MS = 120_000;
-/** Safety net for one AI loop (a turn is a few dozen steps). */
-const MAX_AI_STEPS_PER_LOOP = 500;
-const MAX_AI_ERRORS = 3;
-
-/**
- * How long the battle screen takes to show one `showCoinFlip` batch: the coin modal opens and
- * starts (~1 s), each coin spins (~300 ms), then the results stay up (~1.5 s).
- */
-export const COIN_ANIMATION = { startMs: 1_000, perCoinMs: 300, holdMs: 1_500 } as const;
-
-/**
- * Pause the AI keeps after coins were shown (the AI's own step, or the human's action) before its
- * next step or the game over: the batches play one after another. No coins = no pause.
- */
-export function coinAnimationMs(batches: readonly number[]): number {
-  return batches
-    .filter((coins) => coins > 0)
-    .reduce((total, coins) => total + COIN_ANIMATION.startMs + COIN_ANIMATION.perCoinMs * coins + COIN_ANIMATION.holdMs, 0);
-}
-
-/** Coins of each showCoinFlip the room got from a human action (rooms.ts ActionResult). */
-function actionCoinBatches(result: ActionResult): number[] {
-  return [result.confusionCoinFlipInfo, result.coinFlipInfo].map((info) => (info ? info.results.length + (info.defenderResults?.length ?? 0) : 0));
-}
 
 /** One human input of the battle, in order: with the seed it replays the battle (bug repro). */
 export interface HumanInput {
@@ -79,22 +57,15 @@ export interface HumanInput {
   at: number;
 }
 
-interface Runtime {
-  roomId: string;
+interface Runtime extends AISeat {
   runId: string;
   userId: string;
-  room: GameRoom;
-  rng: SeededRng;
-  plan: AIPlan | null;
   humanInputs: HumanInput[];
   startedAt: string;
   info: AdventureGameStartInfo;
   /** The lucky coin came up in the human's current action / coin request (marked after it). */
   luckyPending: boolean;
   aiLoop: Promise<void> | null;
-  /** The AI waits until then (ms epoch) for the coins last shown to finish animating. */
-  coinsShownUntil: number;
-  aiErrors: number;
   finished: boolean;
   lastActivity: number;
   pendingSnapshot?: BattleSnapshot;
@@ -140,15 +111,7 @@ export interface AdventureRoomsOptions {
 }
 
 /** The AI seat's pauses, changeable at runtime (tests). */
-export interface AdventurePacing {
-  aiDelayScale: number;
-  coinPauseScale: number;
-  sleep: (ms: number) => Promise<void>;
-}
-
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-
-const rngCoin = (rng: SeededRng): Coin => (rng.next() < 0.5 ? "heads" : "tails");
+export type AdventurePacing = AISeatPacing;
 
 function trimEvents(state: GameState): GameState {
   return state.events.length > SNAPSHOT_EVENTS ? { ...state, events: state.events.slice(-SNAPSHOT_EVENTS) } : state;
@@ -173,7 +136,7 @@ export class AdventureRooms implements AdventureBattleHost {
   private readonly manager: GameRoomManager;
   private readonly io: () => Server | null;
   private readonly engineOf: () => AdventureEngine | null;
-  private pacing: AdventurePacing;
+  private readonly driver: AISeatDriver;
   private readonly snapshotDebounceMs: number;
   private sweepTimer?: ReturnType<typeof setInterval>;
 
@@ -181,30 +144,17 @@ export class AdventureRooms implements AdventureBattleHost {
     this.manager = options.manager;
     this.io = options.io;
     this.engineOf = options.engine ?? getAdventureEngine;
-    this.pacing = {
-      aiDelayScale: options.aiDelayScale ?? 1,
-      coinPauseScale: options.coinPauseScale ?? 1,
-      sleep: options.sleep ?? sleep,
-    };
+    this.driver = new AISeatDriver(this.manager, this.io, () => this.engine(), {
+      aiDelayScale: options.aiDelayScale,
+      coinPauseScale: options.coinPauseScale,
+      sleep: options.sleep,
+    });
     this.snapshotDebounceMs = options.snapshotDebounceMs ?? SNAPSHOT_DEBOUNCE_MS;
   }
 
   /** Change the AI's pauses (tests); returns the previous ones, to restore them. */
   setPacing(pacing: Partial<AdventurePacing>): AdventurePacing {
-    const previous = this.pacing;
-    this.pacing = { ...previous, ...pacing };
-    return previous;
-  }
-
-  /** The coins just shown in the room hold the AI until they finish animating. */
-  private holdForCoins(runtime: Runtime, batches: readonly number[]): void {
-    const ms = coinAnimationMs(batches) * this.pacing.coinPauseScale;
-    if (ms > 0) runtime.coinsShownUntil = Math.max(runtime.coinsShownUntil, Date.now() + ms);
-  }
-
-  /** What is left of the coin animation hold (0 when none). */
-  private coinHoldLeft(runtime: Runtime): number {
-    return Math.max(0, runtime.coinsShownUntil - Date.now());
+    return this.driver.setPacing(pacing);
   }
 
   /** Evict idle rooms every minute (call once at server start). */
@@ -386,7 +336,7 @@ export class AdventureRooms implements AdventureBattleHost {
       return;
     }
     // The human's attack / confusion coins play before the AI's turn goes on
-    this.holdForCoins(runtime, actionCoinBatches(result));
+    this.driver.holdForCoins(runtime, actionCoinBatches(result));
     this.scheduleAI(roomId);
   }
 
@@ -429,107 +379,19 @@ export class AdventureRooms implements AdventureBattleHost {
     return !runtime.finished && this.manager.getRoom(runtime.roomId) === runtime.room && runtime.room.status === "playing";
   }
 
-  /** The AI's steps while it has one; pauses between them happen outside withRoomRandom. */
-  private async runAI(runtime: Runtime): Promise<void> {
-    const engine = this.engine();
-    const random = () => runtime.rng.next();
-    await Promise.resolve(); // never inside the caller's stack (it may still be broadcasting)
-    for (let steps = 0; steps < MAX_AI_STEPS_PER_LOOP; steps++) {
-      if (!this.isLive(runtime) || !runtime.room.gameState) return;
-      if (this.startIfBothReady(runtime)) {
-        this.emitAIStep(runtime, null, []);
-        this.captureSnapshot(runtime);
-        continue;
-      }
-      const peek = withRoomRandom(random, () => engine.nextAIStep(runtime.room.gameState!, runtime.plan));
-      if (!peek) return;
-      // The step's own pause, or longer while coins shown before it are still animating
-      const delay = Math.max(engine.stepDelay(peek.step) * this.pacing.aiDelayScale, this.coinHoldLeft(runtime));
-      // Always yield between steps, so a long AI turn never blocks the event loop
-      await (delay > 0 ? this.pacing.sleep(delay) : new Promise<void>((resolve) => setImmediate(resolve)));
-      if (!this.isLive(runtime) || !runtime.room.gameState) return;
-
-      // The human may have acted during the pause: decide again on the current state
-      const before = runtime.room.gameState;
-      const next = withRoomRandom(random, () => engine.nextAIStep(before, runtime.plan));
-      if (!next) return;
-      const coins: AICoins[] = [];
-      let after: GameState;
-      try {
-        after = withRoomRandom(random, () =>
-          engine.applyAIStep(before, next.step, { flip: () => rngCoin(runtime.rng), onCoins: (c) => coins.push(c) }),
-        );
-      } catch (error) {
-        runtime.aiErrors += 1;
-        console.error(`[adventure ${runtime.roomId}] AI step failed (${runtime.aiErrors}/${MAX_AI_ERRORS}):`, error);
-        runtime.plan = null; // replan from scratch
-        if (runtime.aiErrors >= MAX_AI_ERRORS) return;
-        continue;
-      }
-      const [self, other] = engine.aiEventsSpeakFor === "ai" ? ["Jugador 2", "Jugador 1"] : ["Jugador 1", "Jugador 2"];
-      runtime.room.gameState = { ...after, events: neutralizeEvents(after.events, before.events.length, self, other) };
-      runtime.plan = next.plan;
-      runtime.room.turnStartedAt = Date.now();
-      runtime.lastActivity = Date.now();
-      this.emitAIStep(runtime, engine.stepActionType(next.step), coins);
-      this.holdForCoins(runtime, coins.map((c) => c.results.length));
-      this.captureSnapshot(runtime);
-      if (runtime.room.gameState.gamePhase === "GAME_OVER") {
-        runtime.room.status = "finished"; // GAME_OVER: every human action is rejected meanwhile
-        // The coins that decided the game play before the game over
-        const hold = this.coinHoldLeft(runtime);
-        if (hold > 0) await this.pacing.sleep(hold);
-        const final = runtime.room.gameState;
-        if (!final) return;
-        this.io()?.to(runtime.roomId).emit("gameOver", {
-          winner: final.gameResult === "victory" ? "player1" : "player2",
-          reason: final.events.at(-1)?.message ?? "Fin de la partida",
-        });
-        await this.finishBattle(runtime.roomId, false);
-        return;
-      }
-    }
-    console.error(`[adventure ${runtime.roomId}] AI loop stopped after ${MAX_AI_STEPS_PER_LOOP} steps`);
-  }
-
-  /**
-   * Both sides ready in the opening after the AI's setup: the battle starts here (the driver leaves
-   * the starting player's coin to the room, like rooms.ts does when the human readies last). The
-   * coin comes from the battle's generator; startPlayingPhase applies the adventure's setup rules.
-   */
-  private startIfBothReady(runtime: Runtime): boolean {
-    const state = runtime.room.gameState!;
-    if (state.gamePhase !== GamePhase.Mulligan || !state.playerReady || !state.opponentReady) return false;
-    const coin = rngCoin(runtime.rng);
-    const started = withRoomRandom(() => runtime.rng.next(), () => startPlayingPhase(state, coin));
-    runtime.room.gameState = { ...started, events: neutralizeEvents(started.events, state.events.length, "Jugador 1", "Jugador 2") };
-    runtime.room.turnStartedAt = Date.now();
-    return true;
-  }
-
-  /** The AI's step to the player: its animation (`opponentAction`, none for the battle's start), coins, state. */
-  private emitAIStep(runtime: Runtime, actionType: string | null, coins: AICoins[]): void {
-    const io = this.io();
-    const room = runtime.room;
-    if (!io || !room.gameState) return;
-    if (actionType) io.to(runtime.roomId).emit("opponentAction", { type: actionType });
-    for (const coin of coins) {
-      // results: the acting player's (the AI's) coins; flippedBy relative to it, as for any player
-      const flippedBy = coin.flippedBy?.map((who) => (who === "self" ? "attacker" : "defender"));
-      io.to(runtime.roomId).emit("showCoinFlip", {
-        attackName: coin.label,
-        results: coin.results,
-        count: coin.results.length,
-        ...(flippedBy && flippedBy.some((who) => who === "defender") ? { flippedBy } : {}),
-      });
-    }
-    if (room.player1SocketId) {
-      io.to(room.player1SocketId).emit("gameState", {
-        gameState: maskRoomState(this.manager, room, room.gameState, "player1"),
-        turnStartedAt: room.turnStartedAt,
-        turnTimerDuration: room.turnTimerDuration,
-      });
-    }
+  /** The AI's steps while it has one (ai-seat.ts); each step is snapshotted, the game over applied to the run. */
+  private runAI(runtime: Runtime): Promise<void> {
+    const hooks: AISeatHooks<Runtime> = {
+      label: `adventure ${runtime.roomId}`,
+      isLive: (rt) => this.isLive(rt),
+      afterStep: (rt) => {
+        rt.room.turnStartedAt = Date.now();
+        rt.lastActivity = Date.now();
+        this.captureSnapshot(rt);
+      },
+      onGameOver: (rt) => this.finishBattle(rt.roomId, false),
+    };
+    return this.driver.run(runtime, hooks);
   }
 
   // ---------------------------------------------------------------------------
