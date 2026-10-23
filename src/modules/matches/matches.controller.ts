@@ -4,7 +4,8 @@ import { requireAuth } from "../../middleware/auth.js";
 import { Errors } from "../../middleware/error-handler.js";
 import { checkAndUpdateProgress } from "../achievements/achievements.service.js";
 import * as matchesService from "./matches.service.js";
-import { listUserMatches } from "./history.js";
+import { getHistorySummary, listUserMatches } from "./history.js";
+import { GYM_LEADERS } from "../gym/content/index.js";
 
 const router = Router();
 
@@ -117,6 +118,25 @@ router.get(
       const query = historyQuerySchema.safeParse(req.query);
       if (!query.success) throw Errors.ValidationError("Página inválida");
       res.json(await listUserMatches(req.user!.userId, query.data.page, query.data.limit));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// GET /matches/history/summary — The profile Historial panel: wins / losses / draws overall and
+// per mode (online, draft, vs AI, gym), win rate, streaks and the latest 10 results.
+// ---------------------------------------------------------------------------
+
+const GYM_MEDAL_IDS = GYM_LEADERS.map((leader) => leader.medalId);
+
+router.get(
+  "/matches/history/summary",
+  requireAuth,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      res.json(await getHistorySummary(req.user!.userId, GYM_MEDAL_IDS));
     } catch (err) {
       next(err);
     }
