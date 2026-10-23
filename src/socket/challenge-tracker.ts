@@ -25,6 +25,15 @@ export interface SeatFeats {
   finalKoBy: string | null;
 }
 
+/** What a settled multiplayer game stores for the challenge achievements (SettleInput.challenge). */
+export interface MatchChallengeData {
+  player1Deck: DeckSnapshot;
+  player2Deck: DeckSnapshot;
+  endKind: EndKind;
+  feats: Record<"player1" | "player2", SeatFeats>;
+  finalTurn: number;
+}
+
 /** How a multiplayer game ended (Match.endKind); only prizes / no_pokemon / deck_out are played wins. */
 export type EndKind = "prizes" | "no_pokemon" | "deck_out" | "draw" | "forfeit" | "interrupted";
 
@@ -105,7 +114,7 @@ export function observe(tracker: ChallengeTracker, prev: GameState, next: GameSt
   }
 }
 
-function endKindOf(tracker: ChallengeTracker, state: GameState | undefined, winner: Seat | "draw" | null): EndKind {
+function endKindOf(tracker: ChallengeTracker, state: GameState | null | undefined, winner: Seat | "draw" | null): EndKind {
   if (winner === "draw") return "draw";
   if (winner === null) return "interrupted";
   if (!tracker.engineEnded || !state) return "forfeit";
@@ -120,7 +129,7 @@ function endKindOf(tracker: ChallengeTracker, state: GameState | undefined, winn
 /** The game's end, for its match row: how it ended, each seat's feats and the last turn. */
 export function finishTracker(
   tracker: ChallengeTracker,
-  finalState: GameState | undefined,
+  finalState: GameState | null | undefined,
   winner: Seat | "draw" | null,
 ): { endKind: EndKind; feats: Record<Seat, SeatFeats>; finalTurn: number } {
   if (finalState) trackBoard(tracker, finalState);

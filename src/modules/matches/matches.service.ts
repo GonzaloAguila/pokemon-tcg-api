@@ -1,4 +1,6 @@
+import type { Prisma } from "@prisma/client";
 import { LUCKY_DUEL_BASICS } from "@gonzaloaguila/game-core";
+import type { MatchChallengeData } from "../../socket/challenge-tracker.js";
 import { prisma } from "../../lib/prisma.js";
 import { hasVerifiedEmail } from "../../lib/email-verification.js";
 import { AppError, Errors } from "../../middleware/error-handler.js";
@@ -261,6 +263,8 @@ export type SettleInput =
       turnNumber: number;
       luckyDuel?: LuckyDuelStarters;
       noShow?: boolean;
+      /** Normal and draft games: both decks, how it ended and each seat's feats (socket/challenge-tracker.ts) */
+      challenge?: MatchChallengeData;
     }
   /**
    * turnNumber: last turn reached, reported by the client (the AI game runs in the browser).
@@ -356,6 +360,9 @@ export async function settleMatch(matchId: string, input: SettleInput, now = new
   return prisma.$transaction((tx) => settleMatchTx(tx, matchId, input, now), TX_OPTIONS);
 }
 
+/** A plain JSON object for a Json column (typed interfaces have no index signature). */
+const asJson = (value: object): Prisma.InputJsonValue => value as Prisma.InputJsonValue;
+
 /** settleMatch inside the caller's transaction (startAiMatch settles an abandoned Lucky Duel). */
 async function settleMatchTx(tx: Db, matchId: string, input: SettleInput, now: Date): Promise<SettlementResult | null> {
   const match = await tx.match.findUnique({
@@ -403,6 +410,16 @@ async function settleMatchTx(tx: Db, matchId: string, input: SettleInput, now: D
       status: decided ? "finished" : "abandoned",
       winnerId,
       winReason: input.kind === "ai" ? aiWinReason(aiResult, luckyDuel, quickVictory) : input.reason.slice(0, 200),
+      // Challenge achievements read these (modules/achievements/challenges.ts)
+      ...(input.kind === "multiplayer" && input.challenge
+        ? {
+            player1Deck: asJson(input.challenge.player1Deck),
+            player2Deck: asJson(input.challenge.player2Deck),
+            endKind: input.challenge.endKind,
+            feats: asJson(input.challenge.feats),
+            finalTurn: input.challenge.finalTurn,
+          }
+        : {}),
       // Lucky Duel achievements read these (first turn, drawn Basics)
       ...(luckyDuel
         ? {

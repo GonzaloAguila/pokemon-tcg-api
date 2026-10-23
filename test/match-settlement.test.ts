@@ -461,3 +461,68 @@ describe("single player vs AI (client-reported, bounded)", () => {
     }
   });
 });
+
+describe("challenge data of multiplayer games (challenge achievements)", () => {
+  const deckOf = (source: "user" | "theme") => ({ source, cards: [{ cardId: "base-set-063-squirtle", qty: 4 }] });
+  const seatFeats = { maxPrizeDeficit: 0, benchUsed: false, maxAttackDamage: 0, prizesTakenByRival: 0, finalKoBy: null };
+
+  /** A seated room whose game is over, with its match row open and a tracker that saw the end. */
+  async function endedRoom(action: "attack" | "surrender") {
+    const { GameRoomManager } = await import("../src/socket/rooms.js");
+    const { createChallengeTracker, observe } = await import("../src/socket/challenge-tracker.js");
+    const { getDeckById, initializeMultiplayerGame, GamePhase } = await import("@gonzaloaguila/game-core");
+    const a = await createPlayer();
+    const b = await createPlayer();
+    const match = await openPlayed({ player1Id: a.id, player2Id: b.id, mode: "normal", betAmount: 0 });
+    const start = { ...initializeMultiplayerGame(getDeckById("zap")!, getDeckById("overgrowth")!), gamePhase: GamePhase.Playing, turnNumber: 9 };
+    const over = { ...start, gamePhase: GamePhase.GameOver, gameResult: "victory", playerPrizes: [] } as typeof start;
+    const room = new GameRoomManager(() => "heads").createRoom();
+    Object.assign(room, { player1Id: a.id, player2Id: b.id, matchId: match.id, gameState: over, status: "finished" });
+    room.challengeTracker = createChallengeTracker(start, { player1: "user", player2: "theme" });
+    observe(room.challengeTracker, start, over, { type: action });
+    return { room, match, a };
+  }
+
+  async function settledRow(matchId: string) {
+    for (let i = 0; i < 100; i++) {
+      const row = await prisma.match.findUniqueOrThrow({ where: { id: matchId } });
+      if (row.settledAt) return row;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    throw new Error("not settled");
+  }
+
+  it("stores decks, end kind and feats on the settled row", async () => {
+    const { settleRoomResult } = await import("../src/socket/match-settlement.js");
+    const { room, match } = await endedRoom("attack");
+    settleRoomResult(null, room, "player1", "test");
+    const row = await settledRow(match.id);
+    expect(row).toMatchObject({ endKind: "prizes", finalTurn: 9 });
+    expect(row.player1Deck).toMatchObject({ source: "user" });
+    expect(row.player2Deck).toMatchObject({ source: "theme" });
+    expect(row.feats).toMatchObject({ player1: { benchUsed: false }, player2: { benchUsed: false } });
+  });
+
+  it("a surrendered game is stored as forfeit", async () => {
+    const { settleRoomResult } = await import("../src/socket/match-settlement.js");
+    const { room, match } = await endedRoom("surrender");
+    settleRoomResult(null, room, "player1", "test");
+    expect((await settledRow(match.id)).endKind).toBe("forfeit");
+  });
+
+  it("a settlement without challenge data leaves the columns null", async () => {
+    const a = await createPlayer();
+    const b = await createPlayer();
+    const match = await openPlayed({ player1Id: a.id, player2Id: b.id, mode: "normal", betAmount: 0 });
+    await matches.settleMatch(match.id, win(a.id));
+    const row = await prisma.match.findUniqueOrThrow({ where: { id: match.id } });
+    expect(row).toMatchObject({ endKind: null, feats: null, player1Deck: null, player2Deck: null });
+    // The service writes what it's given
+    const other = await openPlayed({ player1Id: a.id, player2Id: b.id, mode: "normal", betAmount: 0 });
+    await matches.settleMatch(other.id, {
+      ...win(b.id, 12),
+      challenge: { player1Deck: deckOf("user"), player2Deck: deckOf("theme"), endKind: "deck_out", feats: { player1: seatFeats, player2: seatFeats }, finalTurn: 12 },
+    });
+    expect(await prisma.match.findUniqueOrThrow({ where: { id: other.id } })).toMatchObject({ endKind: "deck_out", finalTurn: 12, player1Deck: deckOf("user") });
+  });
+});
