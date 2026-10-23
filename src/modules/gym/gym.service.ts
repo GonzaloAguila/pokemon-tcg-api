@@ -1,17 +1,20 @@
 /**
- * Gym state (docs/gym-leaders.md): which leaders are open, their queues and the battle being
- * played. In memory (an API restart closes every gym and drops its queue and battle).
+ * Gym state (docs/gym-leaders.md): which leaders' tables are open and the series each one is
+ * playing. In memory (an API restart closes every gym and drops its series).
  *
- * A leader is `closed` (not listed), `open` (takes challengers until `closesAt`) or `closing`
- * (no new challengers, still serving the queue). One battle at a time per leader: the head of the
- * queue gets a `ready` slot with a room id (gym-…) and `readyWindowMs` to enter it (joinRoom →
- * `claim`); entering makes it `playing`; a slot that expires is skipped. A user is in at most one
- * queue. The deck checks (async, DB) happen in the socket layer before `join` / `claim`; this
- * class only keeps the state and tells its listeners what changed.
+ * A table is one leader's version (leader × mode: "Brock" and "Brock EXPERT" are two tables, each
+ * opened and closed on its own). It is `closed` (not listed), `open` (takes a challenger until
+ * `closesAt`) or `closing` (no new challenges; still listed while its series runs). One series
+ * (best of 3 games, each its own room) at a time per table, no queue: a free table is challenged
+ * (`reserve`, the first one wins), stays in battle for the whole series and is free again when
+ * it ends. A user plays at most one gym series at a time. The deck checks, the entry cost and the
+ * rooms (async) are the socket layer's / gym-room.ts's; this class only keeps the state and tells
+ * its listeners what changed.
  */
 import { randomUUID } from "node:crypto";
-import { getGymLeader, GYM_LEADERS, leaderModes, type GymLeaderDef, type GymMode } from "./content/index.js";
-import { GYM_SCHEDULE, GYM_TIMING, type GymScheduleConfig } from "./gym.config.js";
+import { getGymLeader, GYM_LEADERS, leaderModes, leaderRewards, leaderRules, type GymLeaderDef, type GymMode } from "./content/index.js";
+import { GYM_BEST_OF, GYM_SCHEDULE, GYM_TIMING, type GymScheduleConfig } from "./gym.config.js";
+import { publicGymRules } from "./rules.js";
 
 export type GymStatus = "closed" | "open" | "closing";
 
@@ -27,36 +30,49 @@ export const GYM_ERRORS = {
   unknownLeader: "Ese gimnasio no existe",
   modeUnavailable: "Ese desafío todavía no está disponible",
   closed: "El gimnasio está cerrado",
-  alreadyQueued: "Ya estás en la fila",
-  notQueued: "No estás en la fila de este gimnasio",
-  battleStarted: "Tu batalla ya empezó: termínala o ríndete",
+  alreadyInBattle: "Ya estás en una batalla de gimnasio",
+  /** "Necesitás 100 monedas para retar a Brock" */
+  entryCost: (cost: number, leaderName: string) => `Necesitás ${cost} monedas para retar a ${leaderName}`,
+  /** "Brock está en batalla: esperá a que termine" */
+  inBattle: (leaderName: string) => `${leaderName} está en batalla: esperá a que termine`,
 } as const;
 
-export interface GymQueueEntry {
+/** Who plays a table's battle (the card says "Brock vs X"). */
+export interface GymChallenger {
+  username: string;
+  avatarId: string | null;
+}
+
+export interface GymScore {
+  challenger: number;
+  leader: number;
+}
+
+/** A table's series (its games are rooms: `roomId` is the current one). */
+export interface GymBattle {
   userId: string;
-  deckId: string;
-  mode: GymMode;
-  joinedAt: number;
-}
-
-export interface GymCurrentBattle extends GymQueueEntry {
   roomId: string;
-  status: "ready" | "playing";
-  /** Until when the challenger may enter (ready only). */
-  readyExpiresAt: number | null;
+  challenger: GymChallenger;
+  /** starting = reserved, the first game's room being built (not shown yet); playing = a game's room exists. */
+  status: "starting" | "playing";
+  startedAt: number;
+  /** The current game (1–3) and the games won so far. */
+  game: number;
+  score: GymScore;
+  /** The current game was created after the previous one ended and its challenger hasn't entered yet. */
+  awaitingEntry: boolean;
 }
 
-interface LeaderState {
+interface TableState {
   leader: GymLeaderDef;
+  mode: GymMode;
   status: GymStatus;
   openedAt: number | null;
   closesAt: number | null;
-  queue: GymQueueEntry[];
-  current: GymCurrentBattle | null;
+  battle: GymBattle | null;
   /** Scheduler: when it opens next (null = not scheduled). */
   nextOpenAt: number | null;
   closeTimer?: ReturnType<typeof setTimeout>;
-  readyTimer?: ReturnType<typeof setTimeout>;
   openTimer?: ReturnType<typeof setTimeout>;
 }
 
@@ -68,29 +84,31 @@ export interface GymTable {
   avatarId: string;
   medalId: string;
   mode: GymMode;
-  rules: { bannedTypes: string[]; composition: { pokemon: number; trainer: number; energy: number } | null };
+  rules: ReturnType<typeof publicGymRules>;
+  rewards: { medalId: string | null; coins: number; coinId: string | null; cardBackId: string | null };
+  /** Coins a challenge costs. */
+  entryCost: number;
+  bestOf: number;
   status: "open" | "closing";
   closesAt: number;
-  queueLength: number;
   inBattle: boolean;
+  challenger: GymChallenger | null;
+  series: { game: number; score: GymScore } | null;
 }
 
-/** `gymQueue` (contract): position 1 = next; 0 while the user's own battle is ready / playing. */
-export interface GymQueueState {
+/**
+ * `gymSeries` / `getGymTables`'s `mySeries` (contract): the user's series in progress.
+ * `playing` = `roomId` is the game being played; `next` = the previous game ended and `roomId`
+ * is the next one (not entered yet); `finished` (only in the `gymSeries` event) = over, `roomId`
+ * = its last game.
+ */
+export interface GymSeriesState {
   leaderId: string;
   mode: GymMode;
-  position: number;
-  status: "waiting" | "ready" | "playing";
-  roomId?: string;
-  readyExpiresAt?: number;
-}
-
-/** `gymBattleReady` (contract). */
-export interface GymBattleReady {
-  leaderId: string;
-  mode: GymMode;
+  game: number;
+  score: GymScore;
   roomId: string;
-  expiresAt: number;
+  status: "playing" | "next" | "finished";
 }
 
 export interface GymAdminStatus {
@@ -98,88 +116,87 @@ export interface GymAdminStatus {
   name: string;
   title: string;
   avatarId: string;
-  /** The version its table offers (v1: "normal"); `modes` = every version it has. */
+  /** This row's version (one row per leader and version); `modes` = every version the leader has. */
   mode: GymMode;
   modes: GymMode[];
   status: GymStatus;
   openedAt: number | null;
   closesAt: number | null;
-  /** Waiting challengers (not counting the one ready / playing), like gymTables.queueLength. */
-  queueLength: number;
-  queue: { userId: string; mode: GymMode; position: number; joinedAt: number }[];
-  current: { userId: string; mode: GymMode; status: "ready" | "playing"; roomId: string; readyExpiresAt: number | null } | null;
   inBattle: boolean;
+  current: { userId: string; username: string; roomId: string; startedAt: number; game: number; score: GymScore } | null;
   schedule: { enabled: boolean; nextOpenAt: number | null; minGapMinutes: number; maxGapMinutes: number; openMinutes: number };
 }
 
 export interface GymListeners {
-  /** Something visible changed: broadcast `gymTables`; `users` get their own `gymQueue`. */
+  /** Something visible changed: broadcast `gymTables`; `users` get their own `gymSeries` (in progress). */
   onChange?: (users: string[]) => void;
-  /** The user's battle is ready (`gymBattleReady`). */
-  onReady?: (userId: string, ready: GymBattleReady) => void;
 }
 
 export interface GymServiceOptions {
   schedule?: Partial<GymScheduleConfig>;
-  readyWindowMs?: number;
   now?: () => number;
   random?: () => number;
 }
 
+const tableKey = (leaderId: string, mode: GymMode) => `${leaderId}:${mode}`;
+
 export class GymService {
-  private readonly leaders = new Map<string, LeaderState>();
+  private readonly tablesByKey = new Map<string, TableState>();
   private listeners: GymListeners = {};
   private schedule: GymScheduleConfig;
-  private readyWindowMs: number;
   private readonly now: () => number;
   private readonly random: () => number;
   private started = false;
 
   constructor(options: GymServiceOptions = {}) {
     this.schedule = { ...GYM_SCHEDULE, ...options.schedule };
-    this.readyWindowMs = options.readyWindowMs ?? GYM_TIMING.readyWindowMs;
     this.now = options.now ?? Date.now;
     this.random = options.random ?? Math.random;
-    for (const leader of GYM_LEADERS) this.leaders.set(leader.id, this.freshState(leader));
+    this.fresh();
   }
 
-  private freshState(leader: GymLeaderDef): LeaderState {
-    return { leader, status: "closed", openedAt: null, closesAt: null, queue: [], current: null, nextOpenAt: null };
+  private fresh(): void {
+    this.tablesByKey.clear();
+    for (const leader of GYM_LEADERS) {
+      for (const mode of leaderModes(leader)) {
+        this.tablesByKey.set(tableKey(leader.id, mode), { leader, mode, status: "closed", openedAt: null, closesAt: null, battle: null, nextOpenAt: null });
+      }
+    }
   }
 
   setListeners(listeners: GymListeners): void {
     this.listeners = listeners;
   }
 
-  /** Change the scheduler / ready window (tests, or the owner turning the scheduler on). */
-  configure(options: { schedule?: Partial<GymScheduleConfig>; readyWindowMs?: number }): void {
+  /** Change the scheduler (tests, or the owner turning it on). */
+  configure(options: { schedule?: Partial<GymScheduleConfig> }): void {
     if (options.schedule) this.schedule = { ...this.schedule, ...options.schedule };
-    if (options.readyWindowMs !== undefined) this.readyWindowMs = options.readyWindowMs;
-    if (this.started) for (const state of this.leaders.values()) this.scheduleNextOpen(state);
+    if (this.started) for (const state of this.tablesByKey.values()) this.scheduleNextOpen(state);
   }
 
   /** Start the scheduler (server boot). Does nothing while GYM_SCHEDULE.enabled is false. */
   start(): void {
     this.started = true;
-    for (const state of this.leaders.values()) this.scheduleNextOpen(state);
+    for (const state of this.tablesByKey.values()) this.scheduleNextOpen(state);
   }
 
-  /** Every gym closed, queues and battles dropped, timers cleared (tests). */
+  /** Every gym closed, battles dropped, timers cleared (tests). */
   reset(): void {
-    for (const state of this.leaders.values()) this.clearTimers(state);
-    for (const leader of GYM_LEADERS) this.leaders.set(leader.id, this.freshState(leader));
+    for (const state of this.tablesByKey.values()) this.clearTimers(state);
+    this.fresh();
     this.started = false;
   }
 
-  private clearTimers(state: LeaderState): void {
-    for (const timer of [state.closeTimer, state.readyTimer, state.openTimer]) if (timer) clearTimeout(timer);
-    state.closeTimer = state.readyTimer = state.openTimer = undefined;
+  private clearTimers(state: TableState): void {
+    for (const timer of [state.closeTimer, state.openTimer]) if (timer) clearTimeout(timer);
+    state.closeTimer = state.openTimer = undefined;
   }
 
-  private stateOf(leaderId: string): LeaderState {
-    const state = this.leaders.get(leaderId);
-    if (!state) throw new GymError(GYM_ERRORS.unknownLeader);
-    return state;
+  /** The table, or a GymError (unknown leader / version it doesn't have). */
+  private stateOf(leaderId: string, mode: GymMode): TableState {
+    const state = this.tablesByKey.get(tableKey(leaderId, mode));
+    if (state) return state;
+    throw new GymError(getGymLeader(leaderId) ? GYM_ERRORS.modeUnavailable : GYM_ERRORS.unknownLeader);
   }
 
   private changed(users: string[] = []): void {
@@ -190,9 +207,9 @@ export class GymService {
   // Opening and closing
   // ---------------------------------------------------------------------------
 
-  /** Open the gym for `minutes` from now (also reopens / extends one open or closing). */
-  open(leaderId: string, minutes: number = GYM_TIMING.defaultOpenMinutes): GymAdminStatus {
-    const state = this.stateOf(leaderId);
+  /** Open the table for `minutes` from now (also reopens / extends one open or closing). */
+  open(leaderId: string, mode: GymMode = "normal", minutes: number = GYM_TIMING.defaultOpenMinutes): GymAdminStatus {
+    const state = this.stateOf(leaderId, mode);
     const now = this.now();
     if (state.status !== "open") state.openedAt = now;
     state.status = "open";
@@ -201,42 +218,42 @@ export class GymService {
     if (state.openTimer) clearTimeout(state.openTimer);
     state.openTimer = undefined;
     if (state.closeTimer) clearTimeout(state.closeTimer);
-    state.closeTimer = setTimeout(() => this.stopJoins(state), state.closesAt - now);
+    state.closeTimer = setTimeout(() => this.stopChallenges(state), state.closesAt - now);
     state.closeTimer.unref?.();
-    console.log(`[gym] ${leaderId} open until ${new Date(state.closesAt).toISOString()}`);
+    console.log(`[gym] ${leaderId} ${mode} open until ${new Date(state.closesAt).toISOString()}`);
     this.changed();
     return this.adminStatusOf(state);
   }
 
-  /** No new challengers from now on; whoever is queued still plays (closed once the queue is done). */
-  close(leaderId: string): GymAdminStatus {
-    const state = this.stateOf(leaderId);
-    if (state.status === "open") this.stopJoins(state);
+  /** No new challengers from now on; a battle in progress ends normally (closed after it). */
+  close(leaderId: string, mode: GymMode = "normal"): GymAdminStatus {
+    const state = this.stateOf(leaderId, mode);
+    if (state.status === "open") this.stopChallenges(state);
     return this.adminStatusOf(state);
   }
 
-  private stopJoins(state: LeaderState): void {
+  private stopChallenges(state: TableState): void {
     if (state.closeTimer) clearTimeout(state.closeTimer);
     state.closeTimer = undefined;
     if (state.status !== "open") return;
     state.closesAt = Math.min(state.closesAt ?? this.now(), this.now());
     state.status = "closing";
-    console.log(`[gym] ${state.leader.id} stops taking challengers (${state.queue.length} queued)`);
+    console.log(`[gym] ${state.leader.id} ${state.mode} stops taking challengers${state.battle ? " (a battle is on)" : ""}`);
     this.closeIfDone(state);
     this.changed();
   }
 
-  /** A closing gym with nobody left to serve closes (and the scheduler plans the next opening). */
-  private closeIfDone(state: LeaderState): void {
-    if (state.status !== "closing" || state.current || state.queue.length > 0) return;
+  /** A closing table without a battle closes (and the scheduler plans the next opening). */
+  private closeIfDone(state: TableState): void {
+    if (state.status !== "closing" || state.battle) return;
     state.status = "closed";
     state.openedAt = null;
     state.closesAt = null;
-    console.log(`[gym] ${state.leader.id} closed`);
+    console.log(`[gym] ${state.leader.id} ${state.mode} closed`);
     this.scheduleNextOpen(state);
   }
 
-  private scheduleNextOpen(state: LeaderState): void {
+  private scheduleNextOpen(state: TableState): void {
     if (state.openTimer) clearTimeout(state.openTimer);
     state.openTimer = undefined;
     if (!this.started || !this.schedule.enabled || state.status !== "closed") {
@@ -248,212 +265,173 @@ export class GymService {
     state.nextOpenAt = this.now() + gap;
     state.openTimer = setTimeout(() => {
       state.openTimer = undefined;
-      if (state.status === "closed") this.open(state.leader.id, this.schedule.openMs / 60_000);
+      if (state.status === "closed") this.open(state.leader.id, state.mode, this.schedule.openMs / 60_000);
     }, gap);
     state.openTimer.unref?.();
   }
 
   // ---------------------------------------------------------------------------
-  // Queue
+  // Challenges and battles
   // ---------------------------------------------------------------------------
 
-  /** Why the user can't queue for this leader now (before the deck check), or null. */
-  joinError(userId: string, leaderId: string, mode: GymMode): string | null {
-    const state = this.leaders.get(leaderId);
-    if (!state) return GYM_ERRORS.unknownLeader;
-    if (!leaderModes(state.leader).includes(mode)) return GYM_ERRORS.modeUnavailable;
+  /** Why the user can't challenge this table now (before the deck check), or null. */
+  challengeError(userId: string, leaderId: string, mode: GymMode): string | null {
+    const leader = getGymLeader(leaderId);
+    if (!leader) return GYM_ERRORS.unknownLeader;
+    const state = this.tablesByKey.get(tableKey(leaderId, mode));
+    if (!state) return GYM_ERRORS.modeUnavailable;
+    if (this.battleOfUser(userId)) return GYM_ERRORS.alreadyInBattle;
     if (state.status !== "open") return GYM_ERRORS.closed;
-    if (this.findUser(userId)) return GYM_ERRORS.alreadyQueued;
+    if (state.battle) return GYM_ERRORS.inBattle(leader.name);
     return null;
   }
 
-  /** Queue the user (deck already checked); their battle gets ready at once if nobody plays. */
-  join(userId: string, leaderId: string, mode: GymMode, deckId: string): GymQueueState {
-    const error = this.joinError(userId, leaderId, mode);
+  /**
+   * Take the free table for the user (deck already checked): its battle room id. Synchronous, so
+   * of two challenges at once the first one wins and the other gets the in-battle error. The
+   * caller builds the room, then `battleStarted` (or `battleFailed`).
+   */
+  reserve(userId: string, leaderId: string, mode: GymMode, challenger: GymChallenger): string {
+    const error = this.challengeError(userId, leaderId, mode);
     if (error) throw new GymError(error);
-    const state = this.stateOf(leaderId);
-    state.queue.push({ userId, deckId, mode, joinedAt: this.now() });
-    this.advance(state);
-    this.changed([userId]);
-    return this.queueStateOf(userId)!;
+    const state = this.stateOf(leaderId, mode);
+    const roomId = `gym-${randomUUID()}`;
+    state.battle = {
+      userId,
+      roomId,
+      challenger: { ...challenger },
+      status: "starting",
+      startedAt: this.now(),
+      game: 1,
+      score: { challenger: 0, leader: 0 },
+      awaitingEntry: false,
+    };
+    return roomId;
   }
 
-  /** Leave the queue, or give up a ready battle (the next one gets it). Not once it started. */
-  leave(userId: string, leaderId: string): void {
-    const state = this.stateOf(leaderId);
-    if (state.current?.userId === userId) {
-      if (state.current.status === "playing") throw new GymError(GYM_ERRORS.battleStarted);
-      this.skipCurrent(state, "left");
-      return;
-    }
-    const index = state.queue.findIndex((entry) => entry.userId === userId);
-    if (index < 0) throw new GymError(GYM_ERRORS.notQueued);
-    const [removed] = state.queue.splice(index, 1);
-    this.closeIfDone(state);
-    this.changed([removed.userId, ...state.queue.map((entry) => entry.userId)]);
-  }
-
-  /** The head of the queue gets the ready slot when nobody is playing. */
-  private advance(state: LeaderState): void {
-    if (state.current) return;
-    const next = state.queue.shift();
-    if (!next) {
-      this.closeIfDone(state);
-      return;
-    }
-    const expiresAt = this.now() + this.readyWindowMs;
-    state.current = { ...next, roomId: `gym-${randomUUID()}`, status: "ready", readyExpiresAt: expiresAt };
-    if (state.readyTimer) clearTimeout(state.readyTimer);
-    const roomId = state.current.roomId;
-    state.readyTimer = setTimeout(() => {
-      state.readyTimer = undefined;
-      if (state.current?.roomId === roomId && state.current.status === "ready") this.skipCurrent(state, "expired");
-    }, this.readyWindowMs);
-    state.readyTimer.unref?.();
-    console.log(`[gym] ${state.leader.id}: ${next.userId}'s battle is ready (${roomId})`);
-    this.listeners.onReady?.(next.userId, { leaderId: state.leader.id, mode: next.mode, roomId, expiresAt });
-  }
-
-  private skipCurrent(state: LeaderState, why: "expired" | "left" | "deck"): void {
-    const skipped = state.current;
-    if (!skipped) return;
-    console.log(`[gym] ${state.leader.id}: ${skipped.userId} skipped (${why})`);
-    if (state.readyTimer) clearTimeout(state.readyTimer);
-    state.readyTimer = undefined;
-    state.current = null;
-    this.advance(state);
-    this.changed([skipped.userId, ...this.usersOf(state)]);
-  }
-
-  private usersOf(state: LeaderState): string[] {
-    return [...(state.current ? [state.current.userId] : []), ...state.queue.map((entry) => entry.userId)];
-  }
-
-  private findUser(userId: string): { state: LeaderState; current: boolean; index: number } | null {
-    for (const state of this.leaders.values()) {
-      if (state.current?.userId === userId) return { state, current: true, index: -1 };
-      const index = state.queue.findIndex((entry) => entry.userId === userId);
-      if (index >= 0) return { state, current: false, index };
-    }
-    return null;
-  }
-
-  // ---------------------------------------------------------------------------
-  // Battles
-  // ---------------------------------------------------------------------------
-
-  /** The battle a gym room id belongs to (ready or playing), or null. */
-  battleFor(roomId: string): (GymCurrentBattle & { leader: GymLeaderDef }) | null {
-    for (const state of this.leaders.values()) {
-      if (state.current?.roomId === roomId) return { ...state.current, leader: state.leader };
-    }
-    return null;
-  }
-
-  /** joinRoom on a ready gym room by its challenger, in time: the battle to build, else null. */
-  claimable(roomId: string, userId: string): (GymCurrentBattle & { leader: GymLeaderDef }) | null {
-    const battle = this.battleFor(roomId);
-    if (!battle || battle.userId !== userId || battle.status !== "ready") return null;
-    if (battle.readyExpiresAt !== null && this.now() > battle.readyExpiresAt) return null;
-    return battle;
-  }
-
-  /** The battle room was built: the slot is playing (no more expiry). */
+  /** The first game's room was built: the table shows the series. */
   battleStarted(roomId: string): void {
     const state = this.stateWithRoom(roomId);
-    if (!state?.current || state.current.status !== "ready") return;
-    if (state.readyTimer) clearTimeout(state.readyTimer);
-    state.readyTimer = undefined;
-    state.current = { ...state.current, status: "playing", readyExpiresAt: null };
-    this.changed([state.current.userId]);
+    if (!state?.battle || state.battle.status !== "starting") return;
+    state.battle = { ...state.battle, status: "playing", startedAt: this.now() };
+    console.log(`[gym] ${state.leader.id} ${state.mode}: ${state.battle.userId} plays (${roomId})`);
+    this.changed([state.battle.userId]);
   }
 
-  /** The battle couldn't start (the deck no longer passes): skip the challenger. */
+  /** The first game couldn't be built: the table is free again. */
   battleFailed(roomId: string): void {
-    const state = this.stateWithRoom(roomId);
-    if (state) this.skipCurrent(state, "deck");
+    this.free(roomId);
   }
 
-  /** The battle ended (any way): the next challenger's turn. */
+  /** A game ended undecided: the series goes on in `nextRoomId` (not entered yet). */
+  nextGame(roomId: string, nextRoomId: string, game: number, score: GymScore): void {
+    const state = this.stateWithRoom(roomId);
+    if (!state?.battle) return;
+    state.battle = { ...state.battle, roomId: nextRoomId, game, score: { ...score }, awaitingEntry: true };
+    this.changed([state.battle.userId]);
+  }
+
+  /** The challenger entered the game waiting for them. */
+  gameEntered(roomId: string): void {
+    const state = this.stateWithRoom(roomId);
+    if (!state?.battle?.awaitingEntry) return;
+    state.battle = { ...state.battle, awaitingEntry: false };
+    this.changed([state.battle.userId]);
+  }
+
+  /** The series ended (any way; its `finished` state went out): the table is free (or closes, when closing). */
   battleEnded(roomId: string): void {
-    const state = this.stateWithRoom(roomId);
-    if (!state?.current) return;
-    const userId = state.current.userId;
-    state.current = null;
-    this.advance(state);
-    this.changed([userId, ...this.usersOf(state)]);
+    this.free(roomId);
   }
 
-  private stateWithRoom(roomId: string): LeaderState | null {
-    for (const state of this.leaders.values()) if (state.current?.roomId === roomId) return state;
+  private free(roomId: string): void {
+    const state = this.stateWithRoom(roomId);
+    if (!state?.battle) return;
+    state.battle = null;
+    this.closeIfDone(state);
+    this.changed();
+  }
+
+  private stateWithRoom(roomId: string): TableState | null {
+    for (const state of this.tablesByKey.values()) if (state.battle?.roomId === roomId) return state;
     return null;
+  }
+
+  private battleOfUser(userId: string): TableState | null {
+    for (const state of this.tablesByKey.values()) if (state.battle?.userId === userId) return state;
+    return null;
+  }
+
+  /** The battle a gym room id belongs to, or null. */
+  battleFor(roomId: string): (GymBattle & { leader: GymLeaderDef; mode: GymMode }) | null {
+    const state = this.stateWithRoom(roomId);
+    return state?.battle ? { ...state.battle, leader: state.leader, mode: state.mode } : null;
+  }
+
+  /** `mySeries`: the user's series whose game room exists (playing / next), or null. */
+  mySeries(userId: string): GymSeriesState | null {
+    const state = this.battleOfUser(userId);
+    const battle = state?.battle;
+    if (!state || !battle || battle.status !== "playing") return null;
+    return {
+      leaderId: state.leader.id,
+      mode: state.mode,
+      game: battle.game,
+      score: { ...battle.score },
+      roomId: battle.roomId,
+      status: battle.awaitingEntry ? "next" : "playing",
+    };
   }
 
   // ---------------------------------------------------------------------------
   // Views
   // ---------------------------------------------------------------------------
 
-  /** `gymTables`: open gyms and closing ones still serving their queue. */
+  /** `gymTables`: open tables and closing ones whose battle still runs, in content order. */
   tables(): GymTable[] {
     const rows: GymTable[] = [];
-    for (const state of this.leaders.values()) {
+    for (const state of this.tablesByKey.values()) {
       if (state.status === "closed") continue;
-      const { leader } = state;
+      const { leader, mode } = state;
+      const playing = state.battle?.status === "playing" ? state.battle : null;
       rows.push({
         leaderId: leader.id,
         name: leader.name,
         title: leader.title,
         avatarId: leader.avatarId,
         medalId: leader.medalId,
-        mode: "normal",
-        rules: { bannedTypes: [...leader.rules.bannedTypes], composition: leader.rules.composition ? { ...leader.rules.composition } : null },
+        mode,
+        rules: publicGymRules(leaderRules(leader, mode)!),
+        rewards: { ...leaderRewards(leader, mode)! },
+        entryCost: leader.entryCost,
+        bestOf: GYM_BEST_OF,
         status: state.status,
         closesAt: state.closesAt ?? this.now(),
-        queueLength: state.queue.length,
-        inBattle: state.current?.status === "playing",
+        inBattle: !!playing,
+        challenger: playing ? { ...playing.challenger } : null,
+        series: playing ? { game: playing.game, score: { ...playing.score } } : null,
       });
     }
     return rows;
   }
 
-  /** `gymQueue` for the user, or null when they aren't queued. */
-  queueStateOf(userId: string): GymQueueState | null {
-    const found = this.findUser(userId);
-    if (!found) return null;
-    const leaderId = found.state.leader.id;
-    if (found.current) {
-      const current = found.state.current!;
-      return {
-        leaderId,
-        mode: current.mode,
-        position: 0,
-        status: current.status,
-        roomId: current.roomId,
-        ...(current.status === "ready" && current.readyExpiresAt !== null ? { readyExpiresAt: current.readyExpiresAt } : {}),
-      };
-    }
-    const entry = found.state.queue[found.index];
-    return { leaderId, mode: entry.mode, position: found.index + 1, status: "waiting" };
-  }
-
-  private adminStatusOf(state: LeaderState): GymAdminStatus {
-    const { leader, current } = state;
+  private adminStatusOf(state: TableState): GymAdminStatus {
+    const { leader, battle } = state;
     return {
       leaderId: leader.id,
       name: leader.name,
       title: leader.title,
       avatarId: leader.avatarId,
-      mode: "normal",
+      mode: state.mode,
       modes: leaderModes(leader),
       status: state.status,
       openedAt: state.openedAt,
       closesAt: state.closesAt,
-      queueLength: state.queue.length,
-      queue: state.queue.map((entry, i) => ({ userId: entry.userId, mode: entry.mode, position: i + 1, joinedAt: entry.joinedAt })),
-      current: current
-        ? { userId: current.userId, mode: current.mode, status: current.status, roomId: current.roomId, readyExpiresAt: current.readyExpiresAt }
-        : null,
-      inBattle: current?.status === "playing",
+      inBattle: battle?.status === "playing",
+      current:
+        battle?.status === "playing"
+          ? { userId: battle.userId, username: battle.challenger.username, roomId: battle.roomId, startedAt: battle.startedAt, game: battle.game, score: { ...battle.score } }
+          : null,
       schedule: {
         enabled: this.schedule.enabled,
         nextOpenAt: state.nextOpenAt,
@@ -464,8 +442,9 @@ export class GymService {
     };
   }
 
+  /** One row per leader and version (content order). */
   adminStatus(): GymAdminStatus[] {
-    return [...this.leaders.values()].map((state) => this.adminStatusOf(state));
+    return [...this.tablesByKey.values()].map((state) => this.adminStatusOf(state));
   }
 
   hasLeader(leaderId: string): boolean {

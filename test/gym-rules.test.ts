@@ -1,100 +1,177 @@
 /**
- * Gym Leaders' deck rules (src/modules/gym/rules.ts): banned types for Pokémon and basic Energy,
- * exact composition, Spanish reasons. Pure, no DB.
+ * Gym Leaders' deck rules (src/modules/gym/rules.ts, v2.1): banned Pokémon types (Energy free),
+ * banned owners (no "Brock's …" Pokémon), no Stadium cards, at most 25 Trainers, copy limits by
+ * name (basic Energy exempt); Brock's versions (normal 2 copies, expert 1) and data. Pure, no DB.
  */
 import { describe, expect, it } from "vitest";
-import { checkGymRules, deckComposition, describeGymRules, gymRuleErrors } from "../src/modules/gym/rules.js";
+import { findCardById, isTrainerCard } from "@gonzaloaguila/game-core";
+import { checkGymRules, describeGymRules, gymRuleErrors, publicGymRules, trainerCount } from "../src/modules/gym/rules.js";
 import { BROCK } from "../src/modules/gym/content/brock.js";
+import { leaderModes } from "../src/modules/gym/content/index.js";
 import type { CardEntry } from "../src/modules/gym/content/types.js";
 
-/** 20 Pokémon / 20 Trainers / 20 Energy, no Grass or Water: Brock's rules pass. */
+const NORMAL = BROCK.rules.normal;
+const EXPERT = BROCK.rules.expert!;
+
+/** 20 different Basic Pokémon (Fire / Water / Lightning / Colorless, none of Brock's). */
+const POKEMON = [
+  "base-set-003-chansey", "base-set-005-clefairy", "base-set-016-zapdos", "base-set-020-electabuzz",
+  "base-set-026-dratini", "base-set-027-farfetchd", "base-set-028-growlithe", "base-set-035-magikarp",
+  "base-set-036-magmar", "base-set-039-porygon", "base-set-041-seel", "base-set-046-charmander",
+  "base-set-048-doduo", "base-set-053-magnemite", "base-set-057-pidgey", "base-set-058-pikachu",
+  "base-set-059-poliwag", "base-set-060-ponyta", "base-set-061-rattata", "base-set-063-squirtle",
+];
+/** 20 different Trainers (Mysterious Fossil, played as a Basic, among them). */
+const TRAINERS = [
+  "base-set-091-bill", "base-set-088-professor-oak", "base-set-094-potion", "base-set-090-super-potion",
+  "base-set-081-energy-retrieval", "base-set-095-switch", "base-set-084-pluspower", "base-set-080-defender",
+  "base-set-082-full-heal", "base-set-093-gust-of-wind", "base-set-092-energy-removal", "base-set-079-super-energy-removal",
+  "base-set-085-pokemon-center", "base-set-078-scoop-up", "base-set-089-revive", "base-set-083-maintenance",
+  "base-set-074-item-finder", "base-set-071-computer-search", "base-set-075-lass", "fossil-062-mysterious-fossil",
+];
+
+/** One copy of everything but basic Energy, 20 Trainers: both versions pass. */
 function legalDeck(): CardEntry[] {
   return [
-    { cardId: "base-set-052-machop", qty: 4 },
-    { cardId: "base-set-046-charmander", qty: 4 },
-    { cardId: "gym-heroes-069-brocks-onix", qty: 4 },
-    { cardId: "gym-heroes-070-brocks-rhyhorn", qty: 4 },
-    { cardId: "team-rocket-059-machop", qty: 4 },
-    { cardId: "base-set-091-bill", qty: 4 },
-    { cardId: "base-set-088-professor-oak", qty: 4 },
-    { cardId: "base-set-094-potion", qty: 4 },
-    { cardId: "fossil-062-mysterious-fossil", qty: 4 },
-    { cardId: "base-set-090-super-potion", qty: 4 },
-    { cardId: "base-set-097-fighting-energy", qty: 12 },
-    { cardId: "base-set-098-fire-energy", qty: 4 },
-    { cardId: "base-set-096-double-colorless-energy", qty: 4 },
+    ...POKEMON.map((cardId) => ({ cardId, qty: 1 })),
+    ...TRAINERS.map((cardId) => ({ cardId, qty: 1 })),
+    { cardId: "base-set-098-fire-energy", qty: 10 },
+    { cardId: "base-set-102-water-energy", qty: 10 },
   ];
 }
 
 const replace = (deck: CardEntry[], from: string, to: CardEntry[]): CardEntry[] => [...deck.filter((e) => e.cardId !== from), ...to];
 
-describe("gym deck rules (Brock)", () => {
-  it("a 20/20/20 deck without Grass or Water passes", () => {
-    expect(gymRuleErrors(legalDeck(), BROCK.rules)).toEqual([]);
-    expect(checkGymRules(legalDeck(), BROCK.rules)).toBeNull();
+describe("gym deck rules (Brock, v2.1)", () => {
+  it("a deck without Grass / Psychic / Fighting or Brock's Pokémon, single copies, 20 Trainers passes both versions", () => {
+    expect(legalDeck().reduce((sum, e) => sum + e.qty, 0)).toBe(60);
+    expect(gymRuleErrors(legalDeck(), NORMAL)).toEqual([]);
+    expect(checkGymRules(legalDeck(), EXPERT)).toBeNull();
   });
 
-  it("counts Trainers played as Basics as Trainers and special Energy as Energy", () => {
-    expect(deckComposition(legalDeck())).toEqual({ pokemon: 20, trainer: 20, energy: 20 });
+  it("refuses Grass, Psychic and Fighting Pokémon, naming one", () => {
+    expect(checkGymRules(replace(legalDeck(), "base-set-003-chansey", [{ cardId: "base-set-043-abra", qty: 1 }]), NORMAL)).toBe("Tu mazo no puede tener Pokémon de tipo Psíquico (Abra)");
+    expect(checkGymRules(replace(legalDeck(), "base-set-003-chansey", [{ cardId: "base-set-044-bulbasaur", qty: 1 }]), NORMAL)).toBe("Tu mazo no puede tener Pokémon de tipo Planta (Bulbasaur)");
+    expect(checkGymRules(replace(legalDeck(), "base-set-003-chansey", [{ cardId: "base-set-052-machop", qty: 1 }]), EXPERT)).toBe("Tu mazo no puede tener Pokémon de tipo Lucha (Machop)");
   });
 
-  it("refuses Water and Grass Pokémon", () => {
-    const water = replace(legalDeck(), "base-set-046-charmander", [{ cardId: "base-set-063-squirtle", qty: 4 }]);
-    expect(checkGymRules(water, BROCK.rules)).toBe("Tu mazo no puede tener Pokémon de tipo Agua");
-    const grass = replace(legalDeck(), "base-set-046-charmander", [{ cardId: "base-set-044-bulbasaur", qty: 4 }]);
-    expect(checkGymRules(grass, BROCK.rules)).toBe("Tu mazo no puede tener Pokémon de tipo Planta");
-    // A Gym Challenge owner's Pokémon too (Erika's Bulbasaur is Grass)
-    const erika = replace(legalDeck(), "base-set-046-charmander", [{ cardId: "gym-challenge-039-erikas-bulbasaur", qty: 4 }]);
-    expect(gymRuleErrors(erika, BROCK.rules)).toContain("Tu mazo no puede tener Pokémon de tipo Planta");
+  it("Energy is not restricted by type any more (Grass / Psychic / Fighting basic Energy are fine)", () => {
+    const deck = replace(legalDeck(), "base-set-102-water-energy", [
+      { cardId: "base-set-099-grass-energy", qty: 4 },
+      { cardId: "base-set-101-psychic-energy", qty: 3 },
+      { cardId: "base-set-097-fighting-energy", qty: 3 },
+    ]);
+    expect(checkGymRules(deck, EXPERT)).toBeNull();
   });
 
-  it("refuses basic Water / Grass Energy but not special Energy", () => {
-    const water = replace(legalDeck(), "base-set-098-fire-energy", [{ cardId: "base-set-102-water-energy", qty: 4 }]);
-    expect(checkGymRules(water, BROCK.rules)).toBe("Tu mazo no puede tener Energía Agua básica");
-    const grass = replace(legalDeck(), "base-set-098-fire-energy", [{ cardId: "base-set-099-grass-energy", qty: 4 }]);
-    expect(checkGymRules(grass, BROCK.rules)).toBe("Tu mazo no puede tener Energía Planta básica");
-    const rainbow = replace(legalDeck(), "base-set-098-fire-energy", [{ cardId: "team-rocket-017-rainbow-energy", qty: 4 }]);
-    expect(checkGymRules(rainbow, BROCK.rules)).toBeNull();
+  it("refuses Brock's own Pokémon, whatever their type", () => {
+    // Brock's Vulpix is a Fire Pokémon: only the owner rule catches it
+    const vulpix = replace(legalDeck(), "base-set-003-chansey", [{ cardId: "gym-heroes-073-brocks-vulpix", qty: 1 }]);
+    expect(gymRuleErrors(vulpix, NORMAL)).toEqual(["Tu mazo no puede tener Pokémon de Brock (Brock's Vulpix)"]);
+    const onix = replace(legalDeck(), "base-set-003-chansey", [{ cardId: "gym-heroes-069-brocks-onix", qty: 1 }]);
+    expect(gymRuleErrors(onix, NORMAL)).toEqual(["Tu mazo no puede tener Pokémon de tipo Lucha (Brock's Onix)", "Tu mazo no puede tener Pokémon de Brock (Brock's Onix)"]);
+    // Another leader's Pokémon are fine
+    const mistys = replace(legalDeck(), "base-set-003-chansey", [{ cardId: "gym-heroes-090-mistys-staryu", qty: 1 }]);
+    expect(findCardById("gym-heroes-090-mistys-staryu")?.name).toBe("Misty's Staryu");
+    expect(checkGymRules(mistys, EXPERT)).toBeNull();
+  });
+
+  it("refuses Stadium cards (Pewter City Gym is always in play)", () => {
+    const deck = replace(legalDeck(), "base-set-075-lass", [{ cardId: "gym-heroes-115-pewter-city-gym", qty: 1 }]);
+    expect(checkGymRules(deck, NORMAL)).toBe("Tu mazo no puede tener cartas de Estadio (Pewter City Gym)");
+  });
+
+  it("at most 25 Trainers (Trainers played as Basics count)", () => {
+    const extra = ["gym-heroes-016-erika", "base-set-086-pokemon-flute", "base-set-087-pokedex", "base-set-076-pokemon-breeder", "base-set-070-clefairy-doll", "base-set-077-pokemon-trader"];
+    const deck = (n: number) => [
+      ...legalDeck().filter((e) => e.cardId !== "base-set-098-fire-energy"),
+      ...extra.slice(0, n).map((cardId) => ({ cardId, qty: 1 })),
+      { cardId: "base-set-098-fire-energy", qty: 10 - n },
+    ];
+    expect(trainerCount(deck(5))).toBe(25);
+    expect(checkGymRules(deck(5), EXPERT)).toBeNull();
+    expect(trainerCount(deck(6))).toBe(26);
+    expect(checkGymRules(deck(6), EXPERT)).toBe("Tu mazo no puede tener más de 25 Entrenadores (tiene 26)");
+  });
+
+  it("copies by name: normal 2, expert 1; Pokémon, Trainers and special Energy alike; basic Energy free", () => {
+    const twoBills = replace(legalDeck(), "base-set-075-lass", [{ cardId: "base-set-091-bill", qty: 1 }]);
+    expect(checkGymRules(twoBills, NORMAL)).toBeNull();
+    expect(checkGymRules(twoBills, EXPERT)).toBe("Tu mazo no puede tener más de 1 copia de Bill (tiene 2)");
+    const fourBills = replace(twoBills, "base-set-074-item-finder", [{ cardId: "base-set-091-bill", qty: 2 }]).filter((e) => e.cardId !== "base-set-071-computer-search");
+    expect(fourBills.reduce((sum, e) => sum + e.qty, 0)).toBe(60);
+    expect(checkGymRules(fourBills, NORMAL)).toBe("Tu mazo no puede tener más de 2 copias de Bill (tiene 4)");
+    const threePikachu = replace(legalDeck(), "base-set-003-chansey", [{ cardId: "base-set-058-pikachu", qty: 2 }]).filter((e) => e.cardId !== "base-set-005-clefairy");
+    expect(checkGymRules(threePikachu, NORMAL)).toBe("Tu mazo no puede tener más de 2 copias de Pikachu (tiene 3)");
+    const twoDce = replace(legalDeck(), "base-set-098-fire-energy", [
+      { cardId: "base-set-098-fire-energy", qty: 8 },
+      { cardId: "base-set-096-double-colorless-energy", qty: 2 },
+    ]);
+    expect(checkGymRules(twoDce, NORMAL)).toBeNull();
+    expect(checkGymRules(twoDce, EXPERT)).toBe("Tu mazo no puede tener más de 1 copia de Double Colorless Energy (tiene 2)");
+    // The same card in two entries (a user deck's variants) is summed
+    expect(checkGymRules([...legalDeck(), { cardId: "base-set-091-bill", qty: 1 }], EXPERT)).toBe("Tu mazo no puede tener más de 1 copia de Bill (tiene 2)");
   });
 
   it("a banned entry with quantity 0 doesn't count", () => {
-    expect(checkGymRules([...legalDeck(), { cardId: "base-set-063-squirtle", qty: 0 }], BROCK.rules)).toBeNull();
+    expect(checkGymRules([...legalDeck(), { cardId: "base-set-043-abra", qty: 0 }], NORMAL)).toBeNull();
   });
 
-  it("asks for exactly 20 of each kind, with the counts", () => {
-    const fewPokemon = replace(legalDeck(), "team-rocket-059-machop", [{ cardId: "team-rocket-059-machop", qty: 2 }, { cardId: "base-set-097-fighting-energy", qty: 2 }]);
-    const errors = gymRuleErrors(fewPokemon, BROCK.rules);
-    expect(errors).toContain("Tu mazo debe tener exactamente 20 Pokémon (tiene 18)");
-    expect(errors).toContain("Tu mazo debe tener exactamente 20 Energías (tiene 22)");
-    expect(errors).not.toContain(expect.stringContaining("Entrenadores"));
-    const fewTrainers = replace(legalDeck(), "base-set-094-potion", [{ cardId: "base-set-063-squirtle", qty: 1 }, { cardId: "base-set-052-machop", qty: 3 }]);
-    expect(gymRuleErrors(fewTrainers, BROCK.rules)).toEqual([
-      "Tu mazo no puede tener Pokémon de tipo Agua",
-      "Tu mazo debe tener exactamente 20 Pokémon (tiene 24)",
-      "Tu mazo debe tener exactamente 20 Entrenadores (tiene 16)",
-    ]);
-  });
-
-  it("a rule set without composition only checks the types", () => {
-    const deck = [{ cardId: "base-set-052-machop", qty: 60 }];
-    expect(checkGymRules(deck, { bannedTypes: ["water"] })).toBeNull();
-    expect(checkGymRules(deck, { bannedTypes: ["fighting"] })).toBe("Tu mazo no puede tener Pokémon de tipo Lucha");
+  it("a rule set without limits only checks what it has", () => {
+    const deck = [{ cardId: "base-set-091-bill", qty: 40 }, { cardId: "base-set-052-machop", qty: 20 }];
+    expect(checkGymRules(deck, { bannedPokemonTypes: [], bannedOwners: [], noStadiums: false })).toBeNull();
+    expect(checkGymRules(deck, { bannedPokemonTypes: ["fighting"], bannedOwners: [], noStadiums: false })).toBe("Tu mazo no puede tener Pokémon de tipo Lucha (Machop)");
   });
 
   it("names unknown cards", () => {
-    expect(checkGymRules([{ cardId: "base-set-999-nope", qty: 1 }, ...legalDeck()], BROCK.rules)).toBe("Carta desconocida: base-set-999-nope");
+    expect(checkGymRules([{ cardId: "base-set-999-nope", qty: 1 }, ...legalDeck()], NORMAL)).toBe("Carta desconocida: base-set-999-nope");
   });
 
-  it("describes the rules in plain Spanish", () => {
-    expect(describeGymRules(BROCK.rules)).toEqual([
-      "Sin Pokémon ni Energía básica de tipo Planta o Agua",
-      "Exactamente 20 Pokémon, 20 Entrenadores y 20 Energías",
+  it("describes each version's rules in plain Spanish", () => {
+    expect(describeGymRules(NORMAL)).toEqual([
+      "Sin Pokémon de tipo Planta, Psíquico o Lucha",
+      "Sin Pokémon de Brock",
+      "Sin cartas de Estadio",
+      "Hasta 25 Entrenadores",
+      "Hasta 2 copias de cada carta (la Energía básica no tiene límite)",
+      "Pewter City Gym siempre en juego",
     ]);
+    expect(describeGymRules(EXPERT)[4]).toBe("Hasta 1 copia de cada carta (la Energía básica no tiene límite)");
   });
 
-  it("Brock's own deck is 60 known cards", () => {
-    const total = BROCK.decks.normal.reduce((sum, e) => sum + e.qty, 0);
-    expect(total).toBe(60);
-    expect(gymRuleErrors(BROCK.decks.normal, { bannedTypes: ["grass", "water"] })).toEqual([]);
+  it("the payload form (contract GymRules)", () => {
+    expect(publicGymRules(NORMAL)).toEqual({
+      bannedPokemonTypes: ["grass", "psychic", "fighting"],
+      bannedOwners: ["Brock"],
+      noStadiums: true,
+      maxTrainers: 25,
+      maxCopies: 2,
+      fixedStadium: { cardId: "gym-heroes-115-pewter-city-gym", name: "Pewter City Gym" },
+    });
+    expect(publicGymRules(EXPERT).maxCopies).toBe(1);
+    expect(publicGymRules({ bannedPokemonTypes: ["fire"], bannedOwners: [], noStadiums: false })).toEqual({
+      bannedPokemonTypes: ["fire"],
+      bannedOwners: [],
+      noStadiums: false,
+      maxTrainers: null,
+      maxCopies: null,
+      fixedStadium: null,
+    });
+  });
+
+  it("Brock: both versions, 100 coins a challenge; his decks are 60 known cards without Stadiums (his own copies aren't limited)", () => {
+    expect(leaderModes(BROCK)).toEqual(["normal", "expert"]);
+    expect(BROCK.entryCost).toBe(100);
+    for (const deck of [BROCK.decks.normal, BROCK.decks.expert!]) {
+      expect(deck.reduce((sum, e) => sum + e.qty, 0)).toBe(60);
+      expect(deck.every((e) => !!findCardById(e.cardId))).toBe(true);
+      expect(deck.some((e) => { const card = findCardById(e.cardId)!; return isTrainerCard(card) && card.trainerType === "stadium"; })).toBe(false);
+    }
+    expect(BROCK.decks.expert).not.toEqual(BROCK.decks.normal);
+  });
+
+  it("Brock's rewards: normal = medal + coin + card back + 1500; expert = 3000 + the EXPERT card back", () => {
+    expect(BROCK.rewards.normal).toEqual({ medalId: "boulder", coins: 1500, coinId: "golem", cardBackId: "cardback-brock" });
+    expect(BROCK.rewards.expert).toEqual({ medalId: null, coins: 3000, coinId: null, cardBackId: "cardback-brock-expert" });
   });
 });

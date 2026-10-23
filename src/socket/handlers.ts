@@ -49,7 +49,7 @@ import { socketSchemas, parsePayload } from "./schemas.js";
 import { getIo, setIo, userRoom } from "./io-registry.js";
 import { AdventureRooms } from "./adventure-room.js";
 import { GymRooms } from "./gym-room.js";
-import { claimGymBattle, registerGymEvents, wireGymService } from "./gym-handlers.js";
+import { registerGymEvents, wireGymService } from "./gym-handlers.js";
 import { setAdventureBattleHost } from "../modules/adventure/adventure.service.js";
 import { authenticateHandshake, checkSocketSession, kickBlockedUser, requireSocketUser } from "./session-guard.js";
 import * as chatService from "../modules/chat/chat.service.js";
@@ -513,7 +513,7 @@ function finishRoomGame(
 ): void {
   const room = roomManager.getRoom(roomId);
   // An adventure battle: its result goes to the run (adventure-room.ts), never to a match; a gym
-  // battle's to gym-room.ts (medal, queue)
+  // battle's to gym-room.ts (rewards, the table freed)
   if (room?.adventure || room?.gym) {
     io.to(roomId).emit("gameOver", { winner: winner === "draw" ? null : winner, reason });
     return;
@@ -625,7 +625,7 @@ function announceSpectators(io: Server, room: GameRoom): void {
 export function closeRoomByAdmin(io: Server | null, roomId: string, reason = "Mesa cerrada por un administrador"): boolean {
   const creatorId = roomManager.getRoom(roomId)?.player1Id;
   if (!roomManager.forceDeleteRoom(roomId)) return false;
-  // A gym battle closed this way has no result: the gym's queue moves on
+  // A gym battle closed this way has no result: its table is free
   gymRooms.closedByAdmin(roomId);
   if (io) {
     emitMyRooms(io, creatorId);
@@ -824,7 +824,7 @@ export function setupSocketHandlers(io: Server): void {
   });
 
   adventureRooms.start();
-  // Gym Leaders: the gym state's changes go out as gymTables / gymQueue / gymBattleReady; an action
+  // Gym Leaders: the gym state's changes go out as gymTables / gymSeries; an action
   // the server takes for the leader (an answer to the challenger's Trainer) is broadcast like any
   gymRooms.setCallbacks({ broadcast: (roomId, actionType, result) => broadcastActionResult(io, roomId, actionType, result, null) });
   wireGymService(io, gymRooms);
@@ -1021,15 +1021,9 @@ export function setupSocketHandlers(io: Server): void {
         // deleted, or lost in an API restart). The frontend goes back to the lobby.
         // An adventure battle lost from memory (restart, idle) is rebuilt from its run
         let target = roomManager.getRoom(roomId) ?? (roomId.startsWith("adv-") ? await adventureRooms.restore(roomId, userId) : undefined);
-        // A Gym Leader battle whose challenger enters it in time: built now (gymBattleReady's room)
-        if (!target && roomId.startsWith("gym-")) {
-          const claimed = await claimGymBattle(gymRooms, roomId, userId);
-          if (claimed && "error" in claimed) {
-            socket.emit("error", { code: claimed.code, message: claimed.error });
-            return;
-          }
-          target = claimed ?? undefined;
-        }
+        // A Gym Leader battle (built by challengeGym) is its challenger's only: anyone else is told
+        // it doesn't exist (no seat, no watching)
+        if (target?.gym && target.gym.userId !== userId) target = undefined;
         if (!target) {
           socket.emit("error", { code: "ROOM_NOT_FOUND", message: new RoomNotFoundError().message });
           return;
@@ -1037,7 +1031,7 @@ export function setupSocketHandlers(io: Server): void {
         // Lucky Duel: no deck (the server builds both), a deck sent anyway is ignored
         const luckyDuel = target.config.mode === "lucky-duel";
         // Adventure battles play the run's deck (built by the server), like Lucky Duel; gym battles
-        // the deck the challenger queued with
+        // the deck the challenger challenged with
         const noDeck = luckyDuel || target.config.mode === "adventure" || target.config.mode === "gym";
         const deckId = noDeck ? undefined : parsed.data.deckId;
         const identity = await getPlayableIdentity(userId);
@@ -1627,8 +1621,8 @@ export function setupSocketHandlers(io: Server): void {
     registerDraftEvents(io, socket, roomManager);
     // Trade tables (card trades between players)
     registerTradeEvents(io, socket);
-    // Gym Leaders: tables, queue (gym-handlers.ts)
-    registerGymEvents(socket);
+    // Gym Leaders: tables, challenges (gym-handlers.ts)
+    registerGymEvents(socket, gymRooms);
   });
 
   // A game dropped without a result (admin close, both players gone): refund the table bet

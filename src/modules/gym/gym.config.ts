@@ -15,13 +15,16 @@ export const GYM_SCHEDULE = {
   openMs: 45 * MINUTE,
 } as const;
 
+/** A challenge is a series of games against the leader: first to win a majority of this many. */
+export const GYM_BEST_OF = 3;
+
 export const GYM_TIMING = {
-  /** A challenger whose turn came has this long to enter the battle, else they are skipped. */
-  readyWindowMs: 60_000,
   /** The challenger's clock for each of their turns (and for an answer owed on the leader's turn). */
   turnClockMs: 3 * MINUTE,
-  /** A challenger away from the battle for this long loses it. */
+  /** A challenger away from a game (or who never enters it after it was created) for this long forfeits the series. */
   disconnectGraceMs: 2 * MINUTE,
+  /** The leader's emote comes this long after what it reacts to (the board shows the play first). */
+  emoteDelayMs: 1_200,
   /** Admin "open" without minutes. */
   defaultOpenMinutes: 45,
   maxOpenMinutes: 24 * 60,
@@ -34,8 +37,3 @@ export interface GymScheduleConfig {
   openMs: number;
 }
 
-export interface GymTimingConfig {
-  readyWindowMs: number;
-  turnClockMs: number;
-  disconnectGraceMs: number;
-}

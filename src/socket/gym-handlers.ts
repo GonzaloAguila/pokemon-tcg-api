@@ -1,103 +1,156 @@
 /**
  * Gym Leaders over Socket.io (contract: docs/gym-leaders.md). Server → client: `gymTables`
- * (broadcast on every change, and in reply to getGymTables), `gymQueue` (to one user: their own
- * queue state, null = not queued), `gymBattleReady`, `gymBattleResult` (gym-room.ts). Client →
- * server, each with an ack `{ ok: true } | { ok: false, error }`: `getGymTables {}`,
- * `joinGymQueue { leaderId, mode, deckId }`, `leaveGymQueue { leaderId }`. The battle itself is
- * entered with the usual `joinRoom { roomId }` (claimGymBattle builds its room).
+ * (broadcast on every change, and in reply to getGymTables), `gymSeries` (to one user: their
+ * best-of-3 series — playing / next / finished), `gymAttempts` (to one user: their daily attempts per
+ * leader, when they change), `gymBattleResult` (once per series, gym-room.ts).
+ * Client → server, with an ack: `getGymTables {}` → `{ ok: true, tables, mySeries, myAttempts }`;
+ * `challengeGym { leaderId, mode, deckId }` → `{ ok: true, roomId } | { ok: false, error }` (the
+ * entry cost is charged then). Each game is entered with the usual `joinRoom { roomId }` (the
+ * room already exists, reserved for the challenger).
  */
 import type { Server, Socket } from "socket.io";
-import { getGymLeader } from "../modules/gym/content/index.js";
+import { prisma } from "../lib/prisma.js";
+import { getGymLeader, leaderRules, versionLabel } from "../modules/gym/content/index.js";
 import { checkChallengerDeck } from "../modules/gym/challenger-deck.js";
-import { GymError, gymService } from "../modules/gym/gym.service.js";
+import { GYM_ERRORS, GymError, gymService } from "../modules/gym/gym.service.js";
+import { addCoins, spendCoins } from "../modules/users/users.service.js";
+import { attemptsError, attemptsOf, giveBackAttempt, noAttemptsError, takeAttempt } from "../modules/gym/attempts.js";
 import { checkSocketSession, kickBlockedUser } from "./session-guard.js";
 import { parsePayload, socketSchemas } from "./schemas.js";
 import { userRoom } from "./io-registry.js";
-import type { GymRooms } from "./gym-room.js";
-import type { GameRoom } from "./rooms.js";
+import { GYM_ENTRY_REFUND_TRANSACTION, type GymRooms } from "./gym-room.js";
 
-type GymAck = { ok: true } | { ok: false; error: string };
+type Ack = (res: unknown) => void;
 
-/** joinRoom on a ready gym room that can't start: the deck no longer passes, or the build failed. */
-export interface GymClaimError {
-  error: string;
-  code: "GYM_DECK_INVALID" | "GYM_BATTLE_FAILED";
-}
+/** Transaction log type of the entry cost. */
+export const GYM_ENTRY_TRANSACTION = "gym_entry";
 
-/** The gym state's changes reach every lobby (`gymTables`) and the users concerned (`gymQueue`). */
+/** The gym state's changes reach every lobby (`gymTables`) and the users concerned (`gymSeries`). */
 export function wireGymService(io: Server, gymRooms: GymRooms): void {
   gymService.setListeners({
     onChange: (users) => {
       io.emit("gymTables", gymService.tables());
-      for (const userId of new Set(users)) io.to(userRoom(userId)).emit("gymQueue", gymService.queueStateOf(userId));
-    },
-    onReady: (userId, ready) => {
-      io.to(userRoom(userId)).emit("gymBattleReady", ready);
+      for (const userId of new Set(users)) {
+        const series = gymService.mySeries(userId);
+        if (series) io.to(userRoom(userId)).emit("gymSeries", series);
+      }
     },
   });
-  gymRooms.setCallbacks({ onBattleEnd: (roomId) => gymService.battleEnded(roomId) });
+  gymRooms.setCallbacks({
+    onNextGame: (roomId, nextRoomId, game, score) => gymService.nextGame(roomId, nextRoomId, game, score),
+    onGameEntered: (roomId) => gymService.gameEntered(roomId),
+    onBattleEnd: (roomId) => gymService.battleEnded(roomId),
+  });
   gymService.start();
 }
 
-/** Battles being built (two tabs entering at once build one room). */
-const building = new Map<string, Promise<GameRoom | GymClaimError | null>>();
+/** `gymAttempts` to every socket of the user (their attempts changed). */
+export async function emitAttempts(io: Pick<Server, "to">, userId: string): Promise<void> {
+  try {
+    io.to(userRoom(userId)).emit("gymAttempts", await attemptsOf(userId));
+  } catch (error) {
+    console.error(`[gym] Could not send the attempts of ${userId}:`, error);
+  }
+}
 
 /**
- * joinRoom on a `gym-…` room that isn't built yet: the user's ready battle, entered in time, with
- * their queued deck checked again (a deck that no longer passes skips them). Null when it isn't
- * their ready battle (the caller answers ROOM_NOT_FOUND).
+ * challengeGym once the payload is valid: the table must be free and open, the user without
+ * another gym series, with an attempt left today against this leader, able to pay the entry cost,
+ * with a deck that passes the normal rules and the version's (async); then the table is taken
+ * (synchronously: of two challenges the first wins), the attempt used, the entry cost charged and
+ * the first game's room built.
  */
-export function claimGymBattle(gymRooms: GymRooms, roomId: string, userId: string): Promise<GameRoom | GymClaimError | null> {
-  let pending = building.get(roomId);
-  if (!pending) {
-    pending = buildGymBattle(gymRooms, roomId, userId).finally(() => building.delete(roomId));
-    building.set(roomId, pending);
-  }
-  return pending;
-}
-
-async function buildGymBattle(gymRooms: GymRooms, roomId: string, userId: string): Promise<GameRoom | GymClaimError | null> {
-  const battle = gymService.claimable(roomId, userId);
-  if (!battle) return null;
-  const deck = await checkChallengerDeck(userId, battle.deckId, battle.leader);
-  // The slot may have expired (or been given up) during the check
-  if (!gymService.claimable(roomId, userId)) return null;
-  if (!deck.ok) {
+async function challenge(io: Pick<Server, "to">, gymRooms: GymRooms, userId: string, leaderId: string, mode: "normal" | "expert", deckId: string) {
+  const early = gymService.challengeError(userId, leaderId, mode);
+  if (early) return { ok: false as const, error: early };
+  const leader = getGymLeader(leaderId)!;
+  const noAttempts = await attemptsError(userId, leader);
+  if (noAttempts) return { ok: false as const, error: noAttempts };
+  const rules = leaderRules(leader, mode)!;
+  const cost = leader.entryCost;
+  const costError = GYM_ERRORS.entryCost(cost, leader.name);
+  const [deck, user] = await Promise.all([
+    checkChallengerDeck(userId, deckId, rules),
+    prisma.user.findUnique({ where: { id: userId }, select: { username: true, activeAvatarId: true, coins: true } }),
+  ]);
+  if (!user) return { ok: false as const, error: "Usuario no encontrado" };
+  if (user.coins < cost) return { ok: false as const, error: costError };
+  if (!deck.ok) return { ok: false as const, error: deck.error };
+  // Throws the in-battle error when another challenge took the table during the checks
+  const roomId = gymService.reserve(userId, leaderId, mode, { username: user.username, avatarId: user.activeAvatarId ?? null });
+  const label = versionLabel(leader, mode);
+  // The reservation is held: no other series of this user can take an attempt meanwhile
+  let attemptId: string | null;
+  try {
+    attemptId = await takeAttempt(userId, leader, mode);
+  } catch (error) {
     gymService.battleFailed(roomId);
-    return { error: deck.error, code: "GYM_DECK_INVALID" };
+    throw error;
+  }
+  if (!attemptId) {
+    gymService.battleFailed(roomId);
+    return { ok: false as const, error: noAttemptsError(leader) };
+  }
+  if (cost > 0) {
+    try {
+      // Conditional debit: a balance spent meanwhile refuses here
+      await spendCoins(userId, cost, GYM_ENTRY_TRANSACTION, `Reto a ${label}: -${cost} monedas`);
+    } catch {
+      gymService.battleFailed(roomId);
+      await giveBackAttempt(attemptId).catch((error) => console.error(`[gym ${roomId}] Could not give the attempt back:`, error));
+      return { ok: false as const, error: costError };
+    }
   }
   try {
-    const room = await gymRooms.build({ roomId, userId, deckId: battle.deckId, leader: battle.leader, mode: battle.mode, playerDeck: deck.entries });
-    gymService.battleStarted(roomId);
-    return room;
+    await gymRooms.startSeries({ roomId, userId, deckId, leader, mode, playerDeck: deck.entries, entryCost: cost, attemptId });
   } catch (error) {
-    // Never leave the gym waiting on a battle that couldn't be built: the next challenger plays
+    // Never leave the table taken (nor the coins spent, nor the attempt used) by a series that couldn't start
     console.error(`[gym ${roomId}] Could not build the battle:`, error);
     gymService.battleFailed(roomId);
-    return { error: "No se pudo empezar la batalla", code: "GYM_BATTLE_FAILED" };
+    await giveBackAttempt(attemptId).catch((attemptError) => console.error(`[gym ${roomId}] Could not give the attempt back:`, attemptError));
+    if (cost > 0) {
+      await addCoins(userId, cost, GYM_ENTRY_REFUND_TRANSACTION, `Reto a ${label} devuelto: +${cost} monedas`).catch((refundError) =>
+        console.error(`[gym ${roomId}] Could not refund the entry cost to ${userId}:`, refundError),
+      );
+    }
+    return { ok: false as const, error: "No se pudo empezar la batalla" };
   }
+  gymService.battleStarted(roomId);
+  await emitAttempts(io, userId);
+  return { ok: true as const, roomId };
 }
 
-export function registerGymEvents(socket: Socket): void {
-  const replier = (ack: unknown) => (res: GymAck) => {
-    if (typeof ack === "function") ack(res);
+export function registerGymEvents(socket: Socket, gymRooms: GymRooms): void {
+  const replier = (ack: unknown): Ack => (res) => {
+    if (typeof ack === "function") (ack as Ack)(res);
   };
 
-  // getGymTables {}: the open gyms (gymTables) and, signed in, the user's own queue (gymQueue)
-  socket.on("getGymTables", (payload: unknown, ack?: unknown) => {
+  // getGymTables {}: the open tables (gymTables) and, signed in, the user's series (gymSeries);
+  // the ack carries both, and the user's daily attempts per leader (myAttempts: {} signed out)
+  socket.on("getGymTables", async (payload: unknown, ack?: unknown) => {
     // `emit("getGymTables", ack)` (no payload) works too
     const reply = replier(typeof payload === "function" ? payload : ack);
     const parsed = parsePayload(socketSchemas.getGymTables, typeof payload === "function" ? {} : (payload ?? {}));
     if (!parsed.ok) return reply({ ok: false, error: parsed.error });
-    socket.emit("gymTables", gymService.tables());
+    const tables = gymService.tables();
+    socket.emit("gymTables", tables);
     const userId: string | undefined = socket.data.user?.userId;
-    if (userId) socket.emit("gymQueue", gymService.queueStateOf(userId));
-    reply({ ok: true });
+    const mySeries = userId ? gymService.mySeries(userId) : null;
+    if (mySeries) socket.emit("gymSeries", mySeries);
+    let myAttempts = {};
+    if (userId) {
+      try {
+        myAttempts = await attemptsOf(userId);
+      } catch (error) {
+        console.error("[getGymTables] attempts", error);
+      }
+    }
+    reply({ ok: true, tables, mySeries, myAttempts });
   });
 
-  // joinGymQueue { leaderId, mode, deckId }: the gym must be open, the deck must pass the normal
-  // rules and the leader's (checked again when the battle starts), one queue per user
-  socket.on("joinGymQueue", async (payload: unknown, ack?: unknown) => {
+  // challengeGym { leaderId, mode, deckId }: take a free table (entry cost charged); ack
+  // { ok: true, roomId } (the first game's room exists: joinRoom it) or { ok: false, error } (Spanish)
+  socket.on("challengeGym", async (payload: unknown, ack?: unknown) => {
     const reply = replier(ack);
     try {
       const session = await checkSocketSession(socket);
@@ -106,36 +159,14 @@ export function registerGymEvents(socket: Socket): void {
         if (session.blocked) kickBlockedUser(socket);
         return;
       }
-      const parsed = parsePayload(socketSchemas.joinGymQueue, payload);
+      const parsed = parsePayload(socketSchemas.challengeGym, payload);
       if (!parsed.ok) return reply({ ok: false, error: parsed.error });
       const { leaderId, mode, deckId } = parsed.data;
-      const early = gymService.joinError(session.userId, leaderId, mode);
-      if (early) return reply({ ok: false, error: early });
-      const deck = await checkChallengerDeck(session.userId, deckId, getGymLeader(leaderId)!);
-      if (!deck.ok) return reply({ ok: false, error: deck.error });
-      gymService.join(session.userId, leaderId, mode, deckId);
-      reply({ ok: true });
+      reply(await challenge(socket.nsp.server, gymRooms, session.userId, leaderId, mode, deckId));
     } catch (error) {
       if (error instanceof GymError) return reply({ ok: false, error: error.message });
-      console.error("[joinGymQueue]", error);
-      reply({ ok: false, error: "No se pudo entrar en la fila" });
-    }
-  });
-
-  // leaveGymQueue { leaderId }: out of the queue, or give up a ready battle (not a started one)
-  socket.on("leaveGymQueue", async (payload: unknown, ack?: unknown) => {
-    const reply = replier(ack);
-    try {
-      const session = await checkSocketSession(socket);
-      if (!session.ok) return reply({ ok: false, error: session.error });
-      const parsed = parsePayload(socketSchemas.leaveGymQueue, payload);
-      if (!parsed.ok) return reply({ ok: false, error: parsed.error });
-      gymService.leave(session.userId, parsed.data.leaderId);
-      reply({ ok: true });
-    } catch (error) {
-      if (error instanceof GymError) return reply({ ok: false, error: error.message });
-      console.error("[leaveGymQueue]", error);
-      reply({ ok: false, error: "No se pudo salir de la fila" });
+      console.error("[challengeGym]", error);
+      reply({ ok: false, error: "No se pudo retar al gimnasio" });
     }
   });
 }

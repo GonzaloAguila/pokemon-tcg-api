@@ -126,6 +126,7 @@ model User {
   cardTransactions CardTransaction[]
   ownedCoins       UserCoin[]
   ownedCardBacks   UserCardBack[]
+  gymAttempts      GymAttempt[]
   ownedAvatars     UserAvatar[]
   ownedCardSkins   UserCardSkin[]
   ownedPlaymats    UserPlaymat[]
@@ -854,4 +855,40 @@ model WaitlistEntry {
   createdAt DateTime @default(now())
 
   @@map("waitlist_entries")
+}
+
+// =============================================================================
+// Gym Leaders (docs/gym-leaders.md)
+// =============================================================================
+
+// A leader's deck for one version, edited from the backoffice: battles that start after the edit
+// play it instead of the content default (src/modules/gym/content). No row = the default.
+model GymLeaderDeck {
+  id          String   @id @default(uuid())
+  leaderId    String // "brock"
+  mode        String // "normal" | "expert"
+  cards       Json // CardEntry[] { cardId, qty }, 60 cards
+  updatedAt   DateTime @updatedAt
+  // The admin who saved it (no FK: the row outlives the account)
+  updatedById String?
+
+  @@unique([leaderId, mode])
+  @@map("gym_leader_decks")
+}
+
+// A challenge (best-of-3 series) started against a Gym Leader: counts against the user's daily
+// attempts per leader (content attemptsPerDay, both versions together). `day` = the economy day
+// (economy-time.ts) it was started on; a series refunded for an error gives it back (refunded).
+model GymAttempt {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  leaderId  String // "brock"
+  mode      String // "normal" | "expert"
+  day       String // economy day, "2026-10-23"
+  refunded  Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId, leaderId, day])
+  @@map("gym_attempts")
 }

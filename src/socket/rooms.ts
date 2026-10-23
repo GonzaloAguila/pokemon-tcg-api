@@ -3266,7 +3266,8 @@ export class GameRoomManager {
     const room = this.rooms.get(roomId);
     if (!room || room.status !== "playing") return null;
     if (this.seatOf(room, userId)) throw new SeatedSpectatorError();
-    if (!isPublicTable(room)) throw new PrivateTableError();
+    // Battles against the server's AI (adventure, Gym Leaders) are never watchable, whatever their config
+    if (!isPublicTable(room) || hasAISeat(room)) throw new PrivateTableError();
     room.spectators.set(socketId, userId);
     return room;
   }

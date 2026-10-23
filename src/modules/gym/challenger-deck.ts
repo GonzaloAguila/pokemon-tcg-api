@@ -7,7 +7,7 @@
 import { findCardDefinition, getDeckById as getThemeDeckById } from "@gonzaloaguila/game-core";
 import { prisma } from "../../lib/prisma.js";
 import { checkDeckPlayable, type DeckCardEntry } from "../decks/decks.service.js";
-import type { CardEntry, GymLeaderDef } from "./content/types.js";
+import type { CardEntry, GymRules } from "./content/types.js";
 import { checkGymRules } from "./rules.js";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -38,16 +38,16 @@ export async function loadDeckEntries(userId: string, deckId: string): Promise<C
   return merge(entries);
 }
 
-/** The deck list when the user may challenge `leader` with it, else the first reason (Spanish). */
+/** The deck list when the user may challenge a leader's version (its `rules`) with it, else the first reason (Spanish). */
 export async function checkChallengerDeck(
   userId: string,
   deckId: string,
-  leader: GymLeaderDef,
+  rules: GymRules,
 ): Promise<{ ok: true; entries: CardEntry[] } | { ok: false; error: string }> {
   const playable = await checkDeckPlayable(userId, deckId);
   if (playable) return { ok: false, error: playable };
   const entries = await loadDeckEntries(userId, deckId);
   if (!entries) return { ok: false, error: "Mazo no encontrado" };
-  const ruleError = checkGymRules(entries, leader.rules);
+  const ruleError = checkGymRules(entries, rules);
   return ruleError ? { ok: false, error: ruleError } : { ok: true, entries };
 }

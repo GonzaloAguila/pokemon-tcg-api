@@ -150,13 +150,12 @@ export const socketSchemas = {
 
   // Gym Leaders (gym-handlers.ts, docs/gym-leaders.md); every one answers an ack { ok, error? }
   getGymTables: z.object({}).nullish(),
-  joinGymQueue: z.object({
+  challengeGym: z.object({
     leaderId: gymLeaderId,
-    /** v1: only "normal" exists (the expert version comes later); missing = "normal" */
+    /** The leader's version (its own table); missing = "normal" */
     mode: z.enum(["normal", "expert"]).nullish().transform((v) => v ?? "normal"),
     deckId,
   }),
-  leaveGymQueue: z.object({ leaderId: gymLeaderId }),
 };
 
 // ---------------------------------------------------------------------------
