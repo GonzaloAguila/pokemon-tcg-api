@@ -190,3 +190,38 @@ Permission `users:economy` (no new permission; superadmin always). All under `/a
 `src/modules/gym/gym.config.ts` `GYM_SCHEDULE` (`enabled: false`, 2–6 h gap, 45 min open) and
 `GYM_TIMING` (ready window 60 s, turn clock 3 min, disconnect grace 2 min). Turning the scheduler on
 is a one-line change + API deploy (no env var).
+
+## Deck tuning (Brock, normal)
+
+Re-run: `npx tsx scripts/gym-deck-sim.ts --games 200 --deck original,shipped` (~3 min per deck;
+`--deck all` runs every candidate kept in the script, `--print --deck <name>` prints a list).
+Smart AI vs smart AI on both seats (`policyPair("smart")`), games through game-core's headless
+runner on `createAdventureGame` with no modifiers (`playAdventureAIGame`: 6 Prizes, 7-card hand —
+the exact game creation the gym rooms use; same runner as `playAIGame`, which takes theme-deck
+`Deck`s instead of card lists), fixed seeds (`hashSeed("gym:<opponent>:<i>")`), Brock on side A
+in even games and side B in odd ones, 0 engine failures. Opponents: every game-core theme deck
+(classic + Gym Leaders, Brock's excluded) without Grass/Water Pokémon or basic Energy (the 20/20/20
+rule is ignored for them): 9 decks.
+
+| Opponent | Before (gym-heroes-brock) | After (shipped) |
+|---|---|---|
+| zap | 82% | 86% |
+| haymaker | 17% | 39% |
+| damage-swap | 77% | 88% |
+| fire-fighting | 24% | 48% |
+| thunderstorm | 96% | 98% |
+| colorless | 54% | 70% |
+| gym-heroes-lt-surge | 76% | 77% |
+| gym-heroes-sabrina | 49% | 56% |
+| gym-heroes-blaine | 51% | 61% |
+| **Overall (1,800 games)** | **58.3%** | **68.9%** |
+
+200 games per pairing. What changed: the same 22 Brock's Pokémon; out went Good Manners ×2, Secret
+Mission, Recall, The Rocket's Trap and 6 Fighting Energy (26 → 20); in came Energy Removal ×4,
+Super Energy Removal, Gust of Wind ×2, PlusPower, Bill ×2 and Professor Oak (all played well by the
+smart AI). Tried and dropped (100 games per pairing): a hard-hitter list with Gym Challenge's
+Diglett/Dugtrio and Mankey/Primeape (54.8%), swapping the Sandshrew line for Diglett/Dugtrio
+(49.6%), Brock's Protection instead of Brock (61.0%), bigger Basics (62.6%). Energy denial is what
+moves the numbers; Haymaker (4 Energy Removal + 3 Super Energy Removal of its own, Hitmonchan) and
+Fire-Fighting (Machamp, Charizard) remain the hard matchups. Players build better decks than the
+theme decks, so these rates are an upper bound for Brock against strong players.
