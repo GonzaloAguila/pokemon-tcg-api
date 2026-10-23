@@ -448,17 +448,16 @@ describe("achievements cleanup", () => {
     expect(list.find((a) => a.id === "legend-48")).toMatchObject({ status: "retired", claimed: true });
   });
 
-  it("manual achievements are flagged unavailable; Leyenda Viviente only needs the obtainable ones", async () => {
+  it("no achievement is unavailable any more; Leyenda Viviente only needs the obtainable ones", async () => {
     const user = await createUser();
     const list = await achievements.listAchievements(user.id);
-    // 30 manual ones, minus the first batch activated on 2026-10-21 and Holo Completo
-    // (achievements-activity.test.ts)
-    expect(list.filter((a) => a.status === "unavailable")).toHaveLength(23);
+    // The 23 "Próximamente" (manual) ones were replaced by the challenge achievements on 2026-10-23
+    expect(list.filter((a) => a.status === "unavailable")).toHaveLength(0);
     expect(list.filter((a) => a.status === "retired")).toHaveLength(4);
-    // Adventure achievements are active but never count for Leyenda Viviente (owner Q5)
-    const active = list.filter((a) => a.status === "active" && a.id !== "legend-50" && !a.id.startsWith("adventure-"));
+    // Adventure and challenge achievements are active but never count for Leyenda Viviente
+    const active = list.filter((a) => a.status === "active" && a.id !== "legend-50" && !a.id.startsWith("adventure-") && !a.id.startsWith("challenge-"));
     expect(list.find((a) => a.id === "legend-50")?.progressTarget).toBe(active.length);
-    await expect(achievements.claimAchievement(user.id, "bronze-3")).rejects.toMatchObject({ statusCode: 400 });
+    await expect(achievements.claimAchievement(user.id, "bronze-3")).rejects.toMatchObject({ statusCode: 404 });
   });
 });
 
