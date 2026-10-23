@@ -29,7 +29,7 @@ router.post(
   requireAuth,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const newlyClaimable = await achievementsService.checkAndUpdateProgress(req.user!.userId);
+      const newlyClaimable = await achievementsService.checkAndUpdateProgress(req.user!.userId, { challenges: true });
       res.json({ newlyClaimable });
     } catch (err) {
       next(err);

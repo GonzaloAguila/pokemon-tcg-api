@@ -105,6 +105,18 @@ describe("challenge tracker", () => {
     expect(result.feats.player2.finalKoBy).toBeNull();
   });
 
+  it("an attack followed by the rival's deck-out is no winning KO", () => {
+    const start = { ...dealt(), playerActivePokemon: inPlay("Magikarp", "p1-a"), opponentActivePokemon: inPlay("Chansey", "p2-a") };
+    const tracker = createChallengeTracker(start, sources);
+    // The attack's endTurn makes the rival draw from an empty deck: game over in the same action
+    const over = { ...start, gamePhase: GamePhase.GameOver, gameResult: "victory", opponentDeck: [], lastAttackHit: hit({ attackerName: "Magikarp", damage: 10 }) } as GameState;
+    observe(tracker, start, over, { type: "attack" });
+    const result = finishTracker(tracker, over, "player1");
+    expect(result.endKind).toBe("deck_out");
+    expect(result.feats.player1.finalKoBy).toBeNull();
+    expect(result.feats.player1.maxAttackDamage).toBe(10);
+  });
+
   it("keeps the largest prize deficit and the prizes the rival took", () => {
     const start = dealt();
     const tracker = createChallengeTracker(start, sources);

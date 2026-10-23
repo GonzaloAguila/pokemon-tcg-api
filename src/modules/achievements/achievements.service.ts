@@ -328,7 +328,12 @@ export async function listEarnedAchievements(userId: string) {
 // (Only updates progress — NEVER grants rewards or sets unlockedAt)
 // ---------------------------------------------------------------------------
 
-export async function checkAndUpdateProgress(userId: string): Promise<ClaimableAchievement[]> {
+/**
+ * `challenges`: also recompute the challenge achievements, which read every qualifying match row.
+ * They only change when a multiplayer game settles, so only the settlement and the explicit check
+ * (POST /achievements/check) ask for them; other triggers (packs, check-ins, vs-AI games) skip them.
+ */
+export async function checkAndUpdateProgress(userId: string, options: { challenges?: boolean } = {}): Promise<ClaimableAchievement[]> {
   // A real Promise (run once, awaited by several): Prisma's query promises are lazy thenables
   const existingQuery = Promise.resolve(
     prisma.userAchievement.findMany({
@@ -375,7 +380,7 @@ export async function checkAndUpdateProgress(userId: string): Promise<ClaimableA
     pending("holo-collection").then((needed) =>
       needed ? prisma.userCard.count({ where: { userId, quantity: { gt: 0 }, cardDefId: { in: [...BASE_SET_HOLO_IDS] } } }) : 0,
     ),
-    pending("challenge").then((needed) => (needed ? loadChallengeGames(userId) : [])),
+    options.challenges ? pending("challenge").then((needed) => (needed ? loadChallengeGames(userId) : [])) : Promise.resolve([]),
   ]);
 
   if (!user) return [];
@@ -397,6 +402,8 @@ export async function checkAndUpdateProgress(userId: string): Promise<ClaimableA
   for (const def of ACHIEVEMENT_DEFS) {
     // Retired achievements no longer progress
     if (def.status !== "active") continue;
+    // Challenges not loaded for this trigger: their stored progress stays as it is
+    if (def.checker === "challenge" && !options.challenges) continue;
     // Claimed ones never change (skip their queries)
     if (existingMap.get(def.id)?.unlockedAt) continue;
     if (!stats && !CHECKERS_WITHOUT_STATS.has(def.checker)) continue;

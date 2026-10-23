@@ -114,7 +114,7 @@ function luckyDuelStarters(room: GameRoom): LuckyDuelStarters {
 
 function notifySettlement(io: Server | null, roomId: string, result: SettlementResult): void {
   for (const p of result.players) {
-    checkAndUpdateProgress(p.userId).catch(console.error);
+    checkAndUpdateProgress(p.userId, { challenges: true }).catch(console.error);
     io?.to(userRoom(p.userId)).emit("matchSettled", {
       roomId,
       mode: result.mode,

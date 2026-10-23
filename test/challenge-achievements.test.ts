@@ -139,12 +139,16 @@ describe("challenge achievements in the catalog", () => {
         { status: "finished", mode: "normal", counted: true, player1Id: me.id, player2Id: rival.id, winnerId: me.id, settledAt: now, finishedAt: now },
       ],
     });
+    // Other triggers (a pack, a check-in, a vs-AI game) leave the challenges alone: only a
+    // settlement or the explicit check reads the match rows
     await checkAndUpdateProgress(me.id);
+    expect(await prisma.userAchievement.count({ where: { userId: me.id, achievementId: { startsWith: "challenge-" } } })).toBe(0);
+    await checkAndUpdateProgress(me.id, { challenges: true });
     const rows = await prisma.userAchievement.findMany({ where: { userId: me.id, achievementId: { startsWith: "challenge-" } } });
     const byId = Object.fromEntries(rows.map((r) => [r.achievementId, r.progress]));
     expect(byId).toMatchObject({ "challenge-no-trainers": 1, "challenge-monotype": 1, "challenge-basics-only": 1, "challenge-shutout": 1, "challenge-budget": 1, "challenge-blitz": 0 });
     // The rival lost: nothing but Golpe brutal could move
-    await checkAndUpdateProgress(rival.id);
+    await checkAndUpdateProgress(rival.id, { challenges: true });
     expect(await prisma.userAchievement.count({ where: { userId: rival.id, achievementId: { startsWith: "challenge-" }, progress: { gt: 0 } } })).toBe(0);
   });
 

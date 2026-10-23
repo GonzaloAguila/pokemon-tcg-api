@@ -503,6 +503,18 @@ describe("challenge data of multiplayer games (challenge achievements)", () => {
     expect(row.feats).toMatchObject({ player1: { benchUsed: false }, player2: { benchUsed: false } });
   });
 
+  it("the settlement recomputes the challenge achievements", async () => {
+    const { settleRoomResult } = await import("../src/socket/match-settlement.js");
+    const { room, match, a } = await endedRoom("attack");
+    settleRoomResult(null, room, "player1", "test");
+    await settledRow(match.id);
+    for (let i = 0; i < 100; i++) {
+      if (await prisma.userAchievement.count({ where: { userId: a.id, achievementId: { startsWith: "challenge-" } } })) return;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    throw new Error("no challenge achievement rows after the settlement");
+  });
+
   it("a surrendered game is stored as forfeit", async () => {
     const { settleRoomResult } = await import("../src/socket/match-settlement.js");
     const { room, match } = await endedRoom("surrender");

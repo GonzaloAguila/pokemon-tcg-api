@@ -141,7 +141,9 @@ export function finishTracker(
     benchUsed: tracker.benchUsed[seat],
     maxAttackDamage: tracker.maxAttackDamage[seat],
     prizesTakenByRival: taken(rival),
-    finalKoBy: tracker.finalKo && tracker.finalKo.seat === seat && winner === seat && endKind !== "forfeit" ? tracker.finalKo.name : null,
+    // Only a Knock Out ends a game by Prizes or by leaving the rival without Pokémon (a deck-out
+    // after the attack's endTurn is no winning KO)
+    finalKoBy: tracker.finalKo && tracker.finalKo.seat === seat && winner === seat && (endKind === "prizes" || endKind === "no_pokemon") ? tracker.finalKo.name : null,
   });
   return { endKind, feats: { player1: feats("player1", "player2"), player2: feats("player2", "player1") }, finalTurn: finalState?.turnNumber ?? 0 };
 }
