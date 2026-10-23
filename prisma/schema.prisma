@@ -256,6 +256,7 @@ model Match {
   id     String  @id @default(uuid())
   status String  @default("waiting") // waiting, playing, finished, abandoned
   // "normal" | "friendly" | "draft" (multiplayer, server-authoritative) | "ai" (single player vs AI, client-reported)
+  // | "gym" (a game of a Gym Leader series, server-run: player 2 is the leader's AI, nothing settled)
   mode   String  @default("normal")
   roomId String? // in-memory game room id (multiplayer)
 
@@ -302,6 +303,8 @@ model Match {
   player2StarterId String?
   startingSide     String?
   finalTurn        Int?
+  // Gym Leader game (mode "gym"): { leaderId, leaderName, mode, game, bestOf, score } (score after this game)
+  gym              Json?
 
   // Game data (for reconnection & replay)
   gameState  Json? // Full GameState JSON

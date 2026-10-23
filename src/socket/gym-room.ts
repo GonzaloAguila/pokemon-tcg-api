@@ -15,7 +15,8 @@
  * then `gymBattleResult` (score + the version's first-victory rewards, once), and the table is
  * freed (`onBattleEnd`). A series that ends with an error (no winner) refunds the entry cost and
  * gives its daily attempt back.
- * No settlement, match row, XP, chat, spectators or bets.
+ * Each game ends as a match row of the admin's match history (mode "gym", nothing settled); no
+ * settlement, XP, chat, spectators or bets.
  */
 import { randomUUID } from "node:crypto";
 import type { Server } from "socket.io";
@@ -29,6 +30,7 @@ import { grantGymVictoryRewards, type GrantedGymRewards } from "../modules/gym/r
 import type { GymScore, GymSeriesState } from "../modules/gym/gym.service.js";
 import { addCoins } from "../modules/users/users.service.js";
 import { attemptsOf, giveBackAttempt } from "../modules/gym/attempts.js";
+import { recordGymGame, type GymGameOutcome } from "../modules/gym/history.js";
 import { awaitedSide, defaultSelection, neutralizeEvents, withRoomRandom, type ActionResult, type GameRoom, type GameRoomManager } from "./rooms.js";
 import { maskRoomState } from "./room-state.js";
 import { DEFAULT_COSMETICS, loadSeatCosmetics, type SeatCosmetics } from "./room-cosmetics.js";
@@ -108,6 +110,8 @@ interface Runtime extends AISeat {
   entered: boolean;
   /** What the leader's emotes react to: the battle started, its Prizes left (a drop = a Knock Out). */
   reactions: { started: boolean; leaderPrizes: number | null };
+  /** When this game's room was built (its match row's start). */
+  startedAt: Date;
 }
 
 export interface GymTiming {
@@ -131,6 +135,8 @@ export interface GymRoomsOptions extends GymSeriesCallbacks {
   manager: GameRoomManager;
   io: () => Server | null;
   engine?: () => AdventureEngine;
+  /** Writes a finished game's match row (tests replace it). */
+  recordGame?: typeof recordGymGame;
 }
 
 type RoomTrainerChoice = { cardId: string; step: SelectionStep; chooser?: "self" | "opponent"; playedOffTurn?: boolean };
@@ -144,6 +150,7 @@ export class GymRooms {
   private readonly io: () => Server | null;
   private readonly engine: () => AdventureEngine;
   private readonly driver: AISeatDriver;
+  private readonly recordGame: typeof recordGymGame;
   private callbacks: GymSeriesCallbacks;
   private timing: GymTiming = {
     turnClockMs: GYM_TIMING.turnClockMs,
@@ -155,6 +162,7 @@ export class GymRooms {
     this.manager = options.manager;
     this.io = options.io;
     this.engine = options.engine ?? (() => gameCoreAdventureEngine);
+    this.recordGame = options.recordGame ?? recordGymGame;
     this.driver = new AISeatDriver(this.manager, this.io, this.engine);
     this.callbacks = { broadcast: options.broadcast, onNextGame: options.onNextGame, onGameEntered: options.onGameEntered, onBattleEnd: options.onBattleEnd };
   }
@@ -303,6 +311,7 @@ export class GymRooms {
       entered: false,
       // The battle-start emote is the series' (its first game only)
       reactions: { started: series.game > 1, leaderPrizes: null },
+      startedAt: new Date(),
     };
     this.runtimes.set(roomId, runtime);
     console.log(`[gym ${roomId}] game ${series.game} of ${userId} vs ${leader.id} (${mode})`);
@@ -569,6 +578,8 @@ export class GymRooms {
     if (how === "game" && state.gameResult === "victory") series.score.challenger += 1;
     else if (how === "timeout" || (how === "game" && state.gameResult === "defeat")) series.score.leader += 1;
     console.log(`[gym ${roomId}] game ${runtime.game} ended (${how}${how === "game" ? `: ${state.gameResult}` : ""}), ${series.score.challenger}-${series.score.leader}`);
+    const result = state.gameResult;
+    this.record(runtime, how !== "game" ? how : result === "victory" || result === "defeat" ? result : "draw", state.turnNumber ?? 0);
 
     if (how === "error") return this.finishSeries(runtime, "error");
     if (how === "disconnect") return this.finishSeries(runtime, "leader");
@@ -633,6 +644,19 @@ export class GymRooms {
     this.endSeries(runtime.roomId);
   }
 
+  /** The game's match row (admin match history), in the background: a failure is only logged. */
+  private record(runtime: Runtime, outcome: GymGameOutcome, finalTurn: number): void {
+    const { series } = runtime;
+    void this.recordGame({
+      roomId: runtime.roomId,
+      userId: series.userId,
+      outcome,
+      finalTurn,
+      startedAt: runtime.startedAt,
+      info: { leaderId: series.leader.id, leaderName: series.leader.name, mode: series.mode, game: runtime.game, bestOf: GYM_BEST_OF, score: { ...series.score } },
+    }).catch((error) => console.error(`[gym ${runtime.roomId}] Could not record game ${runtime.game} of ${series.userId}:`, error));
+  }
+
   private seriesState(series: Series, roomId: string, status: GymSeriesState["status"]): GymSeriesState {
     return { leaderId: series.leader.id, mode: series.mode, game: series.game, score: { ...series.score }, roomId, status };
   }
@@ -677,6 +701,7 @@ export class GymRooms {
     runtime.clockTimer = runtime.graceTimer = undefined;
     this.runtimes.delete(roomId);
     console.log(`[gym ${roomId}] closed by an admin`);
+    this.record(runtime, "admin", runtime.room.gameState?.turnNumber ?? 0);
     const { series } = runtime;
     if (series.finished) return;
     series.finished = true;

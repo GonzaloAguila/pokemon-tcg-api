@@ -159,6 +159,17 @@ async function loseGame(client: Client, roomId: string) {
   return seriesAfter(client, async () => expect((await act(client.socket, roomId, "surrender")).success).toBe(true));
 }
 
+/** The user's gym match rows (admin match history), oldest first, once there are `count`. */
+async function gymRowsOf(userId: string, count: number) {
+  const until = Date.now() + 3000;
+  for (;;) {
+    const rows = await prisma.match.findMany({ where: { player1Id: userId }, orderBy: { createdAt: "asc" } });
+    if (rows.length >= count) return rows;
+    if (Date.now() > until) throw new Error(`${rows.length} match rows, expected ${count}`);
+    await new Promise((r) => setTimeout(r, 20));
+  }
+}
+
 async function waitFor(check: () => boolean, ms = 3000) {
   const until = Date.now() + ms;
   while (!check()) {
@@ -305,7 +316,13 @@ describe("gym leader battles", () => {
     expect(await prisma.userCardBack.count({ where: { userId: a.user.id, cardBackId: "cardback-brock" } })).toBe(1);
     expect(await coinsOf(a.user.id)).toBe(2400);
     expect(chatted).toBe(false);
-    expect(await prisma.match.count({ where: { OR: [{ player1Id: a.user.id }, { player2Id: a.user.id }] } })).toBe(0);
+    // Each game is a match row of the admin's history, nothing settled (no XP, not counted)
+    const rows = await gymRowsOf(a.user.id, 2);
+    expect(rows.map((r) => ({ mode: r.mode, status: r.status, player2Id: r.player2Id, winnerId: r.winnerId, counted: r.counted, xp: r.player1Xp, settled: !!r.settledAt, winReason: r.winReason, gym: r.gym, roomId: r.roomId }))).toEqual([
+      { mode: "gym", status: "finished", player2Id: null, winnerId: a.user.id, counted: false, xp: 0, settled: true, winReason: "Ganó el retador", gym: { leaderId: "brock", leaderName: "Brock", mode: "normal", game: 1, bestOf: 3, score: score(1, 0) }, roomId: game1 },
+      { mode: "gym", status: "finished", player2Id: null, winnerId: a.user.id, counted: false, xp: 0, settled: true, winReason: "Ganó el retador", gym: { leaderId: "brock", leaderName: "Brock", mode: "normal", game: 2, bestOf: 3, score: score(2, 0) }, roomId: game2 },
+    ]);
+    expect(await prisma.match.count({ where: { player2Id: a.user.id } })).toBe(0);
     expect(gymService.tables().find((t) => t.mode === "normal")).toMatchObject({ inBattle: false, challenger: null, series: null });
     expect(await emitAck(a.socket, "getGymTables", {})).toMatchObject({ mySeries: null });
 
@@ -585,6 +602,8 @@ describe("gym leader battles", () => {
     await waitFor(() => a.attempts.length === 2);
     expect(a.attempts.map((x) => x.brock.used)).toEqual([1, 0]);
     expect(await prisma.gymAttempt.findFirst({ where: { userId: a.user.id } })).toMatchObject({ refunded: true });
+    // The closed game is in the admin's history, abandoned
+    expect(await gymRowsOf(a.user.id, 1)).toMatchObject([{ mode: "gym", status: "abandoned", winnerId: null, winReason: "Cerrada por un admin", roomId, gym: { game: 1 } }]);
     expect(await challenge(b)).toMatchObject({ ok: true });
   });
 

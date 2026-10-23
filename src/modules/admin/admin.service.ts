@@ -141,7 +141,7 @@ export async function searchUsers(
 // ---------------------------------------------------------------------------
 
 /** Filter values of the match history: Match.mode, or Lucky Duel (Match.gameMode, any mode). */
-export const MATCH_HISTORY_MODES = ["normal", "friendly", "draft", "ai", "lucky-duel"] as const;
+export const MATCH_HISTORY_MODES = ["normal", "friendly", "draft", "ai", "lucky-duel", "gym"] as const;
 export type MatchHistoryMode = (typeof MATCH_HISTORY_MODES)[number];
 
 export async function listMatches(filters: {
@@ -178,6 +178,7 @@ export async function listMatches(filters: {
         counted: true,
         winReason: true,
         finalTurn: true,
+        gym: true,
         createdAt: true,
         startedAt: true,
         finishedAt: true,
