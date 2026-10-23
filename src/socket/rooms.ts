@@ -116,8 +116,11 @@ import type { DeckRank } from "../modules/decks/deck-rank.js";
 /** Table type: a normal table, or Lucky Duel (random Basic and deck, no Bench, no Prizes). */
 export type TableMode = (typeof TABLE_MODES)[number];
 
-/** A room's mode: a lobby table's, or "adventure" (Modo Aventura battle, created by the server only). */
-export type RoomMode = TableMode | "adventure";
+/**
+ * A room's mode: a lobby table's, "adventure" (Modo Aventura battle) or "gym" (Gym Leader battle),
+ * the last two created by the server only.
+ */
+export type RoomMode = TableMode | "adventure" | "gym";
 
 /**
  * Modo Aventura battle room (adventure-room.ts keeps the rest): the human is player 1, player 2
@@ -127,6 +130,23 @@ export type RoomMode = TableMode | "adventure";
 export interface AdventureRoomInfo {
   runId: string;
   userId: string;
+}
+
+/**
+ * Gym Leader battle room (gym-room.ts keeps the rest): the challenger is player 1, the leader is
+ * the game-core AI as player 2 (no socket, no user id). Like an adventure battle (no answer clock,
+ * kick, forfeit timers, bets, match row or settlement), except that gym-room.ts runs the
+ * challenger's turn clock and disconnect grace, which end the battle as a loss.
+ */
+export interface GymRoomInfo {
+  leaderId: string;
+  mode: "normal" | "expert";
+  userId: string;
+}
+
+/** A room whose player 2 is the server's AI (adventure or gym battle). */
+export function hasAISeat(room: GameRoom): boolean {
+  return !!room.adventure || !!room.gym;
 }
 
 interface RoomConfig {
@@ -232,6 +252,8 @@ export interface GameRoom {
 
   /** Modo Aventura battle (see AdventureRoomInfo). */
   adventure?: AdventureRoomInfo;
+  /** Gym Leader battle (see GymRoomInfo). */
+  gym?: GymRoomInfo;
   /**
    * Math.random for every engine call of this room's actions and coin requests (adventure rooms:
    * the battle's seeded generator). The calls run synchronously inside the swap (withRandom).
@@ -1011,7 +1033,8 @@ export class GameRoomManager {
   private abandonMatch(room: GameRoom, reason: string): void {
     // Without a match row only a started game matters (a draft round waits for its result).
     // An adventure battle has no match: its run keeps the battle and rebuilds the room on rejoin.
-    if (room.adventure || room.resultSettled || (!room.matchId && !room.gameState)) return;
+    // A gym battle has none either: gym-room.ts ends it.
+    if (hasAISeat(room) || room.resultSettled || (!room.matchId && !room.gameState)) return;
     this.onAbandonCallback?.(room, reason);
   }
 
@@ -1046,7 +1069,7 @@ export class GameRoomManager {
 
   /** A lobby table anyone may take the free seat of now (listed in the lobby). */
   isJoinable(room: GameRoom): boolean {
-    return room.status === "waiting" && !room.isDraft && !room.adventure && !!room.player1Id && !room.player2Id && this.isCreatorReachable(room);
+    return room.status === "waiting" && !room.isDraft && !hasAISeat(room) && !!room.player1Id && !room.player2Id && this.isCreatorReachable(room);
   }
 
   /** The user's waiting tables: the creator was seen online now (offline TTL restarts). */
@@ -1200,6 +1223,56 @@ export class GameRoomManager {
   }
 
   /**
+   * A Gym Leader battle (gym-room.ts): already playing, player 1 = the challenger (reserved:
+   * nobody else may join or watch), player 2 = the leader (the server's AI, no user, no socket).
+   * Never listed in the lobby. `turnTimerDuration`: the challenger's clock (gym-room.ts runs it).
+   */
+  createGymRoom(input: {
+    roomId: string;
+    leaderId: string;
+    mode: "normal" | "expert";
+    userId: string;
+    deckId: string;
+    rival: CreatorInfo;
+    gameState: GameState;
+    turnTimerSeconds: number;
+    engineRandom: () => number;
+    coinSource: CoinSource;
+  }): GameRoom {
+    if (this.rooms.has(input.roomId)) throw new Error(`La sala ${input.roomId} ya existe`);
+    const room = this.createRoom(input.roomId, { mode: "gym", friendly: true, reservedUserId: input.userId });
+    room.config.prizeCount = input.gameState.playerPrizes.length;
+    room.status = "playing";
+    room.player1Id = input.userId;
+    room.player1DeckId = input.deckId;
+    room.players = [input.userId];
+    room.joiner = { ...input.rival };
+    room.gameState = input.gameState;
+    room.turnStartedAt = Date.now();
+    room.turnTimerDuration = input.turnTimerSeconds;
+    room.gym = { leaderId: input.leaderId, mode: input.mode, userId: input.userId };
+    room.engineRandom = input.engineRandom;
+    room.coinSource = input.coinSource;
+    return room;
+  }
+
+  /** Drop a gym room from memory (its battle ended): no callbacks, no settlement. */
+  removeGymRoom(roomId: string): void {
+    const room = this.rooms.get(roomId);
+    if (!room?.gym) return;
+    this.rooms.delete(roomId);
+    this.unmapRoomSockets(room);
+  }
+
+  /**
+   * An action the server takes for a seat (gym battles: the leader's answer to a step of the
+   * challenger's Trainer, which the AI driver doesn't cover). Same checks as a player's action.
+   */
+  async executeServerAction(roomId: string, side: PlayerKey, rawAction: unknown): Promise<ActionResult> {
+    return this.runAction(roomId, { side }, rawAction);
+  }
+
+  /**
    * Join an existing room: reconnect to your seat, or take the free one. A room that doesn't
    * exist is never created here (RoomNotFoundError): the client asking for it is rejoining a
    * game that is gone (e.g. after an API restart), and rooms only come from createRoom.
@@ -1247,7 +1320,7 @@ export class GameRoomManager {
     // Draft games seat their players through here too and are left out.
     if (!room.isDraft) {
       for (const other of this.rooms.values()) {
-        if (other.id !== roomId && !other.isDraft && !other.adventure && other.player1Id === userId && other.player2Id && other.status !== "finished") {
+        if (other.id !== roomId && !other.isDraft && !hasAISeat(other) && other.player1Id === userId && other.player2Id && other.status !== "finished") {
           throw new OwnTableTakenError(other.id);
         }
         // Already waiting for another table's creator: one seat at a time
@@ -1338,7 +1411,7 @@ export class GameRoomManager {
    */
   claimNoShow(roomId: string, userId: string, now = Date.now()): GameRoom {
     const room = this.rooms.get(roomId);
-    if (!room || room.status !== "waiting" || room.isDraft || room.adventure) throw new NoShowClaimError("La mesa ya no existe");
+    if (!room || room.status !== "waiting" || room.isDraft || hasAISeat(room)) throw new NoShowClaimError("La mesa ya no existe");
     if (room.player2Id !== userId) throw new NoShowClaimError("No estás esperando en esta mesa");
     if (!this.isAwaitingCreator(room) || !room.awaitingCreator || room.startPending) throw new NoShowClaimError("El creador ya llegó a la mesa");
     if (now < room.awaitingCreator.expiresAt) throw new NoShowClaimError("Todavía no puedes reclamar la victoria: el creador aún tiene tiempo");
@@ -1394,8 +1467,9 @@ export class GameRoomManager {
     const room = this.rooms.get(roomId);
     if (!room) return;
 
-    // Leaving an adventure battle keeps it (the map's "Continuar"): only surrendering loses it
-    if (room.adventure) {
+    // Leaving an adventure battle keeps it (the map's "Continuar"): only surrendering loses it.
+    // A gym battle too, but its challenger's disconnect grace starts (gym-room.ts seatChanged).
+    if (hasAISeat(room)) {
       if (room.player1SocketId === socketId) room.player1SocketId = null;
       this.unmapSocket(socketId, roomId);
       return;
@@ -2200,7 +2274,7 @@ export class GameRoomManager {
           const reflipCoins = reflipPlan ? flipAttackCoins(reflipPlan, flip) : undefined;
           // Adventure: the AI's attack is finished by its driver (finishAttack step: its own choices,
           // promotion, the end of its turn), never here
-          const aiFinishesAttack = !!room.adventure && !attackerIsPlayer1;
+          const aiFinishesAttack = hasAISeat(room) && !attackerIsPlayer1;
           newState = asAttacker((() => {
             const resolved = resolveAttackChoice(attackerView, selection, { skipEndTurn: true, ...(reflipCoins ? { coinResults: reflipCoins } : {}) });
             return resolved.pendingAttackChoice || resolved.gameResult !== null || aiFinishesAttack ? resolved : endTurn(resolved, true);
@@ -2632,6 +2706,8 @@ export class GameRoomManager {
       room.turnStartedAt = now;
       return;
     }
+    // Gym battles: gym-room.ts runs the challenger's turn clock (per turn, not per action)
+    if (room.gym) return;
     const durationMs = room.turnTimerDuration * 1000;
     const answerer = room.status === "playing" ? offTurnAnswerer(room.gameState) : null;
     if (answerer) {
@@ -2760,7 +2836,8 @@ export class GameRoomManager {
 
     // An adventure battle never forfeits nor expires here: adventure-room.ts evicts an idle one
     // from memory (its run keeps the snapshot and the room is rebuilt on rejoin)
-    if (room.adventure) return roomId;
+    // A gym battle: gym-room.ts runs the challenger's disconnect grace (seatChanged)
+    if (hasAISeat(room)) return roomId;
 
     // The creator left the lobby (reloaded, went to another page, lost the connection) while
     // waiting for an opponent: the table stays. Listed and joinable while they are online
@@ -2897,7 +2974,8 @@ export class GameRoomManager {
    */
   startSetupTimer(roomId: string, readySide: "player1" | "player2"): void {
     // Don't start if already running; adventure battles have no setup deadline
-    if (this.setupTimers.has(roomId) || this.rooms.get(roomId)?.adventure) return;
+    const target = this.rooms.get(roomId);
+    if (this.setupTimers.has(roomId) || (target && hasAISeat(target))) return;
 
     const startTime = Date.now();
     console.log(
@@ -3025,7 +3103,7 @@ export class GameRoomManager {
         }
         continue;
       }
-      if (room.status !== "waiting" || room.isDraft || room.adventure || room.startPending) continue;
+      if (room.status !== "waiting" || room.isDraft || hasAISeat(room) || room.startPending) continue;
       if (room.awaitingCreator && now < room.awaitingCreator.expiresAt) continue;
       if (!room.player1Id) {
         // Nobody holds it (shouldn't happen: leaveRoom deletes empty rooms)
@@ -3075,7 +3153,7 @@ export class GameRoomManager {
   getActiveRooms(): GameRoom[] {
     const rooms: GameRoom[] = [];
     for (const room of this.rooms.values()) {
-      if (room.isDraft || room.adventure) continue;
+      if (room.isDraft || hasAISeat(room)) continue;
       if (room.status === "playing" || this.isJoinable(room)) rooms.push(room);
     }
     return rooms;
@@ -3134,6 +3212,7 @@ export class GameRoomManager {
     const room = this.rooms.get(roomId);
     if (!room) return { success: false, error: "La partida ya no existe" };
     if (room.adventure) return { success: false, error: "No hay tiempo límite en el Modo Aventura" };
+    if (room.gym) return { success: false, error: "No se puede expulsar a un Líder de Gimnasio" };
     if (room.status !== "playing" || !room.gameState) {
       return { success: false, error: "La partida no está en curso" };
     }

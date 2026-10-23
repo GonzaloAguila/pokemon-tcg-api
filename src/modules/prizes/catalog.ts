@@ -63,6 +63,15 @@ export const ADVENTURE_CARD_BACKS: CosmeticItem[] = [
 ];
 
 /**
+ * Gym Leaders' card backs (docs/gym-leaders.md): v1 only the leader's own side uses them in gym
+ * battles (room cosmetics); not sold, won, random nor grantable yet (a later gym challenge grants
+ * them). Frontend CARD_BACKS entry `cardback-brock`.
+ */
+export const GYM_LEADER_CARD_BACKS: CosmeticItem[] = [
+  { itemId: "cardback-brock", name: "Brock", imageUrl: "/gym-leaders/brock/brock_bkc.png" },
+];
+
+/**
  * Playmats won in Modo Aventura (an adventure achievement's `cosmetic`, content/adventures): never
  * sold nor won elsewhere; admins can grant them. Frontend PLAYMAT_COLLECTION entries with source
  * "adventure".

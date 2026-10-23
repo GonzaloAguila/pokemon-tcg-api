@@ -403,15 +403,17 @@ export async function recordMatchResult(
 // Medals
 // ---------------------------------------------------------------------------
 
+/**
+ * Give the user a medal (Gym Leaders: `boulder` for beating Brock). Idempotent; `granted` is true
+ * only for the call that created it (concurrent calls: exactly one).
+ */
 export async function grantMedal(userId: string, medalId: string) {
-  const medal = await prisma.userMedal.upsert({
+  const { count } = await prisma.userMedal.createMany({ data: [{ userId, medalId }], skipDuplicates: true });
+  const medal = await prisma.userMedal.findUniqueOrThrow({
     where: { userId_medalId: { userId, medalId } },
-    update: {},
-    create: { userId, medalId },
     select: { medalId: true, unlockedAt: true },
   });
-
-  return { medal };
+  return { medal, granted: count === 1 };
 }
 
 // ---------------------------------------------------------------------------

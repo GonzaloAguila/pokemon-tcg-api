@@ -31,7 +31,7 @@ export async function openRoomMatch(room: GameRoom, mode: MultiplayerMode): Prom
   if (!room.player1Id || !room.player2Id) throw new Error("Need two players to start");
   const gameMode = room.config.mode;
   // Adventure battles are not matches (no row, no settlement: modules/adventure applies the result)
-  if (gameMode === "adventure") throw new Error("Adventure battles have no match");
+  if (gameMode === "adventure" || gameMode === "gym") throw new Error("Server AI battles have no match");
   const match = await openMultiplayerMatch({
     player1Id: room.player1Id,
     player2Id: room.player2Id,
@@ -61,8 +61,9 @@ export function settleRoomResult(
   // `noShow`: the loser never showed up at their table (settleMatch: no rewards for them)
   options: { isDraft?: boolean; noShow?: boolean } = {},
 ): void {
-  // Adventure battles never settle a match (adventure-room.ts applies their result to the run)
-  if (!room || room.resultSettled || room.adventure) return;
+  // Adventure battles never settle a match (adventure-room.ts applies their result to the run),
+  // nor do gym battles (gym-room.ts: medal only)
+  if (!room || room.resultSettled || room.adventure || room.gym) return;
   room.resultSettled = true;
 
   const player1Id = room.player1Id;
