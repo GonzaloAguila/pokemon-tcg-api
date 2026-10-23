@@ -20,6 +20,7 @@ import { achievementsRouter } from "./modules/achievements/index.js";
 import { chatRouter } from "./modules/chat/index.js";
 import { messagingRouter } from "./modules/messaging/index.js";
 import { adminRouter } from "./modules/admin/index.js";
+import { gymAdminRouter } from "./modules/gym/gym.controller.js";
 import { bugReportRouter } from "./modules/bug-report/index.js";
 import { waitlistRouter } from "./modules/waitlist/index.js";
 import { matchesRouter } from "./modules/matches/index.js";
@@ -94,6 +95,7 @@ export function createApp(): express.Express {
   app.use("/api", chatRouter);
   app.use("/api", messagingRouter);
   app.use("/api", adminRouter);
+  app.use("/api", gymAdminRouter);
   app.use("/api", express.json({ limit: "10mb" }), bugReportRouter);
   app.use("/api", waitlistRouter);
   app.use("/api", matchesRouter);
