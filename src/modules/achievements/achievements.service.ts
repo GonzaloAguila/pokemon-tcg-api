@@ -7,6 +7,7 @@ import { Errors } from "../../middleware/error-handler.js";
 import { getAdventures } from "../adventure/content/load.js";
 import type { AchievementCondition, AchievementCosmetic } from "../adventure/content/schema.js";
 import { achievementCosmeticView, grantAchievementCosmetic } from "../adventure/cosmetics.js";
+import { CHALLENGE_DEFS, challengeProgress, loadChallengeGames, type ChallengeId } from "./challenges.js";
 
 // ---------------------------------------------------------------------------
 // Tier rewards
@@ -28,8 +29,8 @@ const TIER_REWARDS: Record<string, { coins: number; coupons: number }> = {
 //   "retired"     — economy v2 replaced it (collection % and coin-balance achievements are now
 //                   the per-set milestones of /api/economy/milestones). It no longer progresses
 //                   or pays; rewards already claimed are kept.
-//   "unavailable" — needs in-game event tracking that doesn't exist yet ("manual"); it can't
-//                   progress, so it's shown as "Próximamente" and excluded from "Leyenda Viviente".
+//   ("unavailable" was the "Próximamente" achievements of the "manual" checker: replaced on
+//   2026-10-23 by the challenge achievements below; the status stays in the API's type.)
 //
 // Win / game / streak achievements read UserStats, which only counts online games (normal,
 // ranked, draft; not friendly or vs AI) that passed the anti-farming rules (turn 3, 2 minutes,
@@ -61,6 +62,10 @@ const TIER_REWARDS: Record<string, { coins: number; coupons: number }> = {
 //                       card gain that can complete it: packs, trades, market, Fichas de canje,
 //                       wheel/slots card prizes, battle pass, drafts, adventures.
 //
+// Challenge achievements (checker "challenge", challenges.ts): advanced goals of multiplayer games
+// (decks as played, played wins, feats), read from the user's settled match rows. Like the Modo
+// Aventura ones they don't count for "Leyenda Viviente".
+//
 // Modo Aventura achievements come from the adventure files (content/adventures/*.json,
 // `achievements[]`, checker "adventure"): their `condition` is read from the user's
 // AdventureProgress row of that adventure (won runs only; abandoned runs count nothing). They
@@ -76,7 +81,7 @@ type CheckerType =
   | "coins"
   | "level"
   | "meta"
-  | "manual"
+  | "challenge"
   | "lucky-streak"
   | "lucky-first-turn"
   | "lucky-win-with"
@@ -102,6 +107,8 @@ interface AchievementDef {
   condition?: AchievementCondition;
   /** An exclusive cosmetic granted with the reward on claim (adventure achievements). */
   cosmetic?: AchievementCosmetic;
+  /** "challenge": which one (challenges.ts). */
+  challengeId?: ChallengeId;
 }
 
 /** Catalog ids of the Base Set Rare Holo cards ("Holo Completo": 16 in game-core's catalog). */
@@ -110,58 +117,35 @@ export const BASE_SET_HOLO_IDS: readonly string[] = (getSetById("base-set")?.car
   .map((card) => card.id);
 
 const RAW_DEFS: Omit<AchievementDef, "status">[] = [
-  // Bronze (15)
+  // Bronze (4; the rest were "Próximamente" until 2026-10-23)
   { id: "bronze-1",  name: "Primera Victoria",     description: "Gana tu primera partida online", tier: "bronze", progressTarget: 1, checker: "stats-wins" },
   { id: "bronze-2",  name: "Coleccionista Novato", description: "Consigue tu primera carta", tier: "bronze", progressTarget: 1, checker: "collection" },
-  { id: "bronze-3",  name: "Evolucionador",        description: "Evoluciona un Pokémon por primera vez", tier: "bronze", progressTarget: 1, checker: "manual" },
-  { id: "bronze-4",  name: "Energía Vital",        description: "Adjunta 10 energías en total", tier: "bronze", progressTarget: 10, checker: "manual" },
   { id: "bronze-5",  name: "Primer Sobre",         description: "Abre tu primer sobre de cartas", tier: "bronze", progressTarget: 1, checker: "packs-opened" },
   { id: "bronze-6",  name: "Entrenador Dedicado",  description: "Juega 10 partidas online", tier: "bronze", progressTarget: 10, checker: "stats-games" },
-  { id: "bronze-7",  name: "Knock Out",            description: "Debilita 10 Pokémon enemigos", tier: "bronze", progressTarget: 10, checker: "manual" },
-  { id: "bronze-8",  name: "Mano Llena",           description: "Ten 10 cartas en mano al mismo tiempo", tier: "bronze", progressTarget: 1, checker: "manual" },
-  { id: "bronze-9",  name: "Sin Piedad",           description: "Gana sin que tu rival tome premios", tier: "bronze", progressTarget: 1, checker: "manual" },
-  { id: "bronze-10", name: "Velocista",            description: "Gana una partida en menos de 10 turnos", tier: "bronze", progressTarget: 1, checker: "manual" },
-  { id: "bronze-11", name: "Deck Completo",        description: "Usa todas las cartas de un deck en una partida", tier: "bronze", progressTarget: 1, checker: "manual" },
-  { id: "bronze-12", name: "Tipo Agua",            description: "Gana con un deck de tipo Agua", tier: "bronze", progressTarget: 1, checker: "manual" },
-  { id: "bronze-13", name: "Tipo Fuego",           description: "Gana con un deck de tipo Fuego", tier: "bronze", progressTarget: 1, checker: "manual" },
-  { id: "bronze-14", name: "Tipo Planta",          description: "Gana con un deck de tipo Planta", tier: "bronze", progressTarget: 1, checker: "manual" },
-  { id: "bronze-15", name: "Tipo Eléctrico",       description: "Gana con un deck de tipo Eléctrico", tier: "bronze", progressTarget: 1, checker: "manual" },
 
-  // Silver (12)
+  // Silver (5)
   { id: "silver-16", name: "Racha de 5",           description: "Gana 5 partidas online seguidas", tier: "silver", progressTarget: 5, checker: "stats-streak" },
   { id: "silver-17", name: "Semana Activa",        description: "Entra 7 días seguidos", tier: "silver", progressTarget: 7, checker: "login-streak" },
-  { id: "silver-18", name: "Intocable",            description: "Gana sin recibir daño en tu activo", tier: "silver", progressTarget: 1, checker: "manual" },
   { id: "silver-19", name: "Coleccionista",        description: "Consigue 25 cartas diferentes (de cualquier set)", tier: "silver", progressTarget: 25, checker: "collection" },
-  { id: "silver-20", name: "Multi-deck",           description: "Gana con 3 decks diferentes", tier: "silver", progressTarget: 3, checker: "manual" },
-  { id: "silver-21", name: "Estratega",            description: "Usa 5 cartas Trainer en un turno", tier: "silver", progressTarget: 1, checker: "manual" },
-  { id: "silver-22", name: "Comeback",             description: "Gana estando 4 premios abajo", tier: "silver", progressTarget: 1, checker: "manual" },
-  { id: "silver-23", name: "Súper Evolución",      description: "Evoluciona hasta Stage 2 en un turno", tier: "silver", progressTarget: 1, checker: "manual" },
-  { id: "silver-24", name: "Crítico",              description: "Haz 100+ de daño en un ataque", tier: "silver", progressTarget: 1, checker: "manual" },
-  { id: "silver-25", name: "Resistencia",          description: "Sobrevive 5 ataques con el mismo Pokémon", tier: "silver", progressTarget: 1, checker: "manual" },
   { id: "silver-26", name: "50 Victorias",         description: "Acumula 50 victorias online", tier: "silver", progressTarget: 50, checker: "stats-wins" },
   { id: "silver-27", name: "Entrenador Experto",   description: "Alcanza el nivel 15", tier: "silver", progressTarget: 15, checker: "level" },
 
-  // Gold (10)
+  // Gold (7)
   { id: "gold-28",   name: "Racha de 10",          description: "Gana 10 partidas online seguidas", tier: "gold", progressTarget: 10, checker: "stats-streak" },
   { id: "gold-29",   name: "Centenario",           description: "Gana 100 partidas online", tier: "gold", progressTarget: 100, checker: "stats-wins" },
   { id: "gold-30",   name: "Colección 75%",        description: "Retirado: ahora son los hitos de colección por set", tier: "gold", progressTarget: 77, checker: "collection" },
   { id: "gold-31",   name: "Mes Dedicado",         description: "Entra 30 días seguidos", tier: "gold", progressTarget: 30, checker: "login-streak" },
-  { id: "gold-32",   name: "Perfeccionista",       description: "Gana 10 partidas sin perder ningún Pokémon", tier: "gold", progressTarget: 10, checker: "manual" },
-  { id: "gold-33",   name: "Domador",              description: "Usa todos los tipos de energía", tier: "gold", progressTarget: 7, checker: "manual" },
   { id: "gold-34",   name: "Veterano",             description: "Juega 200 partidas online", tier: "gold", progressTarget: 200, checker: "stats-games" },
   { id: "gold-35",   name: "Rica Colección",       description: "Retirado: ya no se premia acumular monedas", tier: "gold", progressTarget: 5000, checker: "coins" },
-  { id: "gold-36",   name: "Todos los Decks",      description: "Gana con todos los theme decks", tier: "gold", progressTarget: 6, checker: "manual" },
   { id: "gold-37",   name: "Maestro Trainer",      description: "Alcanza el nivel 30", tier: "gold", progressTarget: 30, checker: "level" },
 
-  // Platinum (8)
+  // Platinum (6)
   { id: "platinum-38", name: "Racha de 20",        description: "Gana 20 partidas online seguidas", tier: "platinum", progressTarget: 20, checker: "stats-streak" },
   { id: "platinum-39", name: "Quinientos",         description: "Gana 500 partidas online", tier: "platinum", progressTarget: 500, checker: "stats-wins" },
   { id: "platinum-40", name: "Holo Completo",      description: `Consigue las ${BASE_SET_HOLO_IDS.length} cartas holo de Base Set`, tier: "platinum", progressTarget: BASE_SET_HOLO_IDS.length, checker: "holo-collection" },
   { id: "platinum-41", name: "Año Activo",         description: "Entra 100 días distintos", tier: "platinum", progressTarget: 100, checker: "login-days" },
-  { id: "platinum-42", name: "Élite",              description: "Alcanza el top 100 del ranking", tier: "platinum", progressTarget: 1, checker: "manual" },
   { id: "platinum-43", name: "Millonario",         description: "Retirado: ya no se premia acumular monedas", tier: "platinum", progressTarget: 25000, checker: "coins" },
   { id: "platinum-44", name: "Sin Derrotas",       description: "Gana 30 partidas online seguidas", tier: "platinum", progressTarget: 30, checker: "stats-streak" },
-  { id: "platinum-45", name: "Campeón",            description: "Gana 3 torneos", tier: "platinum", progressTarget: 3, checker: "manual" },
 
   // Legend (5)
   { id: "legend-46", name: "Racha Legendaria",     description: "Gana 50 partidas online seguidas", tier: "legend", progressTarget: 50, checker: "stats-streak" },
@@ -198,18 +182,24 @@ function adventureDefs(): AchievementDef[] {
   );
 }
 
-/** Whether an achievement counts for "Leyenda Viviente": every obtainable one except adventures'. */
-const countsForMeta = (d: AchievementDef) => d.status === "active" && d.checker !== "meta" && d.checker !== "adventure";
+/** The challenge achievements (challenges.ts). */
+function challengeDefs(): AchievementDef[] {
+  return CHALLENGE_DEFS.map((c) => ({ ...c, checker: "challenge" as const, status: "active" as const, challengeId: c.id }));
+}
+
+/** Whether an achievement counts for "Leyenda Viviente": every obtainable one except adventures' and challenges'. */
+const countsForMeta = (d: AchievementDef) =>
+  d.status === "active" && d.checker !== "meta" && d.checker !== "adventure" && d.checker !== "challenge";
 
 const ACHIEVEMENT_DEFS: AchievementDef[] = (() => {
   const defs: AchievementDef[] = RAW_DEFS.map((d) => ({
     ...d,
-    status: RETIRED_IDS.has(d.id) ? "retired" : d.checker === "manual" ? "unavailable" : "active",
+    status: RETIRED_IDS.has(d.id) ? "retired" : "active",
   }));
   // "Leyenda Viviente": every other achievement that can actually be obtained
   const meta = defs.find((d) => d.checker === "meta")!;
   meta.progressTarget = defs.filter(countsForMeta).length;
-  return [...defs, ...adventureDefs()];
+  return [...defs, ...challengeDefs(), ...adventureDefs()];
 })();
 
 /** Ids that count for "Leyenda Viviente". */
@@ -355,7 +345,7 @@ export async function checkAndUpdateProgress(userId: string): Promise<ClaimableA
     });
 
   // Load all needed data in parallel
-  const [user, stats, distinctCardCount, existingAchievements, adventureRows, packsOpened, longestLoginStreak, holoCount] = await Promise.all([
+  const [user, stats, distinctCardCount, existingAchievements, adventureRows, packsOpened, longestLoginStreak, holoCount, challengeGames] = await Promise.all([
     prisma.user.findUnique({
       where: { id: userId },
       select: { level: true, loginDays: true },
@@ -385,6 +375,7 @@ export async function checkAndUpdateProgress(userId: string): Promise<ClaimableA
     pending("holo-collection").then((needed) =>
       needed ? prisma.userCard.count({ where: { userId, quantity: { gt: 0 }, cardDefId: { in: [...BASE_SET_HOLO_IDS] } } }) : 0,
     ),
+    pending("challenge").then((needed) => (needed ? loadChallengeGames(userId) : [])),
   ]);
 
   if (!user) return [];
@@ -404,7 +395,7 @@ export async function checkAndUpdateProgress(userId: string): Promise<ClaimableA
   const newlyClaimable: ClaimableAchievement[] = [];
 
   for (const def of ACHIEVEMENT_DEFS) {
-    // Retired achievements no longer progress; manual ones need in-game tracking (not built)
+    // Retired achievements no longer progress
     if (def.status !== "active") continue;
     // Claimed ones never change (skip their queries)
     if (existingMap.get(def.id)?.unlockedAt) continue;
@@ -452,6 +443,9 @@ export async function checkAndUpdateProgress(userId: string): Promise<ClaimableA
       case "lucky-first-turn":
       case "lucky-win-with":
         currentProgress = await prisma.match.count({ where: luckyDuelWinWhere(userId, def) });
+        break;
+      case "challenge":
+        currentProgress = challengeProgress(def.challengeId!, challengeGames);
         break;
     }
 
@@ -504,7 +498,7 @@ export function refreshProgressInBackground(userId: string, trigger: string): vo
 // ---------------------------------------------------------------------------
 
 /** Checkers that don't read UserStats (they progress for an account without that row too). */
-const CHECKERS_WITHOUT_STATS = new Set<CheckerType>(["adventure", "packs-opened", "login-streak", "login-days", "holo-collection"]);
+const CHECKERS_WITHOUT_STATS = new Set<CheckerType>(["adventure", "packs-opened", "login-streak", "login-days", "holo-collection", "challenge"]);
 
 /** card_transactions reasons of an opened pack (one row per pack). */
 const PACK_OPENING_REASONS: CardChangeReason[] = ["pack_purchase", "daily_pack", "stored_pack", "prize_pack"];
