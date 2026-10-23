@@ -305,6 +305,14 @@ model Match {
   finalTurn        Int?
   // Gym Leader game (mode "gym"): { leaderId, leaderName, mode, game, bestOf, score } (score after this game)
   gym              Json?
+  // Challenge achievements (multiplayer; null for Lucky Duel and games before them): each player's
+  // deck as played { source: "user" | "draft" | "theme" | "fallback", cards: [{ cardId, qty }] },
+  // how the game ended ("prizes" | "no_pokemon" | "deck_out" | "draw" | "forfeit" | "interrupted")
+  // and what each seat did { player1, player2 } (socket/challenge-tracker.ts SeatFeats)
+  player1Deck      Json?
+  player2Deck      Json?
+  endKind          String?
+  feats            Json?
 
   // Game data (for reconnection & replay)
   gameState  Json? // Full GameState JSON
