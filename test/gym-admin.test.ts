@@ -53,10 +53,13 @@ describe("gym admin endpoints", () => {
         leaderId: "brock",
         name: "Brock",
         title: "Líder del Gimnasio de Ciudad Plateada",
+        avatarId: "gym-brock",
+        mode: "normal",
         modes: ["normal"],
         status: "closed",
         openedAt: null,
         closesAt: null,
+        queueLength: 0,
         queue: [],
         current: null,
         inBattle: false,
@@ -83,6 +86,7 @@ describe("gym admin endpoints", () => {
     const listed = (await http.request("GET", "/api/admin/gyms", { token: superToken })).body.gyms[0];
     expect(listed.current).toMatchObject({ userId: a.id, username: a.username, status: "ready", mode: "normal" });
     expect(listed.queue).toEqual([expect.objectContaining({ userId: b.id, username: b.username, position: 1 })]);
+    expect(listed.queueLength).toBe(1);
 
     const closed = await http.request("POST", "/api/admin/gyms/brock/close", { token: superToken });
     expect(closed.status).toBe(200);

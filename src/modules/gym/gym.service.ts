@@ -97,10 +97,15 @@ export interface GymAdminStatus {
   leaderId: string;
   name: string;
   title: string;
+  avatarId: string;
+  /** The version its table offers (v1: "normal"); `modes` = every version it has. */
+  mode: GymMode;
   modes: GymMode[];
   status: GymStatus;
   openedAt: number | null;
   closesAt: number | null;
+  /** Waiting challengers (not counting the one ready / playing), like gymTables.queueLength. */
+  queueLength: number;
   queue: { userId: string; mode: GymMode; position: number; joinedAt: number }[];
   current: { userId: string; mode: GymMode; status: "ready" | "playing"; roomId: string; readyExpiresAt: number | null } | null;
   inBattle: boolean;
@@ -437,10 +442,13 @@ export class GymService {
       leaderId: leader.id,
       name: leader.name,
       title: leader.title,
+      avatarId: leader.avatarId,
+      mode: "normal",
       modes: leaderModes(leader),
       status: state.status,
       openedAt: state.openedAt,
       closesAt: state.closesAt,
+      queueLength: state.queue.length,
       queue: state.queue.map((entry, i) => ({ userId: entry.userId, mode: entry.mode, position: i + 1, joinedAt: entry.joinedAt })),
       current: current
         ? { userId: current.userId, mode: current.mode, status: current.status, roomId: current.roomId, readyExpiresAt: current.readyExpiresAt }

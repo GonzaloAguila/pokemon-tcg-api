@@ -367,6 +367,29 @@ describe("gym leader battles", () => {
     expect(a.results).toEqual([]);
   });
 
+  it("the queue is per user: a lobby socket leaving keeps the place; a new socket gets the ready state", async () => {
+    gymService.open("brock");
+    const a = await challenger();
+    const b = await challenger();
+    expect(await queueUp(a)).toEqual({ ok: true });
+    expect(await queueUp(b)).toEqual({ ok: true });
+    b.socket.disconnect();
+    await new Promise((r) => setTimeout(r, 100));
+    expect(gymService.queueStateOf(b.user.id)).toMatchObject({ status: "waiting", position: 1 });
+    // The first battle ends while B is on another page; B's new lobby socket asks
+    const roomA = a.ready[0].roomId;
+    await enter(a, roomA);
+    await act(a.socket, roomA, "surrender");
+    await waitFor(() => gymService.queueStateOf(b.user.id)?.status === "ready");
+    const lobby = await server.connect(tokenFor(b.user));
+    const queue = nextEvent<any>(lobby, "gymQueue");
+    const tables = nextEvent<any[]>(lobby, "gymTables");
+    const ack = new Promise((resolve) => lobby.emit("getGymTables", (res: unknown) => resolve(res)));
+    expect(await queue).toMatchObject({ leaderId: "brock", status: "ready", position: 0, roomId: expect.stringMatching(/^gym-/) });
+    expect((await tables)[0]).toMatchObject({ leaderId: "brock", inBattle: false });
+    expect(await ack).toEqual({ ok: true });
+  });
+
   it("leaveGymQueue: out of the queue; refused once the battle started", async () => {
     gymService.open("brock");
     const a = await challenger();

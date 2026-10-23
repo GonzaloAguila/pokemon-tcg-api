@@ -79,7 +79,7 @@ Server → client:
   `{ leaderId, mode, position, status: "waiting" | "ready" | "playing", roomId?, readyExpiresAt? } | null`
   (`position` 1 = next; `null` = not queued).
 - `gymBattleReady` — to one user: `{ leaderId, mode, roomId, expiresAt }`. The client navigates to
-  `/multiplayer/<roomId>?gym=1` (or a dedicated route) and emits `joinRoom { roomId }` as usual; the
+  `/play/gym/battle/<roomId>` (frontend route) and emits `joinRoom { roomId }` as usual; the
   server answers with the normal `gameStart` (+ `gym: GymGameStartInfo`).
 - `gymBattleResult` — to one user after the battle: `{ leaderId, mode, victory, medalId, medalGranted }`
   (`medalGranted` = first time).
@@ -124,6 +124,11 @@ Event names and payload shapes are exactly the contract above. Details the contr
   `gymQueue` is sent to the user's sockets on every change of their own state, including `null`
   when they leave, are skipped (ready window expired, deck no longer valid) or their battle ends.
   Order: `gymBattleReady` goes out before the matching `gymQueue`.
+  Queue membership is per user: a socket disconnecting (leaving `/lobby`) never drops anyone from a
+  queue; only `leaveGymQueue`, the 60 s ready window running out, a deck that fails the re-check, or
+  the battle ending does. Every per-user event (`gymQueue`, `gymBattleReady`, `gymBattleResult`) goes
+  to the user's room (`user:<id>`), so all their sockets get it. `getGymTables` always answers with
+  both `gymTables` and the caller's `gymQueue` (ack `{ ok: true }`, optional).
 - **Entering the battle**: `joinRoom { roomId }` (no deck: the battle uses the deck the user queued
   with, re-checked now). Errors on that `joinRoom` (the usual `error` event): `ROOM_NOT_FOUND`
   (not your ready battle, expired, or the API restarted), `GYM_DECK_INVALID` (the deck no longer
@@ -148,7 +153,8 @@ Event names and payload shapes are exactly the contract above. Details the contr
   (desconexión)" }`, `gymBattleResult { victory: false }`. Surrender is the normal `surrender`
   action.
 - **End**: `gameOver` first, then `gymBattleResult` to the user's sockets (`user:<id>` room). The
-  medal is granted only on a victory in a played battle; `medalGranted` is true only the first
+  medal is written before `gymBattleResult` is sent (so `/api/users/me` already lists it), and
+  only on a victory in a played battle; `medalGranted` is true only the first
   time (`grantMedal` → `UserMedal`, read by `/api/users/me` `medals`). No match row, coins, XP,
   stats, missions or achievements. The finished room stays 2 minutes (game-over screen), then is
   dropped.
@@ -169,8 +175,8 @@ Event names and payload shapes are exactly the contract above. Details the contr
 
 Permission `users:economy` (no new permission; superadmin always). All under `/api`:
 
-- `GET /admin/gyms` → `{ gyms: [{ leaderId, name, title, modes: ["normal"], status: "closed" |
-  "open" | "closing", openedAt, closesAt, queue: [{ userId, username, mode, position, joinedAt }],
+- `GET /admin/gyms` → `{ gyms: [{ leaderId, name, title, avatarId, mode: "normal", modes: ["normal"],
+  status: "closed" | "open" | "closing", openedAt, closesAt, queueLength, queue: [{ userId, username, mode, position, joinedAt }],
   current: { userId, username, mode, status: "ready" | "playing", roomId, readyExpiresAt } | null,
   inBattle, schedule: { enabled, nextOpenAt, minGapMinutes, maxGapMinutes, openMinutes } }] }`.
 - `POST /admin/gyms/:leaderId/open { minutes?: 1–1440 }` (default 45) → `{ gym }` (same row). Also
