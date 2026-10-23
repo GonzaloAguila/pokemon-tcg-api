@@ -4,6 +4,7 @@ import { requireAuth } from "../../middleware/auth.js";
 import { Errors } from "../../middleware/error-handler.js";
 import { checkAndUpdateProgress } from "../achievements/achievements.service.js";
 import * as matchesService from "./matches.service.js";
+import { listUserMatches } from "./history.js";
 
 const router = Router();
 
@@ -92,6 +93,30 @@ router.post(
       // Lucky Duel achievements (and level ones) progress from this result
       checkAndUpdateProgress(userId).catch(console.error);
       res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// GET /matches/history?page&limit — The signed-in player's settled games (online, vs AI, gym),
+// newest first, from their side: { data: HistoryEntry[], total, page, limit }.
+// ---------------------------------------------------------------------------
+
+const historyQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).max(10_000).default(1),
+  limit: z.coerce.number().int().min(1).max(50).default(10),
+});
+
+router.get(
+  "/matches/history",
+  requireAuth,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const query = historyQuerySchema.safeParse(req.query);
+      if (!query.success) throw Errors.ValidationError("Página inválida");
+      res.json(await listUserMatches(req.user!.userId, query.data.page, query.data.limit));
     } catch (err) {
       next(err);
     }
