@@ -76,7 +76,7 @@ export interface AISeatHooks<S extends AISeat> {
    * The AI has no step now (the human must act, or something only the room can answer for the
    * AI). Return true when the room changed the state for the AI and the loop should look again.
    */
-  onIdle?(seat: S): boolean;
+  onIdle?(seat: S): boolean | Promise<boolean>;
 }
 
 export class AISeatDriver {
@@ -127,7 +127,7 @@ export class AISeatDriver {
       }
       const peek = withRoomRandom(random, () => engine.nextAIStep(seat.room.gameState!, seat.plan));
       if (!peek) {
-        if (hooks.onIdle?.(seat)) continue;
+        if (hooks.onIdle && (await hooks.onIdle(seat))) continue;
         return;
       }
       // The step's own pause, or longer while coins shown before it are still animating
@@ -140,7 +140,7 @@ export class AISeatDriver {
       const before = seat.room.gameState;
       const next = withRoomRandom(random, () => engine.nextAIStep(before, seat.plan));
       if (!next) {
-        if (hooks.onIdle?.(seat)) continue;
+        if (hooks.onIdle && (await hooks.onIdle(seat))) continue;
         return;
       }
       const coins: AICoins[] = [];

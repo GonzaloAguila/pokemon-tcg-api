@@ -21,6 +21,8 @@ const instanceId = z.string().min(1).max(200);
 /** DB deck UUID or theme deck id ("brushfire"). */
 const deckId = z.string().min(1).max(64);
 const idList = (max: number) => z.array(instanceId).max(max);
+/** A Gym Leader id ("brock"). */
+const gymLeaderId = z.string().regex(/^[a-z0-9-]{1,40}$/, "gimnasio inválido");
 
 const BASIC_ENERGY_TYPES = ["grass", "fire", "water", "lightning", "psychic", "fighting"] as const;
 const coinSide = z.enum(["heads", "tails"]);
@@ -145,6 +147,16 @@ export const socketSchemas = {
   }),
 
   globalChatMessage,
+
+  // Gym Leaders (gym-handlers.ts, docs/gym-leaders.md); every one answers an ack { ok, error? }
+  getGymTables: z.object({}).nullish(),
+  joinGymQueue: z.object({
+    leaderId: gymLeaderId,
+    /** v1: only "normal" exists (the expert version comes later); missing = "normal" */
+    mode: z.enum(["normal", "expert"]).nullish().transform((v) => v ?? "normal"),
+    deckId,
+  }),
+  leaveGymQueue: z.object({ leaderId: gymLeaderId }),
 };
 
 // ---------------------------------------------------------------------------

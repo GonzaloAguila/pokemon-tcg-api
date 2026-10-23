@@ -48,6 +48,8 @@ import { openRoomMatch, roomMatchMode, settleRoomResult } from "./match-settleme
 import { socketSchemas, parsePayload } from "./schemas.js";
 import { getIo, setIo, userRoom } from "./io-registry.js";
 import { AdventureRooms } from "./adventure-room.js";
+import { GymRooms } from "./gym-room.js";
+import { claimGymBattle, registerGymEvents, wireGymService } from "./gym-handlers.js";
 import { setAdventureBattleHost } from "../modules/adventure/adventure.service.js";
 import { authenticateHandshake, checkSocketSession, kickBlockedUser, requireSocketUser } from "./session-guard.js";
 import * as chatService from "../modules/chat/chat.service.js";
@@ -483,6 +485,9 @@ roomManager.startPeriodicCleanup();
 export const adventureRooms = new AdventureRooms({ manager: roomManager, io: getIo });
 setAdventureBattleHost(adventureRooms);
 
+/** Gym Leader battle rooms (player 2 = the leader, the server's AI), in the same manager. */
+export const gymRooms = new GymRooms({ manager: roomManager, io: getIo });
+
 /** The state `viewer` receives for this room: masked, plus `awaitingUserId` (room-state.ts). */
 function stateFor(room: GameRoom, state: GameState, viewer: Viewer) {
   return maskRoomState(roomManager, room, state, viewer);
@@ -507,8 +512,9 @@ function finishRoomGame(
   settlementReason: string = reason,
 ): void {
   const room = roomManager.getRoom(roomId);
-  // An adventure battle: its result goes to the run (adventure-room.ts), never to a match
-  if (room?.adventure) {
+  // An adventure battle: its result goes to the run (adventure-room.ts), never to a match; a gym
+  // battle's to gym-room.ts (medal, queue)
+  if (room?.adventure || room?.gym) {
     io.to(roomId).emit("gameOver", { winner: winner === "draw" ? null : winner, reason });
     return;
   }
@@ -816,6 +822,10 @@ export function setupSocketHandlers(io: Server): void {
   });
 
   adventureRooms.start();
+  // Gym Leaders: the gym state's changes go out as gymTables / gymQueue / gymBattleReady; an action
+  // the server takes for the leader (an answer to the challenger's Trainer) is broadcast like any
+  gymRooms.setCallbacks({ broadcast: (roomId, actionType, result) => broadcastActionResult(io, roomId, actionType, result, null) });
+  wireGymService(io, gymRooms);
 
   io.on("connection", (socket: Socket) => {
     console.log(`🔌 Client connected: ${socket.id}`);
@@ -1008,15 +1018,25 @@ export function setupSocketHandlers(io: Server): void {
         // Never create a room here: the client is rejoining a game that is gone (finished,
         // deleted, or lost in an API restart). The frontend goes back to the lobby.
         // An adventure battle lost from memory (restart, idle) is rebuilt from its run
-        const target = roomManager.getRoom(roomId) ?? (roomId.startsWith("adv-") ? await adventureRooms.restore(roomId, userId) : undefined);
+        let target = roomManager.getRoom(roomId) ?? (roomId.startsWith("adv-") ? await adventureRooms.restore(roomId, userId) : undefined);
+        // A Gym Leader battle whose challenger enters it in time: built now (gymBattleReady's room)
+        if (!target && roomId.startsWith("gym-")) {
+          const claimed = await claimGymBattle(gymRooms, roomId, userId);
+          if (claimed && "error" in claimed) {
+            socket.emit("error", { code: "GYM_DECK_INVALID", message: claimed.error });
+            return;
+          }
+          target = claimed ?? undefined;
+        }
         if (!target) {
           socket.emit("error", { code: "ROOM_NOT_FOUND", message: new RoomNotFoundError().message });
           return;
         }
         // Lucky Duel: no deck (the server builds both), a deck sent anyway is ignored
         const luckyDuel = target.config.mode === "lucky-duel";
-        // Adventure battles play the run's deck (built by the server), like Lucky Duel
-        const noDeck = luckyDuel || target.config.mode === "adventure";
+        // Adventure battles play the run's deck (built by the server), like Lucky Duel; gym battles
+        // the deck the challenger queued with
+        const noDeck = luckyDuel || target.config.mode === "adventure" || target.config.mode === "gym";
         const deckId = noDeck ? undefined : parsed.data.deckId;
         const identity = await getPlayableIdentity(userId);
         if ("error" in identity) { socket.emit("error", { message: identity.error }); return; }
@@ -1053,6 +1073,8 @@ export function setupSocketHandlers(io: Server): void {
         // The creator opening a table where a rival waits for them: that game starts now
         const openingAwaited = seated && target.player1Id === userId && roomManager.isAwaitingCreator(target);
         const room = await roomManager.joinRoom(roomId, userId, socket.id, identity);
+        // A gym challenger back at their battle: the disconnect grace stops
+        if (room.gym) gymRooms.seatChanged(roomId);
         console.log(`[joinRoom] Room state after join:`, {
           player1Id: room.player1Id,
           player2Id: room.player2Id,
@@ -1112,6 +1134,7 @@ export function setupSocketHandlers(io: Server): void {
             turnTimerDuration: room.turnTimerDuration,
             spectatorCount: roomManager.spectatorCount(room),
             ...(room.adventure ? { adventure: adventureRooms.gameStartInfo(roomId) } : {}),
+            ...(room.gym ? { gym: gymRooms.gameStartInfo(roomId) } : {}),
           });
           socket.emit("chatHistory", { roomId, messages: room.chat });
           return;
@@ -1167,6 +1190,8 @@ export function setupSocketHandlers(io: Server): void {
           return;
         }
         await roomManager.leaveRoom(roomId, socket.id);
+        // A gym challenger leaving their battle: the disconnect grace runs (the battle stays)
+        gymRooms.seatChanged(roomId);
 
         socket.leave(roomId);
         socket.to(roomId).emit("playerLeft", { socketId: socket.id });
@@ -1302,6 +1327,8 @@ export function setupSocketHandlers(io: Server): void {
         const result = await roomManager.executeAction(roomId, socket.id, action);
         // Adventure battle: lucky coin, input log, snapshot, then the AI's turn or the result
         adventureRooms.afterHumanAction(roomId, action as { type: string; payload?: unknown }, result);
+        // Gym battle: the challenger's clock, then the leader's turn or the result
+        gymRooms.afterHumanAction(roomId, result);
 
         if (!result.success) {
           // A takePrize with no Prize owed (double click): no error to show, the code only
@@ -1342,6 +1369,8 @@ export function setupSocketHandlers(io: Server): void {
       // could emit into any socket.io room, e.g. another user's private "user:<id>" room.
       const room = roomManager.getRoom(roomId);
       if (!socket.rooms.has(roomId) || !room) return;
+      // Gym battles have no chat (nobody to talk to: the leader is the server's AI)
+      if (room.gym) return;
       if (!allowChatMessage(tokenUser.userId)) return;
 
       // Name and role from the DB (not in the JWT); spectators' messages say so ("Espectador")
@@ -1581,6 +1610,8 @@ export function setupSocketHandlers(io: Server): void {
         socket.to(roomId).emit("playerDisconnected", {
           socketId: socket.id,
         });
+        // A gym challenger away from their battle: the disconnect grace runs
+        gymRooms.seatChanged(roomId);
       }
       // The user's waiting tables lost their seat socket or their creator went offline (hidden
       // until they come back): refresh the lobbies and the user's other tabs
@@ -1594,6 +1625,8 @@ export function setupSocketHandlers(io: Server): void {
     registerDraftEvents(io, socket, roomManager);
     // Trade tables (card trades between players)
     registerTradeEvents(io, socket);
+    // Gym Leaders: tables, queue (gym-handlers.ts)
+    registerGymEvents(socket);
   });
 
   // A game dropped without a result (admin close, both players gone): refund the table bet
