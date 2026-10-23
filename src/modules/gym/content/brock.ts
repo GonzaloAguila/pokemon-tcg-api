@@ -12,15 +12,16 @@ import type { GymLeaderDef, GymRules } from "./types.js";
 
 /**
  * The owner's rules (v2.1), both versions: no Grass, Psychic or Fighting Pokémon, none of Brock's
- * own Pokémon, no Stadium cards (Pewter City Gym is always in play), at most 25 Trainers.
+ * own Pokémon, no Stadium cards (Pewter City Gym is always in play), at most 20 Trainers; at most 2
+ * copies of each Trainer (expert: 1). Pokémon and Energy keep the normal 4 (owner, 2026-10-23).
  */
 const BROCK_RULES = {
   bannedPokemonTypes: ["grass", "psychic", "fighting"],
   bannedOwners: ["Brock"],
   noStadiums: true,
-  maxTrainers: 25,
+  maxTrainers: 20,
   fixedStadiumId: "gym-heroes-115-pewter-city-gym",
-} satisfies Omit<GymRules, "maxCopies">;
+} satisfies Omit<GymRules, "maxTrainerCopies">;
 
 export const BROCK: GymLeaderDef = {
   id: "brock",
@@ -33,8 +34,8 @@ export const BROCK: GymLeaderDef = {
   entryCost: 100,
   attemptsPerDay: 2,
   rules: {
-    normal: { ...BROCK_RULES, maxCopies: 2 },
-    expert: { ...BROCK_RULES, maxCopies: 1 },
+    normal: { ...BROCK_RULES, maxTrainerCopies: 2 },
+    expert: { ...BROCK_RULES, maxTrainerCopies: 1 },
   },
   rewards: {
     normal: { medalId: "boulder", coins: 1500, coinId: "golem", cardBackId: "cardback-brock" },

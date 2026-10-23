@@ -12,8 +12,9 @@ deck and table (both versions open at once, each opened and closed on its own); 
 leaders' decks**; a **public catalog** of every leader.
 
 v2.1 (owner's rules for Brock, same day): **Pewter City Gym always in play**; no Grass, Psychic or
-Fighting Pokémon, none of Brock's own Pokémon, no Stadium cards, at most 25 Trainers, at most 2
-copies of each card (1 in EXPERT; basic Energy exempt); a challenge is a **best of 3** series and
+Fighting Pokémon, none of Brock's own Pokémon, no Stadium cards, at most 20 Trainers, at most 2
+copies of each Trainer (1 in EXPERT; Pokémon and Energy keep the normal 4 — owner, 2026-10-23,
+replacing "2 copies of every card" and 25 Trainers); a challenge is a **best of 3** series and
 costs **100 coins**. (The v1/v2 20/20/20 composition, the Grass/Water Energy ban and the separate
 Trainer / special Energy copy limits are gone.)
 
@@ -37,8 +38,8 @@ battles use the game-core smart AI through `nextAIStep` / `applyAIStep`, exactly
   after 5 games goes to the score, a tie to the leader).
 - **Brock's rules for the challenger's deck** (both versions): no **Pokémon** with type Grass, Psychic
   or Fighting (Energy is not restricted by type); no Pokémon of Brock (`ownerOf`: every "Brock's …");
-  no Stadium cards; at most **25 Trainers** (Trainers played as Basics count); at most **2 copies of
-  each card by name** (EXPERT: **1**), basic Energy exempt. Plus the normal deck rules
+  no Stadium cards; at most **20 Trainers** (Trainers played as Basics count); at most **2 copies of
+  each Trainer by name** (EXPERT: **1**); Pokémon and Energy keep the normal 4. Plus the normal deck rules
   (`checkDeckPlayable`: 60 cards, 4 copies, owned cards…). Theme decks (non-UUID ids) only if they
   pass the same rules. The rules never apply to the leader's own deck — but neither deck has a
   Stadium: **Pewter City Gym** is in play from the start of every game (set on the created state as
@@ -81,7 +82,7 @@ interface GymLeaderDef {
   attemptsPerDay: 2;                 // series per user per economy day (both versions together)
   cosmetics: { playmatId; coinId; cardBackId };        // the AI seat's
   emotes?: { battleStart?; knockOut?; victory? };     // frontend LEADER_EMOTES ids
-  rules:   { normal: GymRules;   expert?: GymRules };  // internal: bannedPokemonTypes, bannedOwners, noStadiums, maxTrainers?, maxCopies?, fixedStadiumId?
+  rules:   { normal: GymRules;   expert?: GymRules };  // internal: bannedPokemonTypes, bannedOwners, noStadiums, maxTrainers?, maxTrainerCopies?, fixedStadiumId?
   rewards: { normal: GymRewards; expert?: GymRewards };
   decks:   { normal: CardEntry[]; expert?: CardEntry[] };   // content defaults (CardEntry = { cardId, qty })
 }
@@ -105,7 +106,7 @@ Server → client:
     bannedOwners: string[];                // "Brock" = no "Brock's …" Pokémon
     noStadiums: boolean;
     maxTrainers: number | null;            // total, Trainers played as Basics count
-    maxCopies: number | null;              // per card name, basic Energy exempt; null = the normal 4
+    maxTrainerCopies: number | null;       // per Trainer name; null = the normal 4 (Pokémon and Energy always 4)
     fixedStadium: { cardId: string; name: string } | null;   // in play every game
   }
   interface GymRewards { medalId: string | null; coins: number; coinId: string | null; cardBackId: string | null }

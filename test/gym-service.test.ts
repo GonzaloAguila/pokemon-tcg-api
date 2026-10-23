@@ -61,8 +61,8 @@ describe("gym state", () => {
           bannedPokemonTypes: ["grass", "psychic", "fighting"],
           bannedOwners: ["Brock"],
           noStadiums: true,
-          maxTrainers: 25,
-          maxCopies: 2,
+          maxTrainers: 20,
+          maxTrainerCopies: 2,
           fixedStadium: { cardId: "gym-heroes-115-pewter-city-gym", name: "Pewter City Gym" },
         },
         rewards: { medalId: "boulder", coins: 1500, coinId: "golem", cardBackId: "cardback-brock" },
@@ -82,7 +82,7 @@ describe("gym state", () => {
     expect(gym.tables()).toEqual([
       expect.objectContaining({
         mode: "expert",
-        rules: expect.objectContaining({ maxCopies: 1, maxTrainers: 25 }),
+        rules: expect.objectContaining({ maxTrainerCopies: 1, maxTrainers: 20 }),
         rewards: { medalId: null, coins: 3000, coinId: null, cardBackId: "cardback-brock-expert" },
       }),
     ]);

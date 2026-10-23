@@ -53,12 +53,12 @@ const ADMIN_DECK = [
 
 describe("public gym catalog", () => {
   it("GET /api/gyms (no auth): every leader with its entry cost and both versions' rules and rewards, open or not", async () => {
-    const rules = (maxCopies: number) => ({
+    const rules = (maxTrainerCopies: number) => ({
       bannedPokemonTypes: ["grass", "psychic", "fighting"],
       bannedOwners: ["Brock"],
       noStadiums: true,
-      maxTrainers: 25,
-      maxCopies,
+      maxTrainers: 20,
+      maxTrainerCopies,
       fixedStadium: { cardId: "gym-heroes-115-pewter-city-gym", name: "Pewter City Gym" },
     });
     const res = await http.request("GET", "/api/gyms");

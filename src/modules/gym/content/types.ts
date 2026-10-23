@@ -27,8 +27,8 @@ export interface GymRules {
   noStadiums: boolean;
   /** At most this many Trainer cards in total (Trainers played as Basics count). */
   maxTrainers?: number;
-  /** At most this many copies of each card by name, basic Energy exempt (absent = the normal 4). */
-  maxCopies?: number;
+  /** At most this many copies of each Trainer by name (absent = the normal 4; Pokémon and Energy keep 4). */
+  maxTrainerCopies?: number;
   /** Stadium in play from the start of every game, never replaced (game-core card id). */
   fixedStadiumId?: string;
 }

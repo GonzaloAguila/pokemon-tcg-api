@@ -3,10 +3,10 @@
  * (Pokémon only: Energy is not restricted by type), banned owners ("Brock" = no "Brock's …"
  * Pokémon), no Stadium cards (the gym's own is always in play), at most N Trainers in total
  * (Trainers played as Basics — Mysterious Fossil, Clefairy Doll — count) and at most N copies of
- * each card by name (basic Energy exempt). Pure: the normal deck rules (60 cards, 4 copies,
- * ownership) are checkDeckPlayable's.
+ * each Trainer by name (Pokémon and Energy keep the normal 4). Pure: the normal deck rules (60
+ * cards, 4 copies, ownership) are checkDeckPlayable's.
  */
-import { findCardById, hasOwner, isBasicEnergy, isPokemonCard, isTrainerCard, type Card } from "@gonzaloaguila/game-core";
+import { findCardById, hasOwner, isPokemonCard, isTrainerCard, type Card } from "@gonzaloaguila/game-core";
 import type { BannableType, CardEntry, GymRules } from "./content/types.js";
 
 /** "Pokémon de tipo …" (getEnergyTypeInSpanish speaks of Energy: "Eléctrica", "Psíquica"). */
@@ -64,16 +64,16 @@ export function gymRuleErrors(entries: readonly CardEntry[], rules: GymRules): s
     const trainers = trainerCount(entries);
     if (trainers > rules.maxTrainers) errors.push(`Tu mazo no puede tener más de ${rules.maxTrainers} Entrenadores (tiene ${trainers})`);
   }
-  if (rules.maxCopies !== undefined) {
-    // By the card's display name (card.name, as the deck builder and checkDeckPlayable show it)
+  if (rules.maxTrainerCopies !== undefined) {
+    // Trainers only, by the card's display name (card.name, as the deck builder and checkDeckPlayable show it)
     const byName = new Map<string, number>();
     for (const entry of entries) {
       const card = findCardById(entry.cardId);
-      if (!card || entry.qty <= 0 || isBasicEnergy(card)) continue;
+      if (!card || entry.qty <= 0 || !isTrainerCard(card)) continue;
       byName.set(card.name, (byName.get(card.name) ?? 0) + entry.qty);
     }
     for (const [name, qty] of byName) {
-      if (qty > rules.maxCopies) errors.push(`Tu mazo no puede tener más de ${copies(rules.maxCopies)} de ${name} (tiene ${qty})`);
+      if (qty > rules.maxTrainerCopies) errors.push(`Tu mazo no puede tener más de ${copies(rules.maxTrainerCopies)} de ${name} (tiene ${qty})`);
     }
   }
   return errors;
@@ -93,8 +93,8 @@ export function fixedStadiumOf(rules: GymRules): { cardId: string; name: string 
 
 /**
  * The rules in plain Spanish for a table / the admin panel: "Sin Pokémon de tipo Planta, Psíquico
- * o Lucha", "Sin Pokémon de Brock", "Sin cartas de Estadio", "Hasta 25 Entrenadores", "Hasta 2
- * copias de cada carta (la Energía básica no tiene límite)", "Pewter City Gym siempre en juego".
+ * o Lucha", "Sin Pokémon de Brock", "Sin cartas de Estadio", "Hasta 20 Entrenadores", "Hasta 2
+ * copias de cada Entrenador", "Pewter City Gym siempre en juego".
  */
 export function describeGymRules(rules: GymRules): string[] {
   const lines: string[] = [];
@@ -102,7 +102,7 @@ export function describeGymRules(rules: GymRules): string[] {
   if (rules.bannedOwners.length > 0) lines.push(`Sin Pokémon de ${orList(rules.bannedOwners)}`);
   if (rules.noStadiums) lines.push("Sin cartas de Estadio");
   if (rules.maxTrainers !== undefined) lines.push(`Hasta ${rules.maxTrainers} Entrenadores`);
-  if (rules.maxCopies !== undefined) lines.push(`Hasta ${copies(rules.maxCopies)} de cada carta (la Energía básica no tiene límite)`);
+  if (rules.maxTrainerCopies !== undefined) lines.push(`Hasta ${copies(rules.maxTrainerCopies)} de cada Entrenador`);
   const stadium = fixedStadiumOf(rules);
   if (stadium) lines.push(`${stadium.name} siempre en juego`);
   return lines;
@@ -115,7 +115,7 @@ export function publicGymRules(rules: GymRules) {
     bannedOwners: [...rules.bannedOwners] as string[],
     noStadiums: rules.noStadiums,
     maxTrainers: rules.maxTrainers ?? null,
-    maxCopies: rules.maxCopies ?? null,
+    maxTrainerCopies: rules.maxTrainerCopies ?? null,
     fixedStadium: fixedStadiumOf(rules),
   };
 }
