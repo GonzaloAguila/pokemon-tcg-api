@@ -440,6 +440,25 @@ export class GymRooms {
     timer.unref?.();
   }
 
+  /**
+   * The room was closed from the backoffice (closeRoomByAdmin already told the challenger and
+   * dropped it): the battle ends without a result and the queue moves on.
+   */
+  closedByAdmin(roomId: string): void {
+    const runtime = this.runtimes.get(roomId);
+    if (!runtime || runtime.finished) return;
+    runtime.finished = true;
+    for (const timer of [runtime.clockTimer, runtime.graceTimer]) if (timer) clearTimeout(timer);
+    runtime.clockTimer = runtime.graceTimer = undefined;
+    this.runtimes.delete(roomId);
+    console.log(`[gym ${roomId}] closed by an admin`);
+    try {
+      this.onBattleEnd?.(roomId);
+    } catch (error) {
+      console.error(`[gym ${roomId}] onBattleEnd failed:`, error);
+    }
+  }
+
   private forget(roomId: string): void {
     const runtime = this.runtimes.get(roomId);
     if (!runtime) return;

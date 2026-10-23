@@ -18,6 +18,12 @@ import type { GameRoom } from "./rooms.js";
 
 type GymAck = { ok: true } | { ok: false; error: string };
 
+/** joinRoom on a ready gym room that can't start: the deck no longer passes, or the build failed. */
+export interface GymClaimError {
+  error: string;
+  code: "GYM_DECK_INVALID" | "GYM_BATTLE_FAILED";
+}
+
 /** The gym state's changes reach every lobby (`gymTables`) and the users concerned (`gymQueue`). */
 export function wireGymService(io: Server, gymRooms: GymRooms): void {
   gymService.setListeners({
@@ -34,14 +40,14 @@ export function wireGymService(io: Server, gymRooms: GymRooms): void {
 }
 
 /** Battles being built (two tabs entering at once build one room). */
-const building = new Map<string, Promise<GameRoom | { error: string } | null>>();
+const building = new Map<string, Promise<GameRoom | GymClaimError | null>>();
 
 /**
  * joinRoom on a `gym-…` room that isn't built yet: the user's ready battle, entered in time, with
  * their queued deck checked again (a deck that no longer passes skips them). Null when it isn't
  * their ready battle (the caller answers ROOM_NOT_FOUND).
  */
-export function claimGymBattle(gymRooms: GymRooms, roomId: string, userId: string): Promise<GameRoom | { error: string } | null> {
+export function claimGymBattle(gymRooms: GymRooms, roomId: string, userId: string): Promise<GameRoom | GymClaimError | null> {
   let pending = building.get(roomId);
   if (!pending) {
     pending = buildGymBattle(gymRooms, roomId, userId).finally(() => building.delete(roomId));
@@ -50,7 +56,7 @@ export function claimGymBattle(gymRooms: GymRooms, roomId: string, userId: strin
   return pending;
 }
 
-async function buildGymBattle(gymRooms: GymRooms, roomId: string, userId: string): Promise<GameRoom | { error: string } | null> {
+async function buildGymBattle(gymRooms: GymRooms, roomId: string, userId: string): Promise<GameRoom | GymClaimError | null> {
   const battle = gymService.claimable(roomId, userId);
   if (!battle) return null;
   const deck = await checkChallengerDeck(userId, battle.deckId, battle.leader);
@@ -58,11 +64,18 @@ async function buildGymBattle(gymRooms: GymRooms, roomId: string, userId: string
   if (!gymService.claimable(roomId, userId)) return null;
   if (!deck.ok) {
     gymService.battleFailed(roomId);
-    return { error: deck.error };
+    return { error: deck.error, code: "GYM_DECK_INVALID" };
   }
-  const room = await gymRooms.build({ roomId, userId, deckId: battle.deckId, leader: battle.leader, mode: battle.mode, playerDeck: deck.entries });
-  gymService.battleStarted(roomId);
-  return room;
+  try {
+    const room = await gymRooms.build({ roomId, userId, deckId: battle.deckId, leader: battle.leader, mode: battle.mode, playerDeck: deck.entries });
+    gymService.battleStarted(roomId);
+    return room;
+  } catch (error) {
+    // Never leave the gym waiting on a battle that couldn't be built: the next challenger plays
+    console.error(`[gym ${roomId}] Could not build the battle:`, error);
+    gymService.battleFailed(roomId);
+    return { error: "No se pudo empezar la batalla", code: "GYM_BATTLE_FAILED" };
+  }
 }
 
 export function registerGymEvents(socket: Socket): void {
@@ -72,8 +85,9 @@ export function registerGymEvents(socket: Socket): void {
 
   // getGymTables {}: the open gyms (gymTables) and, signed in, the user's own queue (gymQueue)
   socket.on("getGymTables", (payload: unknown, ack?: unknown) => {
-    const reply = replier(ack);
-    const parsed = parsePayload(socketSchemas.getGymTables, payload ?? {});
+    // `emit("getGymTables", ack)` (no payload) works too
+    const reply = replier(typeof payload === "function" ? payload : ack);
+    const parsed = parsePayload(socketSchemas.getGymTables, typeof payload === "function" ? {} : (payload ?? {}));
     if (!parsed.ok) return reply({ ok: false, error: parsed.error });
     socket.emit("gymTables", gymService.tables());
     const userId: string | undefined = socket.data.user?.userId;

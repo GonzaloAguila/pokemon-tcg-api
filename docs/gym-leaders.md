@@ -114,3 +114,73 @@ Admin (REST, permission `users:economy` or a new `gyms:manage`, superadmin alway
 - Catalog entries: avatar `gym-brock` (exclusive, not selectable/ownable by players) and card back
   `cardback-brock` (`/gym-leaders/brock/brock_bkc.png`).
 - Admin backoffice: open/close a gym (button per leader, minutes) in the rooms tab.
+
+## API as built (feat/gym-leaders) — clarifications, no contract change
+
+Event names and payload shapes are exactly the contract above. Details the contract left open:
+
+- **`gymQueue.position`**: 1 = next in line while `status: "waiting"`; **0** while the user's own
+  battle is `ready` or `playing` (then `roomId` is set; `readyExpiresAt` only while `ready`).
+  `gymQueue` is sent to the user's sockets on every change of their own state, including `null`
+  when they leave, are skipped (ready window expired, deck no longer valid) or their battle ends.
+  Order: `gymBattleReady` goes out before the matching `gymQueue`.
+- **Entering the battle**: `joinRoom { roomId }` (no deck: the battle uses the deck the user queued
+  with, re-checked now). Errors on that `joinRoom` (the usual `error` event): `ROOM_NOT_FOUND`
+  (not your ready battle, expired, or the API restarted), `GYM_DECK_INVALID` (the deck no longer
+  passes: the user is skipped, `message` says why), `GYM_BATTLE_FAILED` (server error: skipped).
+  Reconnecting to a battle in progress is the same `joinRoom` (any tab) → `gameStart` with `gym`.
+  `checkActiveGame` also returns a gym battle in progress (`activeGame.roomId`).
+- **`gameStart`** for a gym room: `mode: "gym"`, `isPlayer1: true` (the challenger is always
+  player 1), `opponentInfo = { username: "Brock", avatarId: "gym-brock", titleId: null }`,
+  `opponentCosmetics = { playmatId: "playmat-ciudad-plateada", coinId: "golem", cardBackId:
+  "cardback-brock" }`, `opponentVariantMap: {}`, the challenger's own cosmetics/variants as usual,
+  `gym = { leaderId, name, title, mode, medalId, avatarId }`.
+- **Clock**: `turnTimerDuration` = 180 and `gameState.clock` (`kind: "turn"`, `userId` = the
+  challenger while the battle waits on them, `startedAt`, `durationSeconds`) as in table games. One
+  clock per turn of the challenger (the opening counts as one; an answer they owe during Brock's
+  turn — a promotion, Terror Strike… — gets its own), not restarted by each action. Running out:
+  the state ends (`GAME_OVER`, log line "Jugador 1 se quedó sin tiempo"), `gameOver { winner:
+  "player2", reason: "Se acabó tu tiempo" }`, then `gymBattleResult { victory: false }`.
+  `requestKick` in a gym room answers "No se puede expulsar a un Líder de Gimnasio".
+- **Away from the battle** (socket disconnected, or `leaveRoom` during the battle: the battle stays
+  and can be re-entered): after 2 minutes without a seat socket the battle is lost — log "Jugador 1
+  abandonó la batalla", `gameOver { winner: "player2", reason: "Abandonaste la batalla
+  (desconexión)" }`, `gymBattleResult { victory: false }`. Surrender is the normal `surrender`
+  action.
+- **End**: `gameOver` first, then `gymBattleResult` to the user's sockets (`user:<id>` room). The
+  medal is granted only on a victory in a played battle; `medalGranted` is true only the first
+  time (`grantMedal` → `UserMedal`, read by `/api/users/me` `medals`). No match row, coins, XP,
+  stats, missions or achievements. The finished room stays 2 minutes (game-over screen), then is
+  dropped.
+- **Brock's side**: the game-core smart AI (`nextAIStep`/`applyAIStep`, same driver as Modo
+  Aventura: `src/socket/ai-seat.ts`). He never plays a Trainer whose steps the challenger answers.
+  When the challenger plays one whose step Brock answers (Erika, Challenge!, Blaine's Quiz, Lt.
+  Surge's Treaty, a Chaos Gym offer…), the server answers with game-core's AI answer (Chaos Gym
+  offers: declined) and broadcasts it like an action (`opponentAction { type:
+  "answerTrainerChoice" }` + `gameState`).
+- **Privacy**: gym rooms are never in `roomList`, `spectateRoom` answers `PRIVATE_TABLE`,
+  `chatMessage` is ignored, nobody else can `joinRoom` them (`ROOM_NOT_FOUND` before the battle is
+  built, reserved after). They appear in the backoffice `GET /api/admin/rooms` with `mode: "gym"`;
+  closing one there (`DELETE /api/admin/rooms/:roomId`) ends it without a result and the queue
+  moves on.
+- **Persistence**: none. An API restart closes every gym and drops queues and battles.
+
+### Admin (as built)
+
+Permission `users:economy` (no new permission; superadmin always). All under `/api`:
+
+- `GET /admin/gyms` → `{ gyms: [{ leaderId, name, title, modes: ["normal"], status: "closed" |
+  "open" | "closing", openedAt, closesAt, queue: [{ userId, username, mode, position, joinedAt }],
+  current: { userId, username, mode, status: "ready" | "playing", roomId, readyExpiresAt } | null,
+  inBattle, schedule: { enabled, nextOpenAt, minGapMinutes, maxGapMinutes, openMinutes } }] }`.
+- `POST /admin/gyms/:leaderId/open { minutes?: 1–1440 }` (default 45) → `{ gym }` (same row). Also
+  reopens / extends a gym that is open or closing.
+- `POST /admin/gyms/:leaderId/close` → `{ gym }`: no new challengers; queued users still play
+  (`closing`), an empty gym is `closed` at once.
+- Unknown leader → 404; bad `minutes` → 400.
+
+### Scheduler
+
+`src/modules/gym/gym.config.ts` `GYM_SCHEDULE` (`enabled: false`, 2–6 h gap, 45 min open) and
+`GYM_TIMING` (ready window 60 s, turn clock 3 min, disconnect grace 2 min). Turning the scheduler on
+is a one-line change + API deploy (no env var).

@@ -625,6 +625,8 @@ function announceSpectators(io: Server, room: GameRoom): void {
 export function closeRoomByAdmin(io: Server | null, roomId: string, reason = "Mesa cerrada por un administrador"): boolean {
   const creatorId = roomManager.getRoom(roomId)?.player1Id;
   if (!roomManager.forceDeleteRoom(roomId)) return false;
+  // A gym battle closed this way has no result: the gym's queue moves on
+  gymRooms.closedByAdmin(roomId);
   if (io) {
     emitMyRooms(io, creatorId);
     io.to(roomId).emit("gameClosed", { roomId, reason });
@@ -1023,7 +1025,7 @@ export function setupSocketHandlers(io: Server): void {
         if (!target && roomId.startsWith("gym-")) {
           const claimed = await claimGymBattle(gymRooms, roomId, userId);
           if (claimed && "error" in claimed) {
-            socket.emit("error", { code: "GYM_DECK_INVALID", message: claimed.error });
+            socket.emit("error", { code: claimed.code, message: claimed.error });
             return;
           }
           target = claimed ?? undefined;

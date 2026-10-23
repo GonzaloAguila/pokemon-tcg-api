@@ -9,7 +9,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import type { Socket as ClientSocket } from "socket.io-client";
 import { findCardById, type GameState } from "@gonzaloaguila/game-core";
 import { prisma } from "../src/lib/prisma.js";
-import { gymRooms, roomManager } from "../src/socket/handlers.js";
+import { closeRoomByAdmin, gymRooms, roomManager } from "../src/socket/handlers.js";
 import { gymService } from "../src/modules/gym/gym.service.js";
 import { createUser } from "./helpers.js";
 import { nextEvent, startSocketServer, tokenFor } from "./socket-helpers.js";
@@ -348,6 +348,23 @@ describe("gym leader battles", () => {
     expect(state(roomId).opponentHand.length).toBeGreaterThan(handBefore);
     expect(state(roomId).isPlayerTurn).toBe(true);
     expect(state(roomId).gamePhase).toBe("PLAYING");
+  });
+
+  it("a gym battle closed from the backoffice ends without a result and the queue moves on", async () => {
+    gymService.open("brock");
+    const a = await challenger();
+    const b = await challenger();
+    expect(await queueUp(a)).toEqual({ ok: true });
+    expect(await queueUp(b)).toEqual({ ok: true });
+    const roomId = a.ready[0].roomId;
+    await enter(a, roomId);
+    const closed = nextEvent<any>(a.socket, "gameClosed");
+    const readyB = nextEvent<any>(b.socket, "gymBattleReady");
+    expect(closeRoomByAdmin(server.io, roomId)).toBe(true);
+    expect(await closed).toMatchObject({ roomId });
+    await readyB;
+    expect(gymService.queueStateOf(a.user.id)).toBeNull();
+    expect(a.results).toEqual([]);
   });
 
   it("leaveGymQueue: out of the queue; refused once the battle started", async () => {
