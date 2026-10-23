@@ -120,10 +120,14 @@ export const OVERLAY_DEFS = [
   { id: "neon", label: "Neón" },
   { id: "prism", label: "Prisma" },
   { id: "fire", label: "Ígneo" },
+  { id: "spectral", label: "Espectral" },
 ];
 
 /** Only these overlays are sold in the market; the rest are prize-only. */
 export const MARKET_OVERLAY_IDS = ["holo-sparkle", "sepia", "rainbow"];
+
+/** Exclusive overlays: only granted by hand (admin, tournament rewards), never a random prize. */
+export const EXCLUSIVE_OVERLAY_IDS = ["spectral"];
 
 export interface VariantItem extends CosmeticItem {
   cardDefId: string;
@@ -146,3 +150,5 @@ function buildVariants(overlayIds: string[]): VariantItem[] {
 
 export const MARKET_VARIANTS = buildVariants(MARKET_OVERLAY_IDS);
 export const ALL_VARIANTS = buildVariants(OVERLAY_DEFS.map((o) => o.id));
+/** The variants a random prize (wheel, slots) can give: all but the exclusive ones. */
+export const POOL_VARIANTS = buildVariants(OVERLAY_DEFS.map((o) => o.id).filter((id) => !EXCLUSIVE_OVERLAY_IDS.includes(id)));

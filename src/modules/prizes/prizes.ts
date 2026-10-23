@@ -18,7 +18,7 @@ import {
   AVAILABLE_CARD_BACKS,
   AVAILABLE_COINS,
   AVAILABLE_PLAYMATS,
-  ALL_VARIANTS,
+  POOL_VARIANTS,
 } from "./catalog.js";
 import { POOL_EMOTES, emoteImageUrl } from "../emotes/catalog.js";
 import { grantEmote } from "../emotes/emotes.service.js";
@@ -146,7 +146,7 @@ export function jackpotEmote(owned: ReadonlySet<string>): ResolvedPrize[] {
 }
 
 export function resolveRandomOverlay(): ResolvedPrize {
-  const skin = pick(ALL_VARIANTS);
+  const skin = pick(POOL_VARIANTS);
   return {
     type: "overlay",
     overlayId: skin.overlayId,
