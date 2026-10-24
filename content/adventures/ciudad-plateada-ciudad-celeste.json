@@ -5,7 +5,7 @@
   "image": "/adventures/ciudad-plateada-ciudad-celeste.jpg",
   "entryCost": 20,
   "requires": { "type": "gymLeader", "leaderId": "brock" },
-  "name": "De camino a Ciudad Celeste",
+  "name": "Camino a Ciudad Celeste",
   "description": "Con la medalla Roca en el bolsillo, cruza la Ruta 3 y el Monte Moon hasta Ciudad Celeste. El Team Rocket anda cerca: si te gana, te roba cartas del mazo.",
   "rules": { "hearts": 3, "prizeCount": 3, "openingHand": 7, "minDeckSize": 20, "maxDeckSize": 40, "maxCopies": null },
   "starters": [
@@ -949,56 +949,56 @@
     {
       "id": "adventure-2-clear-normal",
       "name": "Rumbo a Ciudad Celeste",
-      "description": "Completa De camino a Ciudad Celeste en normal",
+      "description": "Completa Camino a Ciudad Celeste en normal",
       "tier": "bronze",
       "condition": { "type": "clear", "difficulty": "normal" }
     },
     {
       "id": "adventure-2-clear-hard",
       "name": "Más allá del Monte Moon",
-      "description": "Completa De camino a Ciudad Celeste en difícil",
+      "description": "Completa Camino a Ciudad Celeste en difícil",
       "tier": "platinum",
       "condition": { "type": "clear", "difficulty": "hard" }
     },
     {
       "id": "adventure-2-flawless",
       "name": "Sin perder el rumbo",
-      "description": "Completa De camino a Ciudad Celeste sin perder corazones",
+      "description": "Completa Camino a Ciudad Celeste sin perder corazones",
       "tier": "silver",
       "condition": { "type": "flawless" }
     },
     {
       "id": "adventure-2-all-starters",
       "name": "Equipo completo",
-      "description": "Completa De camino a Ciudad Celeste con los 3 iniciales",
+      "description": "Completa Camino a Ciudad Celeste con los 3 iniciales",
       "tier": "silver",
       "condition": { "type": "allStarters" }
     },
     {
       "id": "adventure-2-all-starters-hard",
       "name": "Leyenda del Monte Moon",
-      "description": "Completa De camino a Ciudad Celeste en difícil con los 3 iniciales",
+      "description": "Completa Camino a Ciudad Celeste en difícil con los 3 iniciales",
       "tier": "platinum",
       "condition": { "type": "allStarters", "difficulty": "hard" }
     },
     {
       "id": "adventure-2-purist",
       "name": "Viajero ligero",
-      "description": "Completa De camino a Ciudad Celeste saltando todos los tesoros",
+      "description": "Completa Camino a Ciudad Celeste saltando todos los tesoros",
       "tier": "gold",
       "condition": { "type": "purist" }
     },
     {
       "id": "adventure-2-monotype",
       "name": "Fiel a tu tipo",
-      "description": "Completa De camino a Ciudad Celeste sin cartas ni energías de otro tipo que el de tu inicial (incoloros permitidos)",
+      "description": "Completa Camino a Ciudad Celeste sin cartas ni energías de otro tipo que el de tu inicial (incoloros permitidos)",
       "tier": "silver",
       "condition": { "type": "monotype" }
     },
     {
       "id": "adventure-2-no-steal",
       "name": "Ni una carta para el Team Rocket",
-      "description": "Completa De camino a Ciudad Celeste sin que el Team Rocket te robe ninguna carta",
+      "description": "Completa Camino a Ciudad Celeste sin que el Team Rocket te robe ninguna carta",
       "tier": "silver",
       "condition": { "type": "noSteal" }
     }
