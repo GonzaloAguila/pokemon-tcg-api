@@ -231,6 +231,8 @@ function adventureProgress(def: AchievementDef, row: AdventureProgressRow | unde
       return row.puristClears;
     case "monotype":
       return row.monotypeClears;
+    case "noSteal":
+      return 0; // no progress counter yet: wired with the run logic that records steals
     case "allStarters": {
       const starters =
         condition.difficulty === "hard" ? row.clearedStartersHard

@@ -40,8 +40,14 @@ export function loadAdventures(dir: string = ADVENTURES_DIR): ReadonlyMap<string
     if (`${adventure.id}.json` !== file) problems.push(`${file}: el id "${adventure.id}" no coincide con el nombre del archivo`);
     adventures.set(adventure.id, adventure);
   }
+  const byOrder = new Map<number, string>();
+  for (const adventure of adventures.values()) {
+    const other = byOrder.get(adventure.order);
+    if (other) problems.push(`order ${adventure.order} repetido en ${other} y ${adventure.id}`);
+    byOrder.set(adventure.order, adventure.id);
+  }
   if (problems.length > 0) throw new AdventureContentError(problems);
-  return adventures;
+  return new Map([...adventures].sort(([, a], [, b]) => a.order - b.order));
 }
 
 let cache: ReadonlyMap<string, Adventure> | null = null;

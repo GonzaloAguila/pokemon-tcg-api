@@ -59,6 +59,8 @@ const opponentSchema = z
     trainerClass: text,
     /** Catalog id of the Pokémon shown on the map (default: the deck's first Pokémon). */
     lead: cardId.optional(),
+    /** Trainer portrait on the map (a public sprite). */
+    sprite: z.string().regex(/^\/sprites\/adventure\/trainers\/[a-z0-9-]+\.png$/, "sprite inválido").optional(),
     deck: deckSchema.optional(),
     /** A deck per difficulty: hard is one deck, or one per starter (`byStarter`). */
     deckByDifficulty: z
@@ -74,6 +76,18 @@ const opponentSchema = z
 
 export const TREASURE_POOLS = ["tier1", "major", "tier2"] as const;
 export type TreasurePoolId = (typeof TREASURE_POOLS)[number];
+
+/** Losing the battle takes cards from the player's run deck (stolen, recoverable with `onWin`). */
+const stealCount = z.number().int().min(1).max(5);
+const onLossSchema = z
+  .object({
+    type: z.literal("stealCards"),
+    count: stealCount,
+    countByDifficulty: z.object({ normal: stealCount.optional(), hard: stealCount.optional() }).strict().optional(),
+  })
+  .strict();
+/** Winning the battle gives back what was stolen. */
+const onWinSchema = z.object({ type: z.literal("recoverStolen") }).strict();
 
 const battleSchema = z
   .object({
@@ -98,6 +112,10 @@ const battleSchema = z
     objective: objectiveText.optional(),
     /** A difficulty's own objective: replaces `objective` in runs of that difficulty. */
     objectiveByDifficulty: z.object({ normal: objectiveText.optional(), hard: objectiveText.optional() }).strict().optional(),
+    onLoss: onLossSchema.optional(),
+    onWin: onWinSchema.optional(),
+    /** Treasure ids offered after this battle instead of drawing from the pool. */
+    fixedOffer: z.array(id).min(1).max(3).optional(),
   })
   .strict();
 
@@ -145,6 +163,7 @@ const rewardSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("cosmetic"), cosmeticType: z.literal("cardBack"), id, name: text }).strict(),
   z.object({ type: z.literal("starter_unlock"), id, name: text }).strict(),
   z.object({ type: z.literal("card"), cardId, name: text }).strict(),
+  z.object({ type: z.literal("coins"), amount: z.number().int().min(1).max(100000), name: text }).strict(),
 ]);
 
 /** Achievement conditions, read from AdventureProgress (achievements checker "adventure"). */
@@ -159,6 +178,8 @@ const achievementConditionSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("purist") }).strict(),
   /** a won run whose decks never had a card / basic Energy off the starter's type */
   z.object({ type: z.literal("monotype") }).strict(),
+  /** a won run in which nothing was ever stolen */
+  z.object({ type: z.literal("noSteal") }).strict(),
 ]);
 export type AchievementCondition = z.infer<typeof achievementConditionSchema>;
 
@@ -196,6 +217,14 @@ export const adventureSchema = z
   .object({
     id,
     version: z.number().int().min(1),
+    /** Position in the adventure list (unique across adventures, checked in load.ts). */
+    order: z.number().int().min(1),
+    /** Cover art (public asset). */
+    image: z.string().regex(/^\/adventures\/[a-z0-9-]+\.(jpg|png|webp)$/, "imagen inválida"),
+    /** Coins charged to start a run. */
+    entryCost: z.number().int().min(0).max(10000).optional(),
+    /** What unlocks the adventure. */
+    requires: z.object({ type: z.literal("gymLeader"), leaderId: id }).strict().optional(),
     name: text,
     description: text,
     rules: z

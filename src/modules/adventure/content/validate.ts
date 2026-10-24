@@ -3,6 +3,7 @@
  * express (design §5.4). Problems are Spanish sentences, all reported at once.
  */
 import { isLimitedInDeck, isPokemonCard, ALL_CARDS } from "@gonzaloaguila/game-core";
+import { GYM_LEADERS } from "../../gym/content/index.js";
 import { ADVENTURE_CARD_BACKS, ADVENTURE_PLAYMATS } from "../../prizes/catalog.js";
 import type { BattleModifier, CardEntry } from "../engine-types.js";
 import { adventureCardProblem, cardOf, isBasicPokemonCard } from "./cards.js";
@@ -228,6 +229,14 @@ export function validateAdventure(raw: unknown): ValidationResult {
     checkCards(problems, `Tesoro ${treasure.id}`, ids);
   }
   const treasureIds = new Set(adventure.treasures.map((t) => t.id));
+  for (const battle of adventure.battles) {
+    for (const id of battle.fixedOffer ?? []) {
+      if (!treasureIds.has(id)) problems.push(`Batalla ${battle.index}, fixedOffer: tesoro desconocido ${id}`);
+    }
+  }
+  if (adventure.requires && !GYM_LEADERS.some((l) => l.id === adventure.requires!.leaderId)) {
+    problems.push(`Requisito: líder de gimnasio desconocido ${adventure.requires.leaderId}`);
+  }
   const checkPools = (label: string, pools: Adventure["treasurePools"]) => {
     for (const [pool, ids] of Object.entries(pools)) {
       for (const id of ids) if (!treasureIds.has(id)) problems.push(`${label}${pool}: tesoro desconocido ${id}`);

@@ -284,3 +284,46 @@ describe("describeModifier", () => {
     expect(describeModifier(modifier)).toBe(line);
   });
 });
+
+describe("Adventure 2 content fields", () => {
+  const treasureId = () => raw().treasures[0].id as string;
+
+  it("accepts entryCost, requires, image, order, onLoss, onWin, fixedOffer, sprite, a coins reward and a noSteal condition", () => {
+    const data = raw();
+    data.order = 2;
+    data.entryCost = 500;
+    data.requires = { type: "gymLeader", leaderId: "brock" };
+    data.battles[0].onLoss = { type: "stealCards", count: 2, countByDifficulty: { hard: 3 } };
+    data.battles[0].onWin = { type: "recoverStolen" };
+    data.battles[0].fixedOffer = [data.treasures[0].id, data.treasures[1].id];
+    data.battles[0].opponent.sprite = "/sprites/adventure/trainers/rival-1.png";
+    data.rewards.normal = { type: "coins", amount: 300, name: "300 monedas" };
+    data.achievements[0].condition = { type: "noSteal" };
+    const result = validateAdventure(data);
+    expect(result.ok ? [] : result.problems).toEqual([]);
+  });
+
+  it("rejects a fixedOffer naming an unknown treasure", () => {
+    const problems = problemsOf((a) => (a.battles[0].fixedOffer = ["no-such-treasure"]));
+    expect(problems.join("\n")).toContain("no-such-treasure");
+  });
+
+  it("rejects requires naming an unknown gym leader", () => {
+    const problems = problemsOf((a) => (a.requires = { type: "gymLeader", leaderId: "nobody" }));
+    expect(problems.join("\n")).toContain("nobody");
+  });
+
+  it.each([0, 6])("rejects stealCards count %i", (count) => {
+    problemsOf((a) => (a.battles[0].onLoss = { type: "stealCards", count }));
+  });
+
+  it("rejects a missing order or image", () => {
+    problemsOf((a) => delete a.order);
+    problemsOf((a) => delete a.image);
+    problemsOf((a) => (a.image = "/elsewhere/x.gif"));
+  });
+
+  it("uses a known treasure id fixture", () => {
+    expect(treasureId()).toBeTruthy();
+  });
+});

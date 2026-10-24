@@ -1,6 +1,8 @@
 {
   "id": "pueblo-paleta-bosque-verde",
   "version": 4,
+  "order": 1,
+  "image": "/adventures/pueblo-paleta-bosque-verde.jpg",
   "name": "De Pueblo Paleta al Bosque Verde",
   "description": "Elige tu inicial y abre camino por la Ruta 1, Ciudad Verde, la Ruta 22 y el Bosque Verde hasta las puertas de Ciudad Plateada, donde te espera tu rival.",
   "rules": { "hearts": 3, "prizeCount": 3, "openingHand": 7, "minDeckSize": 20, "maxDeckSize": 40, "maxCopies": null },
