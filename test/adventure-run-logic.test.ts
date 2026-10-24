@@ -14,6 +14,7 @@ import {
   offerCandidates,
   resolveTreasureCards,
   startBattle,
+  stealCards,
 } from "../src/modules/adventure/run-logic.js";
 import { RunPhaseError, RunRuleError, type RunState } from "../src/modules/adventure/run-logic.types.js";
 import type { TreasureRarity } from "../src/modules/adventure/content/schema.js";
@@ -432,7 +433,7 @@ describe("battle results", () => {
     const result = applyBattleResult(run, adventure, { victory: true });
     expect(result.run).toMatchObject({ status: "won", phase: "finished", pendingOffer: [] });
     expect(result.events).toEqual([{ type: "runWon" }]);
-    expect(achievementFacts(result.run)).toEqual({ won: true, difficulty: "normal", starterId: "charmander", flawless: true, purist: true, monotype: true });
+    expect(achievementFacts(result.run)).toEqual({ won: true, difficulty: "normal", starterId: "charmander", flawless: true, purist: true, monotype: true, noSteal: true });
   });
 });
 
@@ -534,7 +535,85 @@ describe("monotype", () => {
 describe("achievementFacts", () => {
   it("flawless, purist and monotype from the run", () => {
     const won = { ...fresh(), status: "won" as const, phase: "finished" as const, heartsLost: 1, treasuresTaken: ["t1-bill"], offTypeUsed: true };
-    expect(achievementFacts(won)).toEqual({ won: true, difficulty: "normal", starterId: "charmander", flawless: false, purist: false, monotype: false });
+    expect(achievementFacts(won)).toEqual({ won: true, difficulty: "normal", starterId: "charmander", flawless: false, purist: false, monotype: false, noSteal: true });
     expect(achievementFacts(fresh()).won).toBe(false);
+  });
+});
+
+describe("Team Rocket steals and returns cards", () => {
+  const BULBASAUR = "base-set-044-bulbasaur";
+  const rocket = structuredClone(adventure);
+  rocket.battles[0].onLoss = { type: "stealCards", count: 3 };
+  rocket.battles[1].onWin = { type: "recoverStolen" };
+  const tier = rocket.treasurePools.tier1;
+  rocket.battles[2].fixedOffer = [tier[2], tier[0]];
+  const isEnergyId = (id: string) => id.includes("-energy");
+  const total = (cards: { qty: number }[]) => cards.reduce((n, e) => n + e.qty, 0);
+  const lose = (run: RunState, adv = rocket) => applyBattleResult(startBattle(run, adv), adv, { victory: false });
+
+  it("a lost Team Rocket battle steals count cards, never basic Energy, and records them", () => {
+    const run = fresh();
+    const { run: next, events } = lose(run);
+    const stolenEvent = events.find((e) => e.type === "stolen");
+    if (stolenEvent?.type !== "stolen") throw new Error("no stolen event");
+    expect(total(stolenEvent.cards)).toBe(3);
+    expect(stolenEvent.cards.some((c) => isEnergyId(c.cardId))).toBe(false);
+    expect(next.stolen).toEqual(stolenEvent.cards);
+    expect(next.cardsStolen).toBe(3);
+    expect(size(next)).toBe(size(run) - 3);
+  });
+
+  it("stealing keeps at least 4 Basic Pokémon", () => {
+    const run: RunState = { ...fresh(), deck: [{ cardId: CHARMANDER, qty: 4 }, { cardId: BULBASAUR, qty: 1 }, { cardId: FIRE, qty: 19 }] };
+    const { run: next, cards } = stealCards(run, rocket, 3);
+    expect(total(cards)).toBe(1);
+    expect(size(next)).toBe(size(run) - 1);
+  });
+
+  it("a steal may leave the deck under minDeckSize and startBattle then refuses until Energy is added back", () => {
+    const { run: lost } = lose(editDeck(fresh(), rocket, { remove: [{ cardId: FIRE, qty: 4 }], energies: [] }));
+    expect(size(lost)).toBe(17);
+    expect(() => startBattle(lost, rocket)).toThrow(RunRuleError);
+    const fixed = editDeck(lost, rocket, { remove: [], energies: [{ cardId: FIRE, qty: copies(lost, FIRE) + 4 }] });
+    expect(() => startBattle(fixed, rocket)).not.toThrow();
+  });
+
+  it("every lost attempt steals again", () => {
+    const first = lose(fresh()).run;
+    const filled = editDeck(first, rocket, { remove: [], energies: [{ cardId: FIRE, qty: copies(first, FIRE) + 1 }] });
+    const second = lose(filled).run;
+    expect(second.cardsStolen).toBe(6);
+    expect(total(second.stolen)).toBe(6);
+  });
+
+  it("winning a recoverStolen battle returns every stolen card and clears the list", () => {
+    const stolen = [{ cardId: CHARMANDER, qty: 2 }, { cardId: "base-set-024-charmeleon", qty: 1 }];
+    const run: RunState = { ...fresh(), currentBattle: 2, stolen, cardsStolen: 3 };
+    const before = size(run);
+    const { run: next, events } = applyBattleResult(startBattle(run, rocket), rocket, { victory: true });
+    expect(events).toContainEqual({ type: "recovered", cards: stolen });
+    expect(next.stolen).toEqual([]);
+    expect(size(next)).toBe(before + 3);
+    expect(next.cardsStolen).toBe(3);
+  });
+
+  it("winning a recoverStolen battle with nothing stolen adds no event", () => {
+    const run: RunState = { ...fresh(), currentBattle: 2 };
+    const { events } = applyBattleResult(startBattle(run, rocket), rocket, { victory: true });
+    expect(events.some((e) => e.type === "recovered")).toBe(false);
+  });
+
+  it("a fixedOffer battle offers exactly its treasures", () => {
+    const run: RunState = { ...fresh(), currentBattle: 3 };
+    expect(offerCandidates(run, rocket, 3)).toEqual([tier[2], tier[0]]);
+    expect(generateOffer(run, rocket, 3)).toEqual([tier[2], tier[0]]);
+  });
+
+  it("the same seed steals the same cards", () => {
+    const run = fresh();
+    expect(stealCards(run, rocket, 3).cards).toEqual(stealCards({ ...run }, rocket, 3).cards);
+    expect(stealCards({ ...run, seed: "other-seed" }, rocket, 3).cards).not.toEqual(stealCards(run, rocket, 3).cards);
+    expect(achievementFacts(run).noSteal).toBe(true);
+    expect(achievementFacts(lose(run).run).noSteal).toBe(false);
   });
 });

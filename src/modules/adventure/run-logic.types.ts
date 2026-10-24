@@ -31,6 +31,8 @@ export interface RunState {
 export type RunEvent =
   | { type: "offer"; offer: string[] }
   | { type: "heartLost"; hearts: number }
+  | { type: "stolen"; cards: CardEntry[] }
+  | { type: "recovered"; cards: CardEntry[] }
   | { type: "runWon" }
   | { type: "runLost" };
 
@@ -50,6 +52,8 @@ export interface AchievementFacts {
   flawless: boolean;
   purist: boolean;
   monotype: boolean;
+  /** No card was ever stolen from the run deck. */
+  noSteal: boolean;
 }
 
 /** An action outside its run phase (HTTP 409). */

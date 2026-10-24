@@ -3,7 +3,7 @@
  * takes a run and returns a new one; actions outside their phase throw RunPhaseError (409), rule
  * violations RunRuleError (422).
  */
-import { isBasicEnergy, isEnergyCard, isPokemonCard, validateDeckEntries } from "@gonzaloaguila/game-core";
+import { isBasicEnergy, isEnergyCard, isPokemonCard, isTrainerCard, validateDeckEntries } from "@gonzaloaguila/game-core";
 import { adventureCardProblem, cardOf, isBasicPokemonCard } from "./content/cards.js";
 import { battleModifiers, difficultyRules, rivalDeckOf } from "./content/difficulty.js";
 import type { AdventureStarter, AdventureTreasure, Difficulty } from "./content/schema.js";
@@ -164,7 +164,14 @@ function cardsFit(run: RunState, adventure: Adventure, treasure: AdventureTreasu
  * deck rules (copies; the max size can be exceeded until the next battle, see cardsFit).
  */
 export function offerCandidates(run: RunState, adventure: Adventure, battleIndex: number): string[] {
-  const pool = battleAt(adventure, battleIndex).treasurePool;
+  const battle = battleAt(adventure, battleIndex);
+  if (battle.fixedOffer) {
+    return battle.fixedOffer.filter((id) => {
+      const treasure = treasureById(adventure, id);
+      return treasure.kind !== "passive" || !run.passives.includes(treasure.passive);
+    });
+  }
+  const pool = battle.treasurePool;
   if (!pool) return [];
   return difficultyRules(adventure, run.difficulty).treasurePools[pool].filter((id) => {
     const treasure = treasureById(adventure, id);
@@ -198,6 +205,7 @@ export function generateOffer(run: RunState, adventure: Adventure, battleIndex: 
   const candidates = offerCandidates(run, adventure, battleIndex);
   const rng = seededRandom(`${run.seed}:${battleIndex}`);
   const taken = new Set(run.treasuresTaken);
+  if (battleAt(adventure, battleIndex).fixedOffer) return candidates.slice(0, OFFER_SIZE);
   const ordered = weightedOrder(candidates, adventure, run.difficulty, rng);
   const queue = [...ordered.filter((id) => !taken.has(id)), ...ordered.filter((id) => taken.has(id))];
   const isPassive = (id: string) => treasureById(adventure, id).kind === "passive";
@@ -222,6 +230,63 @@ export function generateOffer(run: RunState, adventure: Adventure, battleIndex: 
     if (!offer.includes(id)) offer.push(id);
   }
   return offer;
+}
+
+/** Fewest Basic Pokémon a steal leaves in the deck. */
+const MIN_BASICS_AFTER_STEAL = 4;
+
+/**
+ * Team Rocket takes up to `count` cards from the run deck: never basic Energy, and never a copy
+ * whose loss would leave fewer than 4 Basic Pokémon (so fewer are taken when there aren't enough
+ * candidates). Seeded by run, battle and attempt, so the same loss always steals the same cards.
+ * On hard, evolutions and Trainers go first. The deck may drop under the minimum size: the
+ * player refills it with basic Energy before the next battle.
+ */
+export function stealCards(run: RunState, _adventure: Adventure, count: number): { run: RunState; cards: CardEntry[] } {
+  const rng = seededRandom(`${run.seed}:steal:${run.currentBattle}:${run.attempt}`);
+  const shuffle = <T>(items: T[]): T[] => {
+    for (let i = items.length - 1; i > 0; i--) {
+      const j = Math.floor(rng() * (i + 1));
+      [items[i], items[j]] = [items[j], items[i]];
+    }
+    return items;
+  };
+
+  const copies: string[] = [];
+  let basics = 0;
+  for (const { cardId, qty } of run.deck) {
+    const card = cardOf(cardId);
+    if (isBasicPokemonCard(card)) basics += qty;
+    if (isBasicEnergy(card)) continue;
+    for (let i = 0; i < qty; i++) copies.push(cardId);
+  }
+
+  const priority = (cardId: string) => {
+    const card = cardOf(cardId);
+    return isTrainerCard(card) || (isPokemonCard(card) && card.stage !== "basic");
+  };
+  const ordered =
+    run.difficulty === "hard"
+      ? [...shuffle(copies.filter(priority)), ...shuffle(copies.filter((id) => !priority(id)))]
+      : shuffle(copies);
+
+  let stolen: CardEntry[] = [];
+  let deck = run.deck;
+  let taken = 0;
+  for (const cardId of ordered) {
+    if (taken === count) break;
+    if (isBasicPokemonCard(cardOf(cardId))) {
+      if (basics - 1 < MIN_BASICS_AFTER_STEAL) continue;
+      basics--;
+    }
+    stolen = addCards(stolen, [{ cardId, qty: 1 }]);
+    deck = deck.map((e) => (e.cardId === cardId ? { ...e, qty: e.qty - 1 } : e));
+    taken++;
+  }
+  return {
+    run: { ...run, deck: deck.filter((e) => e.qty > 0), stolen: addCards(run.stolen, stolen), cardsStolen: run.cardsStolen + taken },
+    cards: stolen,
+  };
 }
 
 /** Victory → take one of the offered treasures, or skip; then the next battle. */
@@ -290,27 +355,40 @@ export function applyBattleResult(
 ): { run: RunState; events: RunEvent[] } {
   assertPhase(run, ["in_battle"], "No hay una batalla en curso");
 
+  const battle = battleAt(adventure, run.currentBattle);
+
   if (result.victory) {
+    const events: RunEvent[] = [];
+    if (battle.onWin?.type === "recoverStolen" && run.stolen.length > 0) {
+      events.push({ type: "recovered", cards: run.stolen.map((e) => ({ ...e })) });
+      run = { ...run, deck: addCards(run.deck, run.stolen), stolen: [] };
+    }
     if (run.currentBattle >= lastBattle(adventure)) {
-      return { run: { ...run, status: "won", phase: "finished", pendingOffer: [] }, events: [{ type: "runWon" }] };
+      return { run: { ...run, status: "won", phase: "finished", pendingOffer: [] }, events: [...events, { type: "runWon" }] };
     }
     const offer = generateOffer(run, adventure, run.currentBattle);
     if (offer.length === 0) {
       // Nothing to offer (no pool, or every candidate excluded): straight to the next battle
       return {
         run: { ...run, phase: "pre_battle", currentBattle: run.currentBattle + 1, attempt: 1, pendingOffer: [] },
-        events: [],
+        events,
       };
     }
-    return { run: { ...run, phase: "choosing_treasure", pendingOffer: offer }, events: [{ type: "offer", offer }] };
+    return { run: { ...run, phase: "choosing_treasure", pendingOffer: offer }, events: [...events, { type: "offer", offer }] };
   }
 
   const hearts = run.hearts - 1;
-  const lost: RunState = { ...run, hearts, heartsLost: run.heartsLost + 1 };
-  if (hearts > 0) {
-    return { run: { ...lost, phase: "pre_battle", attempt: run.attempt + 1 }, events: [{ type: "heartLost", hearts }] };
+  let lost: RunState = { ...run, hearts, heartsLost: run.heartsLost + 1 };
+  const events: RunEvent[] = [{ type: "heartLost", hearts }];
+  // Every lost attempt steals, also the one that ends the run
+  if (battle.onLoss?.type === "stealCards") {
+    const count = battle.onLoss.countByDifficulty?.[run.difficulty] ?? battle.onLoss.count;
+    const steal = stealCards(lost, adventure, count);
+    lost = steal.run;
+    if (steal.cards.length > 0) events.push({ type: "stolen", cards: steal.cards });
   }
-  return { run: { ...lost, status: "lost", phase: "finished" }, events: [{ type: "heartLost", hearts }, { type: "runLost" }] };
+  if (hearts > 0) return { run: { ...lost, phase: "pre_battle", attempt: run.attempt + 1 }, events };
+  return { run: { ...lost, status: "lost", phase: "finished" }, events: [...events, { type: "runLost" }] };
 }
 
 /** Abandon from the map or the treasure screen (inside a battle: surrender first). */
@@ -353,5 +431,6 @@ export function achievementFacts(run: RunState): AchievementFacts {
     flawless: run.heartsLost === 0,
     purist: run.treasuresTaken.length === 0,
     monotype: !run.offTypeUsed,
+    noSteal: run.cardsStolen === 0,
   };
 }
