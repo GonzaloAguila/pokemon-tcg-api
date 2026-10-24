@@ -13,6 +13,7 @@
  * out — never by a surrender, a disconnect, a clock or a no-show. Every challenge counts gym games.
  * They don't count for "Leyenda Viviente" (achievements.service.ts countsForMeta).
  */
+import { PokemonStage, findCardById, isPokemonCard } from "@gonzaloaguila/game-core";
 import { prisma } from "../../lib/prisma.js";
 import type { EndKind, SeatFeats } from "../../socket/challenge-tracker.js";
 import {
@@ -53,7 +54,7 @@ export type ChallengeId =
   | "challenge-set-salad"
   | "challenge-parasect"
   | "challenge-magikarp"
-  | "challenge-forgotten"
+  | "challenge-little-giant"
   | "challenge-comeback"
   | "challenge-shutout"
   | "challenge-blitz"
@@ -86,7 +87,7 @@ export const CHALLENGE_DEFS: ChallengeDef[] = [
   // Forgotten heroes
   { id: "challenge-parasect", name: "Hongo letal", description: "Gana dando el último KO con Parasect", tier: "gold", progressTarget: 1 },
   { id: "challenge-magikarp", name: "El que ríe último", description: "Gana dando el último KO con Magikarp", tier: "gold", progressTarget: 1 },
-  { id: "challenge-forgotten", name: "Colección de olvidados", description: "Gana dando el último KO con 5 Pokémon olvidados distintos", tier: "platinum", progressTarget: 5 },
+  { id: "challenge-little-giant", name: "Pequeño gigante", description: "Gana dando el último KO con un Pokémon básico de 30 HP o menos", tier: "platinum", progressTarget: 1 },
   // Feats
   { id: "challenge-comeback", name: "Remontada", description: "Gana estando 4 premios abajo", tier: "gold", progressTarget: 1 },
   { id: "challenge-shutout", name: "Paliza", description: "Gana sin que el rival tome premios", tier: "silver", progressTarget: 1 },
@@ -96,11 +97,8 @@ export const CHALLENGE_DEFS: ChallengeDef[] = [
   { id: "challenge-deck-out", name: "Sin mazo", description: "Gana porque al rival se le acabaron las cartas", tier: "silver", progressTarget: 1 },
 ];
 
-/** Base names whose winning Knock Out counts for "Colección de olvidados" (Leaders' versions too). */
-export const FORGOTTEN_POKEMON: readonly string[] = [
-  "Parasect", "Magikarp", "Farfetch'd", "Dodrio", "Seaking", "Metapod", "Kakuna",
-  "Caterpie", "Weedle", "Slowpoke", "Psyduck", "Lickitung", "Spearow", "Raticate",
-];
+/** Pequeño gigante: the winning KO's Pokémon is a Basic of at most this printed HP. */
+const LITTLE_GIANT_MAX_HP = 30;
 
 const PLAYED_WIN_ENDS: readonly EndKind[] = ["prizes", "no_pokemon", "deck_out"];
 const LEADER_MIN_POKEMON = 4;
@@ -110,6 +108,23 @@ const isPlayedWin = (game: ChallengeGame) => qualifies(game) && game.won && PLAY
 const distinct = (values: (string | null)[]) => new Set(values.filter((v): v is string => v !== null)).size;
 const anyWin = (games: ChallengeGame[], test: (game: ChallengeGame) => boolean) => (games.some((g) => isPlayedWin(g) && test(g)) ? 1 : 0);
 const finalKoName = (game: ChallengeGame) => (game.feats.finalKoBy ? baseName(game.feats.finalKoBy) : null);
+
+/**
+ * The winning KO came from a Basic of 30 HP or less. Games recorded before the attacker's HP was
+ * (finalKoBasicHp absent) read it from the deck played, when every copy of that name in it is
+ * such a Basic (two printings with different HP would leave it unknown: not counted).
+ */
+function isLittleGiantKo(game: ChallengeGame): boolean {
+  const name = game.feats.finalKoBy;
+  if (!name) return false;
+  const hp = game.feats.finalKoBasicHp;
+  if (hp !== undefined) return hp !== null && hp <= LITTLE_GIANT_MAX_HP;
+  const printings = game.deck.cards.flatMap((entry) => {
+    const card = entry.qty > 0 ? findCardById(entry.cardId) : undefined;
+    return card && isPokemonCard(card) && card.name === name ? [card] : [];
+  });
+  return printings.length > 0 && printings.every((card) => card.stage === PokemonStage.Basic && card.hp <= LITTLE_GIANT_MAX_HP);
+}
 
 /** The user's progress on `id` over their games (uncapped; the caller caps it at the target). */
 export function challengeProgress(id: ChallengeId, games: ChallengeGame[]): number {
@@ -144,11 +159,8 @@ export function challengeProgress(id: ChallengeId, games: ChallengeGame[]): numb
       return anyWin(games, (g) => finalKoName(g) === "Parasect");
     case "challenge-magikarp":
       return anyWin(games, (g) => finalKoName(g) === "Magikarp");
-    case "challenge-forgotten":
-      return distinct(wins.map((g) => {
-        const name = finalKoName(g);
-        return name && FORGOTTEN_POKEMON.includes(name) ? name : null;
-      }));
+    case "challenge-little-giant":
+      return anyWin(games, isLittleGiantKo);
     case "challenge-comeback":
       return anyWin(games, (g) => g.feats.maxPrizeDeficit >= 4);
     case "challenge-shutout":

@@ -7,7 +7,7 @@
  * the end (match-settlement.ts; gym games: gym-room.ts record). The server state is player 1's
  * view: "player" = player 1, "opponent" = player 2.
  */
-import { GamePhase, findCardDefinition, type GameCard, type GameState, type PokemonInPlay } from "@gonzaloaguila/game-core";
+import { GamePhase, PokemonStage, findCardDefinition, isPokemonCard, type GameCard, type GameState, type PokemonInPlay } from "@gonzaloaguila/game-core";
 import type { DeckEntry, DeckSnapshot, DeckSource } from "../modules/achievements/challenge-decks.js";
 
 type Seat = "player1" | "player2";
@@ -24,6 +24,11 @@ export interface SeatFeats {
   prizesTakenByRival: number;
   /** The card name of the Pokémon whose attack won the game (winner only), else null */
   finalKoBy: string | null;
+  /**
+   * Printed HP of that Pokémon when it is a Basic (Pequeño gigante), null for an evolved one or no
+   * winning KO; absent on games recorded before 2026-10-24.
+   */
+  finalKoBasicHp?: number | null;
 }
 
 /** What a settled multiplayer game stores for the challenge achievements (SettleInput.challenge). */
@@ -47,7 +52,7 @@ export interface ChallengeTracker {
   /** The engine ended the game (not a surrender) */
   engineEnded: boolean;
   /** The attack hit that ended the game */
-  finalKo: { seat: Seat; name: string } | null;
+  finalKo: { seat: Seat; name: string; basicHp: number | null } | null;
 }
 
 const seatOf = (side: "player" | "opponent"): Seat => (side === "player" ? "player1" : "player2");
@@ -111,7 +116,10 @@ export function observe(tracker: ChallengeTracker, prev: GameState, next: GameSt
   if (!ended) return;
   tracker.engineEnded = action.type !== "surrender";
   if (newHit && (action.type === "attack" || action.type === "resolveAttackChoice")) {
-    tracker.finalKo = { seat: seatOf(newHit.attackerSide), name: newHit.attackerName };
+    // The attacker, as printed, from the board the attack started on
+    const attacker = (newHit.attackerSide === "player" ? prev.playerActivePokemon : prev.opponentActivePokemon)?.pokemon;
+    const basicHp = attacker && isPokemonCard(attacker) && attacker.stage === PokemonStage.Basic ? attacker.hp : null;
+    tracker.finalKo = { seat: seatOf(newHit.attackerSide), name: newHit.attackerName, basicHp };
   }
 }
 
@@ -137,14 +145,17 @@ export function finishTracker(
   const taken = (seat: Seat) =>
     tracker.initialPrizes[seat] - (finalState ? (seat === "player1" ? finalState.playerPrizes.length : finalState.opponentPrizes.length) : tracker.initialPrizes[seat]);
   const endKind = endKindOf(tracker, finalState, winner);
+  // Only a Knock Out ends a game by Prizes or by leaving the rival without Pokémon (a deck-out
+  // after the attack's endTurn is no winning KO)
+  const winningKo = (seat: Seat) =>
+    tracker.finalKo && tracker.finalKo.seat === seat && winner === seat && (endKind === "prizes" || endKind === "no_pokemon") ? tracker.finalKo : null;
   const feats = (seat: Seat, rival: Seat): SeatFeats => ({
     maxPrizeDeficit: tracker.maxPrizeDeficit[seat],
     benchUsed: tracker.benchUsed[seat],
     maxAttackDamage: tracker.maxAttackDamage[seat],
     prizesTakenByRival: taken(rival),
-    // Only a Knock Out ends a game by Prizes or by leaving the rival without Pokémon (a deck-out
-    // after the attack's endTurn is no winning KO)
-    finalKoBy: tracker.finalKo && tracker.finalKo.seat === seat && winner === seat && (endKind === "prizes" || endKind === "no_pokemon") ? tracker.finalKo.name : null,
+    finalKoBy: winningKo(seat)?.name ?? null,
+    finalKoBasicHp: winningKo(seat)?.basicHp ?? null,
   });
   return { endKind, feats: { player1: feats("player1", "player2"), player2: feats("player2", "player1") }, finalTurn: finalState?.turnNumber ?? 0 };
 }

@@ -103,6 +103,17 @@ describe("challenge tracker", () => {
     expect(result.endKind).toBe("no_pokemon");
     expect(result.feats.player1.finalKoBy).toBe("Parasect");
     expect(result.feats.player2.finalKoBy).toBeNull();
+    // Parasect is a Stage 1: no Basic HP for "Pequeño gigante"
+    expect(result.feats.player1.finalKoBasicHp).toBeNull();
+  });
+
+  it("records the printed HP of a Basic that lands the winning KO (Pequeño gigante)", () => {
+    const start = { ...dealt(), playerActivePokemon: inPlay("Magikarp", "p1-a"), opponentActivePokemon: inPlay("Pikachu", "p2-a") };
+    const tracker = createChallengeTracker(start, sources);
+    const over = { ...start, gamePhase: GamePhase.GameOver, gameResult: "victory", opponentActivePokemon: null, opponentBench: [], lastAttackHit: hit({ attackerName: "Magikarp", damage: 10 }) } as GameState;
+    observe(tracker, start, over, { type: "attack" });
+    const result = finishTracker(tracker, over, "player1");
+    expect(result.feats.player1).toMatchObject({ finalKoBy: "Magikarp", finalKoBasicHp: 30 });
   });
 
   it("an attack followed by the rival's deck-out is no winning KO", () => {
