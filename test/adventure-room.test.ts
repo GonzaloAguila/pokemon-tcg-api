@@ -18,6 +18,7 @@ import { createUser } from "./helpers.js";
 import { nextEvent, startSocketServer, tokenFor } from "./socket-helpers.js";
 
 const ADVENTURE = "pueblo-paleta-bosque-verde";
+const ADVENTURE_2 = "ciudad-plateada-ciudad-celeste";
 let server: Awaited<ReturnType<typeof startSocketServer>>;
 let pacing: AdventurePacing;
 
@@ -39,10 +40,16 @@ type Masked = GameState & { awaitingUserId: string | null };
 
 /** A player with a run in battle 1 (optionally: a fixed seed, passives, deck) and its room. */
 async function battleFor(
-  options: { seed?: string; passives?: string[]; deck?: { cardId: string; qty: number }[]; difficulty?: "normal" | "hard"; battle?: number } = {},
+  options: { seed?: string; passives?: string[]; deck?: { cardId: string; qty: number }[]; difficulty?: "normal" | "hard"; battle?: number; adventureId?: string } = {},
 ) {
   const user = await createUser({}, { stats: true });
-  const run = await adventure.createRun(user.id, { adventureId: ADVENTURE, difficulty: options.difficulty ?? "normal", starterId: "charmander" });
+  const adventureId = options.adventureId ?? ADVENTURE;
+  if (adventureId === ADVENTURE_2) {
+    // Adventure 2 asks for the Boulder Badge and an entry fee
+    await prisma.user.update({ where: { id: user.id }, data: { coins: { increment: 100 } } });
+    await prisma.userMedal.create({ data: { userId: user.id, medalId: "boulder" } });
+  }
+  const run = await adventure.createRun(user.id, { adventureId, difficulty: options.difficulty ?? "normal", starterId: "charmander" });
   await prisma.adventureRun.update({
     where: { id: run.id },
     data: {
@@ -135,6 +142,8 @@ describe("adventure battle room", () => {
     expect(client.start.isPlayer1).toBe(true);
     expect(client.start.opponentInfo).toMatchObject({ username: "Joven Lucas" });
     expect(client.start.adventure).toMatchObject({ runId, battle: 1, battleCount: 10, hearts: 3, maxHearts: 3, rules: [], rival: { name: "Lucas", trainerClass: "Joven" } });
+    // Adventure 1's rivals have no sprite: the key is left out
+    expect(client.start.adventure.rival).not.toHaveProperty("sprite");
     expect(client.state!.opponentHand.length).toBe(6); // 7 dealt, its Active placed
     expect(client.state!.opponentHand.every((c: any) => c.hidden === true)).toBe(true);
     expect(client.state!.opponentDeck.every((c: any) => c.hidden === true)).toBe(true);
@@ -145,6 +154,19 @@ describe("adventure battle room", () => {
     expect(row.battle).toMatchObject({ roomId, rngState: expect.any(Number), state: expect.any(Object) });
     expect((await adventure.getRun(user.id, runId)).battle).toEqual({ roomId });
     client.socket.disconnect();
+  });
+
+  it("the rival carries its trainer sprite when the content has one, also when the room is rebuilt", async () => {
+    const { roomId, token } = await battleFor({ adventureId: ADVENTURE_2 });
+    const client = await join(token, roomId);
+    expect(client.start.adventure.rival).toEqual({ name: "Tomás", trainerClass: "Joven", sprite: "/sprites/adventure/trainers/youngster.png" });
+    client.socket.disconnect();
+
+    // Evicted room → rebuilt from the run on joinRoom
+    await adventureRooms.evict(roomId);
+    const again = await join(token, roomId);
+    expect(again.start.adventure.rival).toEqual({ name: "Tomás", trainerClass: "Joven", sprite: "/sprites/adventure/trainers/youngster.png" });
+    again.socket.disconnect();
   });
 
   it("a hard run's room plays the hard rival deck with the hard rules, also when rebuilt from the run", async () => {

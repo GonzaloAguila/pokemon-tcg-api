@@ -84,7 +84,8 @@ export interface AdventureGameStartInfo {
   rules: string[];
   /** What the battle asks beyond the usual (content `objective`), shown on the board; null = none */
   objective: string | null;
-  rival: { name: string; trainerClass: string };
+  /** `sprite`: the rival's public trainer sprite, left out when the content has none. */
+  rival: { name: string; trainerClass: string; sprite?: string };
 }
 
 /** `adventureBattleResult`, to the player once the battle's result is applied. */
@@ -258,7 +259,7 @@ export class AdventureRooms implements AdventureBattleHost {
         passives: run.passives,
         rules: battleRules(adventure, battle.index, run.difficulty, run.starterId).map(describeModifier),
         objective: battleObjective(battle, run.difficulty),
-        rival: { name: rival.name, trainerClass: rival.trainerClass },
+        rival: { name: rival.name, trainerClass: rival.trainerClass, ...(rival.sprite ? { sprite: rival.sprite } : {}) },
       },
       luckyPending: false,
       aiLoop: null,

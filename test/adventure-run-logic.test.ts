@@ -590,6 +590,14 @@ describe("Team Rocket steals and returns cards", () => {
     expect(size(next)).toBe(size(run) - 1);
   });
 
+  it("countByDifficulty.hard overrides count on a hard run (a normal run keeps count)", () => {
+    const byDifficulty = structuredClone(rocket);
+    byDifficulty.battles[0].onLoss = { type: "stealCards", count: 2, countByDifficulty: { hard: 3 } };
+    const stolenBy = (run: RunState) => lose(run, byDifficulty).run.cardsStolen;
+    expect(stolenBy(fresh())).toBe(2);
+    expect(stolenBy({ ...fresh(), difficulty: "hard" })).toBe(3);
+  });
+
   it("a steal may leave the deck under minDeckSize and startBattle then refuses until Energy is added back", () => {
     const { run: lost } = lose(editDeck(fresh(), rocket, { remove: [{ cardId: FIRE, qty: 4 }], energies: [] }));
     expect(size(lost)).toBe(17);
