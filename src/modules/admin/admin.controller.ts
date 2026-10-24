@@ -5,6 +5,7 @@ import { Errors } from "../../middleware/error-handler.js";
 import { ALL_PERMISSIONS, type AdminPermission } from "./permissions.js";
 import * as adminService from "./admin.service.js";
 import { COSMETIC_TYPES } from "./grantable-cosmetics.js";
+import { listAdminRooms } from "./admin-rooms.js";
 import { closeRoomByAdmin, roomManager } from "../../socket/handlers.js";
 import { getIo } from "../../socket/io-registry.js";
 
@@ -471,27 +472,7 @@ router.get(
   requirePermission("rooms:view"),
   async (_req: Request, res: Response, next: NextFunction) => {
     try {
-      const allRooms = roomManager.getAllRooms();
-      const rooms: unknown[] = [];
-
-      for (const [, room] of allRooms) {
-        rooms.push({
-          id: room.id,
-          status: room.status,
-          player1: room.player1Id
-            ? { id: room.player1Id, username: room.creator.username }
-            : null,
-          player2: room.player2Id
-            ? { id: room.player2Id, username: room.joiner.username }
-            : null,
-          mode: room.config.mode,
-          betAmount: room.config.betAmount,
-          friendly: room.config.friendly,
-          createdAt: room.createdAt,
-        });
-      }
-
-      res.json({ rooms });
+      res.json({ rooms: await listAdminRooms(roomManager.getAllRooms().values()) });
     } catch (err) {
       next(err);
     }
