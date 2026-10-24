@@ -76,6 +76,7 @@ import {
   // Team Rocket: on-play power choices, Sinkhole
   resolvePowerChoice,
   getRetreatDamageSources,
+  getRetreatCoinFlips,
   // Gym Heroes: Recall, Vermilion City Gym's coin, Sabrina's ESP re-flip, Narrow Gym, Stadium actions
   getAvailableAttacks,
   canUseVermilionCoin,
@@ -2148,21 +2149,24 @@ export class GameRoomManager {
         case "retreat": {
           const energyIds = action.payload.energyIdsToDiscard;
           const benchIdx = action.payload.benchIndex;
-          // Sinkhole (Dark Dugtrio): one coin per working Sinkhole of the opponent, flipped by
-          // the retreating player. Always passed (the engine would use Math.random otherwise).
+          // getRetreatCoinFlips: a Confused Active's coin first (tails = it stays, its Energy is
+          // discarded), then one per working Sinkhole (Dark Dugtrio) of the opponent, all flipped
+          // by the retreating player. Always passed (the engine would use Math.random otherwise).
+          const coinCount = getRetreatCoinFlips(actorView);
           const sinkholes = getRetreatDamageSources(actorView, "player");
           // executeRetreat reports an illegal retreat as an info event instead of throwing:
           // probe it with harmless coins so no coin is flipped (or shown) for a rejected retreat
-          const probe = executeRetreat(actorView, energyIds, benchIdx, { coinResults: sinkholes.map(() => "heads" as const) });
+          const probe = executeRetreat(actorView, energyIds, benchIdx, { coinResults: Array.from({ length: coinCount }, () => "heads" as const) });
           if (probe.playerActivePokemon?.pokemon.id === actorView.playerActivePokemon?.pokemon.id) {
             return { success: false, error: probe.events[probe.events.length - 1]?.message ?? "No puedes retirarte ahora" };
           }
-          const coinResults = sinkholes.map(() => flip());
+          const coinResults = Array.from({ length: coinCount }, () => flip());
           newState = executeForPlayer((state) => executeRetreat(state, energyIds, benchIdx, { coinResults }));
           if (coinResults.length > 0) {
-            const source = sinkholes[0].pokemon;
-            const powerName = isPokemonCard(source) ? source.power?.name : undefined;
-            actionCoinFlipInfo = { attackName: powerName ?? "Socavón", results: coinResults };
+            const source = sinkholes[0]?.pokemon;
+            const powerName = source && isPokemonCard(source) ? source.power?.name : undefined;
+            const confused = coinResults.length > sinkholes.length;
+            actionCoinFlipInfo = { attackName: confused ? "Confusión" : (powerName ?? "Socavón"), results: coinResults };
           }
           break;
         }
