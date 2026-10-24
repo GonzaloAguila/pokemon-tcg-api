@@ -454,23 +454,25 @@
         "name": "Jessie y James",
         "trainerClass": "Team Rocket",
         "sprite": "/sprites/adventure/trainers/jessie-james.png",
-        "lead": "fossil-031-arbok",
+        "lead": "team-rocket-002-dark-arbok",
         "deckByDifficulty": {
           "normal": [
-            { "cardId": "fossil-046-ekans", "qty": 3 },
-            { "cardId": "fossil-031-arbok", "qty": 2 },
-            { "cardId": "base-set-051-koffing", "qty": 3 },
-            { "cardId": "fossil-045-weezing", "qty": 2 },
-            { "cardId": "jungle-056-meowth", "qty": 2 },
+            { "cardId": "team-rocket-056-ekans", "qty": 3 },
+            { "cardId": "team-rocket-002-dark-arbok", "qty": 2 },
+            { "cardId": "team-rocket-058-koffing", "qty": 3 },
+            { "cardId": "team-rocket-014-dark-weezing", "qty": 2 },
+            { "cardId": "team-rocket-062-meowth", "qty": 2 },
+            { "cardId": "team-rocket-042-dark-persian", "qty": 1 },
             { "cardId": "team-rocket-016-rockets-sneak-attack", "qty": 1 },
             { "cardId": "team-rocket-076-imposter-oaks-revenge", "qty": 1 },
+            { "cardId": "base-set-075-lass", "qty": 1 },
+            { "cardId": "base-set-073-imposter-professor-oak", "qty": 1 },
             { "cardId": "base-set-094-potion", "qty": 1 },
-            { "cardId": "base-set-091-bill", "qty": 1 },
-            { "cardId": "base-set-099-grass-energy", "qty": 8 }
+            { "cardId": "base-set-099-grass-energy", "qty": 9 }
           ],
           "hard": [
             { "cardId": "team-rocket-056-ekans", "qty": 3 },
-            { "cardId": "team-rocket-002-dark-arbok", "qty": 2 },
+            { "cardId": "team-rocket-002-dark-arbok", "qty": 3 },
             { "cardId": "team-rocket-058-koffing", "qty": 3 },
             { "cardId": "team-rocket-014-dark-weezing", "qty": 2 },
             { "cardId": "team-rocket-062-meowth", "qty": 2 },
@@ -481,12 +483,14 @@
             { "cardId": "base-set-090-super-potion", "qty": 1 },
             { "cardId": "base-set-084-pluspower", "qty": 1 },
             { "cardId": "base-set-093-gust-of-wind", "qty": 1 },
-            { "cardId": "base-set-099-grass-energy", "qty": 9 }
+            { "cardId": "base-set-099-grass-energy", "qty": 8 },
+            { "cardId": "base-set-075-lass", "qty": 1 },
+            { "cardId": "base-set-073-imposter-professor-oak", "qty": 1 }
           ]
         }
       },
       "treasurePool": "tier2",
-      "modifiers": [{ "type": "opponentSetup", "active": ["fossil-046-ekans"], "bench": [["base-set-051-koffing"]] }],
+      "modifiers": [{ "type": "opponentSetup", "active": ["team-rocket-056-ekans"], "bench": [["team-rocket-058-koffing"]] }],
       "modifiersByDifficulty": {
         "hard": [
           { "type": "prizeCount", "opponent": 2 },
