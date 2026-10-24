@@ -120,7 +120,7 @@ export function toHistoryEntry(row: HistoryRow, userId: string): HistoryEntry {
   };
 
   // vs the AI (client-reported): winReason is "victory" | "defeat" | "draw" | "abandoned", with a
-  // "lucky-duel: " prefix and " (quick victory)" (a too-quick win, settled as a draw)
+  // "lucky-duel: " prefix and, on games settled before 2026-10-24, " (quick victory)" (a too-quick win, settled as a draw)
   if (row.mode === "ai") {
     const outcome = reason.replace(/^lucky-duel: /, "").replace(/ \(quick victory\)$/, "");
     const result: HistoryResult =

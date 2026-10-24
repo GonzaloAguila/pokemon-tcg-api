@@ -265,8 +265,6 @@ export const ECONOMY = {
     stake: 20,
     streakBonusEvery: 5,
     streakBonus: 200,
-    /** A victory reported sooner than this after the start is settled as a draw (anti-script). */
-    minVictoryMs: 30_000,
     /**
      * Lucky Duel starts per economy day that are staked; later ones take no stake and pay
      * nothing (no payout, no streak bonus), though the streak still moves. Caps a scripted
