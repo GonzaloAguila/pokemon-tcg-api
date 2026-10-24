@@ -301,6 +301,25 @@ describe("Adventure 2 content", () => {
     expect(adventure.difficulties.hard.hearts).toBe(2);
   });
 
+  it("Brock's help (the Gym Leader beaten to get here): rare treasures with a Brock family, its Energy and the Brock Trainer", () => {
+    const adventure = adventure2();
+    const brock = adventure.treasures.filter((t) => t.id.startsWith("a2-brock-"));
+    expect(brock.map((t) => t.id).sort()).toEqual(["a2-brock-diglett", "a2-brock-mankey", "a2-brock-zubat"]);
+    for (const t of brock) {
+      expect(t.rarity, t.id).toBe("rare");
+      const ids = t.kind === "cards" ? t.cards.flatMap((c) => ("cardId" in c ? [c.cardId] : [])) : [];
+      const pokemon = ids.map(cardOf).filter(isPokemonCard);
+      expect(pokemon.length, t.id).toBeGreaterThanOrEqual(2);
+      expect(pokemon.every((p) => p.name.startsWith("Brock's ")), t.id).toBe(true);
+      expect(ids, t.id).toContain("gym-heroes-015-brock");
+      // Offered along the whole route, on both difficulties
+      for (const pools of [adventure.treasurePools, difficultyRules(adventure, "hard").treasurePools]) {
+        expect(pools.tier1, t.id).toContain(t.id);
+        expect(pools.tier2, t.id).toContain(t.id);
+      }
+    }
+  });
+
   it("the final rival on normal plays the starter that beats yours, up to its Stage 1, and opens with it", () => {
     const final = adventure2().battles[9];
     const counters: Record<string, [string, string]> = {

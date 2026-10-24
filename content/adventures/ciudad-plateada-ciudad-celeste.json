@@ -721,7 +721,10 @@
           "a2-nidoran-m",
           "a2-nidoran-f",
           "a2-ekans",
-          "a2-sandshrew"
+          "a2-sandshrew",
+          "a2-brock-diglett",
+          "a2-brock-mankey",
+          "a2-brock-zubat"
         ],
         "major": ["m-final", "m-atajo", "m-corazon", "h5-criador", "m-profesor", "a2-golem"],
         "tier2": [
@@ -741,7 +744,10 @@
           "a2-onix",
           "a2-centro",
           "a2-laguna",
-          "a2-slowpoke"
+          "a2-slowpoke",
+          "a2-brock-diglett",
+          "a2-brock-mankey",
+          "a2-brock-zubat"
         ]
       },
       "treasureOffer": { "rarityWeights": { "common": 4, "rare": 4, "epic": 2 }, "maxPassives": 1 }
@@ -761,7 +767,10 @@
       "a2-nidoran-m",
       "a2-nidoran-f",
       "a2-ekans",
-      "a2-sandshrew"
+      "a2-sandshrew",
+      "a2-brock-diglett",
+      "a2-brock-mankey",
+      "a2-brock-zubat"
     ],
     "major": ["m-final", "m-corazon", "m-atajo", "m-profesor", "a2-golem"],
     "tier2": [
@@ -781,7 +790,10 @@
       "a2-meowth",
       "a2-centro",
       "a2-laguna",
-      "a2-slowpoke"
+      "a2-slowpoke",
+      "a2-brock-diglett",
+      "a2-brock-mankey",
+      "a2-brock-zubat"
     ]
   },
   "treasureOffer": { "rarityWeights": { "common": 6, "rare": 3, "epic": 1 }, "maxPassives": 1 },
@@ -1266,6 +1278,45 @@
         { "cardId": "fossil-055-slowpoke", "qty": 2 },
         { "cardId": "fossil-043-slowbro", "qty": 1 },
         { "cardId": "base-set-101-psychic-energy", "qty": 3 }
+      ]
+    },
+    {
+      "id": "a2-brock-diglett",
+      "name": "Ayuda de Brock: Diglett",
+      "description": "+2 Brock's Diglett, +1 Brock's Dugtrio, +3 energías Lucha y +1 Brock",
+      "rarity": "rare",
+      "kind": "cards",
+      "cards": [
+        { "cardId": "gym-challenge-067-brocks-diglett", "qty": 2 },
+        { "cardId": "gym-challenge-022-brocks-dugtrio", "qty": 1 },
+        { "cardId": "base-set-097-fighting-energy", "qty": 3 },
+        { "cardId": "gym-heroes-015-brock", "qty": 1 }
+      ]
+    },
+    {
+      "id": "a2-brock-mankey",
+      "name": "Ayuda de Brock: Mankey",
+      "description": "+2 Brock's Mankey, +1 Brock's Primeape, +3 energías Lucha y +1 Brock",
+      "rarity": "rare",
+      "kind": "cards",
+      "cards": [
+        { "cardId": "gym-heroes-067-brocks-mankey", "qty": 2 },
+        { "cardId": "gym-challenge-035-brocks-primeape", "qty": 1 },
+        { "cardId": "base-set-097-fighting-energy", "qty": 3 },
+        { "cardId": "gym-heroes-015-brock", "qty": 1 }
+      ]
+    },
+    {
+      "id": "a2-brock-zubat",
+      "name": "Ayuda de Brock: Zubat",
+      "description": "+2 Brock's Zubat, +1 Brock's Golbat, +3 energías Planta y +1 Brock",
+      "rarity": "rare",
+      "kind": "cards",
+      "cards": [
+        { "cardId": "gym-heroes-074-brocks-zubat", "qty": 2 },
+        { "cardId": "gym-heroes-039-brocks-golbat", "qty": 1 },
+        { "cardId": "base-set-099-grass-energy", "qty": 3 },
+        { "cardId": "gym-heroes-015-brock", "qty": 1 }
       ]
     }
   ],
