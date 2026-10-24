@@ -285,8 +285,6 @@ export interface LuckyDuelAiSettlement {
   streak: number;
   /** Bonus credited by this game: ECONOMY.luckyDuelAi.streakBonus when the streak just reached a multiple of streakBonusEvery, else 0. */
   streakBonus: number;
-  /** A victory reported sooner than ECONOMY.luckyDuelAi.minVictoryMs after the start, settled as a draw. */
-  quickVictory: boolean;
 }
 
 export interface PlayerSettlement {
@@ -344,9 +342,8 @@ export interface SettlementResult {
 type AiRecordedResult = "victory" | "defeat" | "draw" | "abandoned";
 
 /** A vs-AI match row's winReason: "victory" | "defeat" | "draw", prefixed "lucky-duel: " for that mode. */
-function aiWinReason(result: AiRecordedResult, luckyDuel: boolean, quickVictory: boolean): string {
-  if (!luckyDuel) return result;
-  return `lucky-duel: ${result}${quickVictory ? " (quick victory)" : ""}`;
+function aiWinReason(result: AiRecordedResult, luckyDuel: boolean): string {
+  return luckyDuel ? `lucky-duel: ${result}` : result;
 }
 
 /**
@@ -375,13 +372,7 @@ async function settleMatchTx(tx: Db, matchId: string, input: SettleInput, now: D
   if ((input.kind === "ai") !== isAi) throw new Error(`settleMatch: ${input.kind} result for a ${mode} match`);
   const luckyDuel = match.gameMode === "lucky-duel";
 
-  // vs-AI Lucky Duel: a victory reported too soon after the start is a draw (anti-script)
-  const quickVictory =
-    input.kind === "ai" &&
-    luckyDuel &&
-    input.victory &&
-    (!match.startedAt || now.getTime() - match.startedAt.getTime() < ECONOMY.luckyDuelAi.minVictoryMs);
-  const aiVictory = input.kind === "ai" && input.victory && !quickVictory;
+  const aiVictory = input.kind === "ai" && input.victory;
 
   const players = [match.player1Id, match.player2Id].filter((id): id is string => !!id);
   let winnerId: string | null;
@@ -391,7 +382,7 @@ async function settleMatchTx(tx: Db, matchId: string, input: SettleInput, now: D
   const draw =
     input.kind === "multiplayer"
       ? input.draw === true && winnerId === null
-      : quickVictory || (input.draw === true && !input.victory && !input.abandoned);
+      : input.draw === true && !input.victory && !input.abandoned;
   const decided = input.kind === "ai" || winnerId !== null || draw;
   const aiResult: AiRecordedResult = aiVictory ? "victory" : draw ? "draw" : input.kind === "ai" && input.abandoned ? "abandoned" : "defeat";
 
@@ -409,7 +400,7 @@ async function settleMatchTx(tx: Db, matchId: string, input: SettleInput, now: D
       finishedAt: now,
       status: decided ? "finished" : "abandoned",
       winnerId,
-      winReason: input.kind === "ai" ? aiWinReason(aiResult, luckyDuel, quickVictory) : input.reason.slice(0, 200),
+      winReason: input.kind === "ai" ? aiWinReason(aiResult, luckyDuel) : input.reason.slice(0, 200),
       // Challenge achievements read these (modules/achievements/challenges.ts)
       ...(input.kind === "multiplayer" && input.challenge
         ? {
@@ -514,7 +505,7 @@ async function settleMatchTx(tx: Db, matchId: string, input: SettleInput, now: D
         await creditBalance(match.player1Id, "coins", payout, "lucky_duel_refund", `Lucky Duel empatado: ${payout} monedas devueltas`, tx);
       }
     }
-    luckyAi = { stake: bet, payout, streak: 0, streakBonus: 0, quickVictory };
+    luckyAi = { stake: bet, payout, streak: 0, streakBonus: 0 };
   }
 
   // Lucky Duel streaks: every decided game (counted or not; a Lucky Duel can end on turn 1),

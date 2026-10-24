@@ -72,7 +72,7 @@ export const ADVENTURE_CARD_BACKS: CosmeticItem[] = [
  */
 export const GYM_LEADER_CARD_BACKS: CosmeticItem[] = [
   { itemId: "cardback-brock", name: "Brock", imageUrl: "/gym-leaders/brock/brock_bkc.png" },
-  { itemId: "cardback-brock-expert", name: "Brock EXPERT", imageUrl: "/gym-leaders/brock/brock_bkc_expert.jpg" },
+  { itemId: "cardback-brock-expert", name: "Brock EXPERT", imageUrl: "/gym-leaders/brock/brock_bkc_expert.png" },
 ];
 
 /**

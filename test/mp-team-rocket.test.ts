@@ -219,6 +219,24 @@ describe.each(["p1", "p2"] as const)("Team Rocket in multiplayer as %s", (actor)
     expect(heads.mine().playerBench.find((p) => p.pokemon.id === "my-active")?.currentDamage).toBe(0);
   });
 
+  it("a Confused Active's retreat: the server flips the Confusion coin; tails = it stays and its Energy is discarded", async () => {
+    const confused = { ...inPlay(cardAs("Pikachu", "my-active"), { energy: "L" }), statusConditions: ["confused"] } as unknown as PokemonInPlay;
+    const board = { myActive: confused, myBench: [inPlay(cardAs("Bulbasaur", "bulba"))] };
+
+    const t = setupGame(actor, board, ["tails"]);
+    const res = await t.act("retreat", { energyIdsToDiscard: ["my-active-e0"], benchIndex: 0 });
+    expect(res.success, res.error).toBe(true);
+    expect(res.coinFlipInfo).toEqual({ attackName: "Confusión", results: ["tails"] });
+    expect(t.mine().playerActivePokemon?.pokemon.id).toBe("my-active");
+    expect(t.mine().playerActivePokemon?.attachedEnergy).toEqual([]);
+    expect(t.mine().retreatedThisTurn).toBe(true);
+    await expectRejected(t, t.act("retreat", { energyIdsToDiscard: [], benchIndex: 0 }), /retirarte/);
+
+    const heads = setupGame(actor, board, ["heads"]);
+    expect((await heads.act("retreat", { energyIdsToDiscard: ["my-active-e0"], benchIndex: 0 })).success).toBe(true);
+    expect(heads.mine().playerActivePokemon?.pokemon.id).toBe("bulba");
+  });
+
   it("Sinkhole Knocks Out the retreated Pokémon: Prize for the Dugtrio's owner", async () => {
     const t = setupGame(actor, {
       myActive: inPlay(cardAs("Pikachu", "my-active"), { energy: "L", damage: 20 }),

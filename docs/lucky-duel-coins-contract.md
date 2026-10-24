@@ -4,7 +4,7 @@ Branch `feat/lucky-duel-coins` (API). Numbers live in `src/modules/economy/confi
 (`ECONOMY.luckyDuelAi`); the values below are the defaults.
 
 ```ts
-ECONOMY.luckyDuelAi = { stake: 20, streakBonusEvery: 5, streakBonus: 200, minVictoryMs: 30_000, dailyStakedGames: 20 }
+ECONOMY.luckyDuelAi = { stake: 20, streakBonusEvery: 5, streakBonus: 200, dailyStakedGames: 20 }
 ```
 
 ## 1. Lucky Duel vs the AI
@@ -108,7 +108,6 @@ Response: the same fields as before, plus `mode`, plus `luckyDuel` for a Lucky D
     "payout": 40,                    // 40 victory / 20 draw / 0 defeat
     "streak": 5,                     // vs-AI streak after this game
     "streakBonus": 200,              // 200 when this staked victory reached a multiple of 5, else 0
-    "quickVictory": false            // true: a victory reported < 30 s after the start, settled as a draw (outcome "draw")
   }
 }
 ```
@@ -176,7 +175,7 @@ How the checkers work (new checker types `lucky-first-turn`, `lucky-streak` and
 `lucky-win-with`):
 
 - **Which games count:** every Lucky Duel win, vs the AI and multiplayer, counted or not
-  (friendly tables excluded). A draw is not a win, and a quick victory vs the AI is a draw.
+  (friendly tables excluded). A draw is not a win. (Until 2026-10-24 a victory vs the AI reported < 30 s after the start was settled as a draw; removed at the owner's request.)
 - **"Your Pokémon"** is the Basic you drew (your starting Active). Names are matched by
   containment, so owner variants count: Magikarp = `base-set-035-magikarp`,
   `team-rocket-047-magikarp`; Scyther = `jungle-010-scyther`, `gym-heroes-013-rockets-scyther`;
@@ -210,7 +209,6 @@ Its target is the number of active achievements other than itself, so it grows b
    for no coins.
 2. Keep both `drawLuckyDuel` results. At the end, send
    `luckyDuel { playerStarterId, opponentStarterId, startingPlayer }` together with `turnNumber`.
-3. Result screen: `luckyDuel.payout`, `streak` and `streakBonus`. If `quickVictory` is true,
-   explain why the victory became a draw.
+3. Result screen: `luckyDuel.payout`, `streak` and `streakBonus`.
 4. Warn that leaving or reloading a Lucky Duel and starting another game counts as a defeat.
 5. Add the four achievements to `ACHIEVEMENT_DEFINITIONS`.
