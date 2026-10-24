@@ -10,12 +10,8 @@ import type { Card } from "@gonzaloaguila/game-core";
 export interface PackSlotDistribution {
   rarity: "common" | "uncommon" | "rare" | "rare-holo";
   count: number;
-  /** For rare slot: chance to upgrade to holo (0-1) */
-  holoChance?: number;
   /** Per-card chance to upgrade rarity (e.g. uncommon → rare) */
   upgradeChance?: number;
-  /** Rare slot: when the holo roll fails, a non-holo rare (any rare if the set has none) */
-  nonHoloWhenNotHolo?: boolean;
 }
 
 /**

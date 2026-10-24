@@ -552,12 +552,14 @@ describe("daily market", () => {
 // ---------------------------------------------------------------------------
 
 describe("odds", () => {
-  it("pack odds come from the generator: Base ~66.5% holo, other sets always a holo", () => {
+  it("rare and holo rare are one pool: every rare of a pack has the same chance; sets without non-holo rares always give a holo", () => {
     const base = getPackOdds("base-set-booster")!;
     expect(base.price).toBe(ECONOMY.packs.price);
-    // 0.665 in the rare slot, plus the 1% uncommon upgrades and the second rare into rare ∪ holo
-    expect(base.holoChance).toBeGreaterThan(0.665);
-    expect(base.holoChance).toBeLessThan(0.72);
+    for (const packId of [...STANDARD_BOOSTER_IDS, ...TRAINER_BOOSTER_IDS]) {
+      const odds = getPackOdds(packId)!;
+      const rareChances = odds.rarities.filter((r) => r.rarity === "rare" || r.rarity === "rare-holo").map((r) => r.chancePerCard);
+      expect(Math.max(...rareChances) - Math.min(...rareChances), packId).toBeLessThan(1e-6);
+    }
     for (const id of ["jungle-booster", "fossil-booster", "team-rocket-booster"]) {
       expect(getPackOdds(id)!.holoChance).toBe(1);
     }

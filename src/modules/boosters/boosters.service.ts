@@ -27,6 +27,7 @@ import type {
   PackOpeningResult,
   PulledCard,
   PackOdds,
+  PackSlotDistribution,
 } from "./boosters.types.js";
 
 // =============================================================================
@@ -47,18 +48,16 @@ const packTypes: Map<string, BoosterPackType> = new Map();
 export const SECOND_RARE_CHANCE = 0.1;
 
 /**
- * Standard 11-card booster: 1 rare slot (66.5% holo, otherwise a non-holo rare), 3 uncommons
- * (1% each to upgrade to the rare pool), 1 uncommon that is a second rare with SECOND_RARE_CHANCE,
- * 6 commons. No basic Energy.
+ * Standard 11-card booster: 1 rare slot, 3 uncommons (1% each to upgrade to the rare pool),
+ * 1 uncommon that is a second rare with SECOND_RARE_CHANCE, 6 commons. No basic Energy.
  * Every set listed here gets one; adding a set's booster = one entry (the cards come from
  * game-core's set registry).
  */
-// The rare slot: holo with holoChance, otherwise a non-holo rare (sets with only holo rares —
-// Jungle, Fossil, Team Rocket — always give a holo). 0.665 keeps Base Set's holo rate from before
-// Trainers left the set boosters (0.33 holo + 0.67 × 16 holos / 32 rares including 10 Trainers).
-// Gym Heroes has non-holo rares too, so it gets the same holo rate as Base Set.
+// The rare pool is rare ∪ rare-holo, every card equally likely (owner, 2026-10-23: "rara y
+// rara-holo son un solo grupo"; a separate holo roll over a small holo pool made a few cards come
+// out several times as often as the others). Sets with only holo rares always give a holo.
 const STANDARD_BOOSTER_SLOTS: BoosterPackType["slots"] = [
-  { rarity: "rare", count: 1, holoChance: 0.665, nonHoloWhenNotHolo: true },
+  { rarity: "rare", count: 1 },
   { rarity: "uncommon", count: 3, upgradeChance: 0.01 },
   { rarity: "uncommon", count: 1, upgradeChance: SECOND_RARE_CHANCE },
   { rarity: "common", count: 6 },
@@ -154,7 +153,7 @@ function initializeDefaultPacks(): void {
 
 /**
  * Trainers-only boosters, sold in the market only: 11 Trainers of a group of sets (1 rare slot
- * with 33% holo, 4 uncommons — the fourth a second rare with SECOND_RARE_CHANCE —, 6 commons), no
+ * from the same single rare pool, 4 uncommons — the fourth a second rare with SECOND_RARE_CHANCE —, 6 commons), no
  * Energy. One booster per era so each Trainer stays findable as sets are added (player
  * suggestion, 2026-10-22). Not STANDARD_BOOSTER_IDS, so the daily free pack, the welcome packs and
  * prize packs keep giving set boosters. A new set's Trainers go in one of these groups.
@@ -164,7 +163,7 @@ export const TRAINER_BOOSTER_ID = "trainer-booster";
 export const GYM_TRAINER_BOOSTER_ID = "gym-trainer-booster";
 
 const TRAINER_BOOSTER_SLOTS: BoosterPackType["slots"] = [
-  { rarity: "rare", count: 1, holoChance: 0.33 },
+  { rarity: "rare", count: 1 },
   { rarity: "uncommon", count: 3, upgradeChance: 0.01 },
   { rarity: "uncommon", count: 1, upgradeChance: SECOND_RARE_CHANCE },
   { rarity: "common", count: 6 },
@@ -272,26 +271,12 @@ function setCards(pack: PackPool): Card[] {
 
 /**
  * Get cards by rarity from a pack's pool. The "rare" pool is rare ∪ rare-holo (sets without
- * non-holo rares — Jungle, Fossil, Team Rocket — therefore always give a holo in the rare slot);
- * "rare-nonholo" is the non-holo rares, or that same "rare" pool when the set has none.
+ * non-holo rares — Jungle, Fossil, Team Rocket — therefore always give a holo in the rare slot).
  */
 function getCardsByRarity(pack: PackPool, rarity: string): Card[] {
-  const cards = setCards(pack);
-  if (cards.length === 0) return [];
-  if (rarity === "rare-nonholo") {
-    const nonHolo = cards.filter((card) => card.rarity === "rare");
-    return nonHolo.length > 0 ? nonHolo : getCardsByRarity(pack, "rare");
-  }
-
-  return cards.filter((card) => {
-    if (rarity === "rare-holo") {
-      return card.rarity === "rare-holo";
-    }
-    if (rarity === "rare") {
-      return card.rarity === "rare" || card.rarity === "rare-holo";
-    }
-    return card.rarity === rarity;
-  });
+  return setCards(pack).filter((card) =>
+    rarity === "rare" ? card.rarity === "rare" || card.rarity === "rare-holo" : card.rarity === rarity,
+  );
 }
 
 /**
@@ -333,21 +318,13 @@ function pickRandom<T>(array: T[], count: number): T[] {
 }
 
 /** Possible rarity targets of one draw of `slot`, with their probabilities (mirrors openPack). */
-function slotOutcomes(slot: BoosterPackType["slots"][number]): { probability: number; rarity: string; isHolo: boolean }[] {
-  const base: { probability: number; rarity: string; isHolo: boolean }[] =
-    slot.rarity === "rare" && slot.holoChance
-      ? [
-          { probability: slot.holoChance, rarity: "rare-holo", isHolo: true },
-          { probability: 1 - slot.holoChance, rarity: slot.nonHoloWhenNotHolo ? "rare-nonholo" : "rare", isHolo: false },
-        ]
-      : [{ probability: 1, rarity: slot.rarity, isHolo: false }];
-  if (!slot.upgradeChance) return base;
+function slotOutcomes(slot: BoosterPackType["slots"][number]): { probability: number; rarity: string }[] {
   const upgraded = slot.rarity === "uncommon" ? "rare" : slot.rarity === "common" ? "uncommon" : null;
-  if (!upgraded) return base;
-  return base.flatMap((o) => [
-    { ...o, probability: o.probability * (1 - slot.upgradeChance!) },
-    { probability: o.probability * slot.upgradeChance!, rarity: upgraded, isHolo: o.isHolo },
-  ]);
+  if (!slot.upgradeChance || !upgraded) return [{ probability: 1, rarity: slot.rarity }];
+  return [
+    { probability: 1 - slot.upgradeChance, rarity: slot.rarity },
+    { probability: slot.upgradeChance, rarity: upgraded },
+  ];
 }
 
 /**
@@ -368,37 +345,20 @@ export function openPack(packId: string): PackOpeningResult {
   // Process each slot in the distribution
   for (const slot of pack.slots) {
     for (let i = 0; i < slot.count; i++) {
-      let targetRarity = slot.rarity;
-      let isHolo = false;
-      let pool: string = targetRarity;
-
-      // Check for holo upgrade on rare slot
-      if (slot.rarity === "rare" && slot.holoChance) {
-        if (Math.random() < slot.holoChance) {
-          targetRarity = "rare-holo";
-          isHolo = true;
-        } else if (slot.nonHoloWhenNotHolo) {
-          pool = "rare-nonholo";
-        }
-      }
-      if (targetRarity !== slot.rarity) pool = targetRarity;
+      let targetRarity: PackSlotDistribution["rarity"] = slot.rarity;
 
       // Per-card rarity upgrade (e.g. uncommon → rare)
       if (slot.upgradeChance && Math.random() < slot.upgradeChance) {
         if (slot.rarity === "uncommon") targetRarity = "rare";
         else if (slot.rarity === "common") targetRarity = "uncommon";
-        pool = targetRarity;
       }
 
-      const availableCards = getCardsByRarity(pack, pool);
+      const availableCards = getCardsByRarity(pack, targetRarity);
       if (availableCards.length === 0) continue;
 
       const card = pickWeighted(availableCards);
-      pulledCards.push({
-        card,
-        slotType: isHolo ? "rare-holo" : targetRarity,
-        isHolo: isHolo || card.rarity === "rare-holo",
-      });
+      const isHolo = card.rarity === "rare-holo";
+      pulledCards.push({ card, slotType: isHolo ? "rare-holo" : targetRarity, isHolo });
     }
   }
 
