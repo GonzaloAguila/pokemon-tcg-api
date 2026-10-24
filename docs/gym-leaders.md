@@ -58,7 +58,7 @@ battles use the game-core smart AI through `nextAIStep` / `applyAIStep`, exactly
   Taken while the user's table reservation is held (no second series of the same user can race it).
 - **Rewards (first series victory per version, once):** normal = medal `boulder` + coin `golem`
   ("Moneda de Brock") + card back `cardback-brock` + **1500 coins**; EXPERT = **3000 coins** + card back
-  `cardback-brock-expert` ("Brock EXPERT", `/gym-leaders/brock/brock_bkc_expert.png`). A later
+  `cardback-brock-expert` ("Brock EXPERT", `/gym-leaders/brock/brock_bkc_expert.jpg`). A later
   victory gives nothing. Coins through `creditBalance` (transaction `gym_reward`, "Victoria contra
   Brock: +1500 monedas"). "First" = the version's marker row was created now (normal: the medal;
   EXPERT: the EXPERT card back), all in one transaction.
