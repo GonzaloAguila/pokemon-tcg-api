@@ -23,6 +23,8 @@ export const ADVENTURE_MODIFIER_TYPES = [
   "bonusCards",
   "opponentSetup",
   "opponentPassives",
+  "darkness",
+  "alwaysConfused",
 ] as const satisfies readonly BattleModifier["type"][];
 
 // The engine's lists must be exactly these (a new passive / modifier needs content support here)

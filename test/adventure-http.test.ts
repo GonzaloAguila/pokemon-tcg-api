@@ -502,7 +502,7 @@ describe("adventure 2: entry cost, gym requirement, coins reward", () => {
     await prisma.userStarterUnlock.create({ data: { userId: user.id, starterId: "pikachu" } });
     for (let attempt = 0; attempt < 5; attempt++) {
       const created = await adventure.createRun(user.id, { adventureId: ADV2, difficulty: "hard", starterId: "pikachu" });
-      await setRun(created.id, { currentBattle: 5, phase: "in_battle", seed: `seed-${attempt}`, battle: battleRow() });
+      await setRun(created.id, { currentBattle: 4, phase: "in_battle", seed: `seed-${attempt}`, battle: battleRow() });
       const won = await adventure.applyRunBattleResult(created.id, { victory: true, reason: "prizes", turns: 10 });
       expect(won!.run.offer).toHaveLength(3);
       await prisma.adventureRun.update({ where: { id: created.id }, data: { status: "abandoned", phase: "finished" } });

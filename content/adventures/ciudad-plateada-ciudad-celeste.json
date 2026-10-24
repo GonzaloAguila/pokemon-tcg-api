@@ -16,8 +16,7 @@
       "line": { "basic": "base-set-046-charmander", "stage1": "base-set-024-charmeleon", "stage2": "base-set-004-charizard" },
       "deck": [
         { "cardId": "base-set-046-charmander", "qty": 4 },
-        { "cardId": "base-set-024-charmeleon", "qty": 2 },
-        { "cardId": "base-set-004-charizard", "qty": 1 },
+        { "cardId": "base-set-024-charmeleon", "qty": 3 },
         { "cardId": "jungle-054-jigglypuff", "qty": 2 },
         { "cardId": "base-set-094-potion", "qty": 1 },
         { "cardId": "base-set-090-super-potion", "qty": 1 },
@@ -34,8 +33,7 @@
       "line": { "basic": "base-set-063-squirtle", "stage1": "base-set-042-wartortle", "stage2": "base-set-002-blastoise" },
       "deck": [
         { "cardId": "base-set-063-squirtle", "qty": 4 },
-        { "cardId": "base-set-042-wartortle", "qty": 2 },
-        { "cardId": "base-set-002-blastoise", "qty": 1 },
+        { "cardId": "base-set-042-wartortle", "qty": 3 },
         { "cardId": "jungle-054-jigglypuff", "qty": 2 },
         { "cardId": "base-set-094-potion", "qty": 1 },
         { "cardId": "base-set-090-super-potion", "qty": 1 },
@@ -52,8 +50,7 @@
       "line": { "basic": "base-set-044-bulbasaur", "stage1": "base-set-030-ivysaur", "stage2": "base-set-015-venusaur" },
       "deck": [
         { "cardId": "base-set-044-bulbasaur", "qty": 4 },
-        { "cardId": "base-set-030-ivysaur", "qty": 2 },
-        { "cardId": "base-set-015-venusaur", "qty": 1 },
+        { "cardId": "base-set-030-ivysaur", "qty": 3 },
         { "cardId": "jungle-054-jigglypuff", "qty": 2 },
         { "cardId": "base-set-094-potion", "qty": 1 },
         { "cardId": "base-set-090-super-potion", "qty": 1 },
@@ -95,76 +92,39 @@
         "deckByDifficulty": {
           "normal": [
             { "cardId": "base-set-061-rattata", "qty": 3 },
+            { "cardId": "base-set-040-raticate", "qty": 2 },
             { "cardId": "jungle-062-spearow", "qty": 3 },
+            { "cardId": "jungle-036-fearow", "qty": 1 },
             { "cardId": "fossil-046-ekans", "qty": 2 },
             { "cardId": "base-set-094-potion", "qty": 1 },
-            { "cardId": "base-set-099-grass-energy", "qty": 11 }
+            { "cardId": "base-set-084-pluspower", "qty": 1 },
+            { "cardId": "base-set-091-bill", "qty": 1 },
+            { "cardId": "base-set-099-grass-energy", "qty": 9 }
           ],
           "hard": [
             { "cardId": "base-set-061-rattata", "qty": 3 },
             { "cardId": "base-set-040-raticate", "qty": 2 },
             { "cardId": "jungle-062-spearow", "qty": 3 },
-            { "cardId": "jungle-036-fearow", "qty": 1 },
+            { "cardId": "jungle-036-fearow", "qty": 2 },
             { "cardId": "fossil-046-ekans", "qty": 2 },
             { "cardId": "fossil-031-arbok", "qty": 1 },
             { "cardId": "base-set-094-potion", "qty": 1 },
-            { "cardId": "base-set-091-bill", "qty": 1 },
-            { "cardId": "base-set-084-pluspower", "qty": 1 },
-            { "cardId": "base-set-099-grass-energy", "qty": 9 }
+            { "cardId": "base-set-090-super-potion", "qty": 1 },
+            { "cardId": "base-set-091-bill", "qty": 2 },
+            { "cardId": "base-set-084-pluspower", "qty": 2 },
+            { "cardId": "base-set-093-gust-of-wind", "qty": 1 },
+            { "cardId": "base-set-096-double-colorless-energy", "qty": 2 },
+            { "cardId": "base-set-099-grass-energy", "qty": 8 }
           ]
         }
       },
       "treasurePool": "tier1",
       "modifiers": [],
-      "modifiersByDifficulty": {
-        "hard": [{ "type": "opponentSetup", "active": ["jungle-062-spearow"], "bench": [["base-set-061-rattata"]] }]
-      },
+      "modifiersByDifficulty": { "hard": [{ "type": "opponentSetup", "active": ["jungle-062-spearow"], "bench": [["base-set-061-rattata"]] }] },
       "objective": "Tomás presume de su Rattata, «uno de los más fuertes»: demuéstrale que el tuyo es mejor."
     },
     {
       "index": 2,
-      "id": "ruta-3-cazabichos-ramon",
-      "location": "Ruta 3",
-      "opponent": {
-        "name": "Ramón",
-        "trainerClass": "Cazabichos",
-        "sprite": "/sprites/adventure/trainers/bugcatcher.png",
-        "lead": "base-set-069-weedle",
-        "deckByDifficulty": {
-          "normal": [
-            { "cardId": "base-set-045-caterpie", "qty": 3 },
-            { "cardId": "base-set-054-metapod", "qty": 2 },
-            { "cardId": "base-set-069-weedle", "qty": 3 },
-            { "cardId": "base-set-033-kakuna", "qty": 2 },
-            { "cardId": "base-set-094-potion", "qty": 1 },
-            { "cardId": "base-set-099-grass-energy", "qty": 9 }
-          ],
-          "hard": [
-            { "cardId": "base-set-045-caterpie", "qty": 3 },
-            { "cardId": "base-set-054-metapod", "qty": 2 },
-            { "cardId": "jungle-033-butterfree", "qty": 1 },
-            { "cardId": "base-set-069-weedle", "qty": 3 },
-            { "cardId": "base-set-033-kakuna", "qty": 2 },
-            { "cardId": "base-set-017-beedrill", "qty": 1 },
-            { "cardId": "base-set-094-potion", "qty": 1 },
-            { "cardId": "base-set-091-bill", "qty": 1 },
-            { "cardId": "base-set-095-switch", "qty": 1 },
-            { "cardId": "base-set-099-grass-energy", "qty": 9 }
-          ]
-        }
-      },
-      "treasurePool": "tier1",
-      "modifiers": [],
-      "modifiersByDifficulty": {
-        "hard": [
-          { "type": "opponentSetup", "active": ["base-set-069-weedle"], "bench": [["base-set-045-caterpie"]] },
-          { "type": "opponentPassives", "passives": ["start_attached_energy"] }
-        ]
-      },
-      "objective": "Los bichos de Ramón evolucionan rápido: noquéalos antes de que lleguen a la última fase."
-    },
-    {
-      "index": 3,
       "id": "ruta-3-chica-lucia",
       "location": "Ruta 3",
       "opponent": {
@@ -175,13 +135,6 @@
         "deckByDifficulty": {
           "normal": [
             { "cardId": "jungle-054-jigglypuff", "qty": 3 },
-            { "cardId": "base-set-057-pidgey", "qty": 3 },
-            { "cardId": "jungle-057-nidoranf", "qty": 2 },
-            { "cardId": "base-set-094-potion", "qty": 1 },
-            { "cardId": "base-set-099-grass-energy", "qty": 11 }
-          ],
-          "hard": [
-            { "cardId": "jungle-054-jigglypuff", "qty": 3 },
             { "cardId": "jungle-016-wigglytuff", "qty": 1 },
             { "cardId": "base-set-057-pidgey", "qty": 3 },
             { "cardId": "base-set-022-pidgeotto", "qty": 1 },
@@ -189,6 +142,19 @@
             { "cardId": "jungle-040-nidorina", "qty": 1 },
             { "cardId": "base-set-094-potion", "qty": 1 },
             { "cardId": "base-set-091-bill", "qty": 1 },
+            { "cardId": "base-set-099-grass-energy", "qty": 10 }
+          ],
+          "hard": [
+            { "cardId": "jungle-054-jigglypuff", "qty": 3 },
+            { "cardId": "jungle-016-wigglytuff", "qty": 2 },
+            { "cardId": "base-set-057-pidgey", "qty": 3 },
+            { "cardId": "base-set-022-pidgeotto", "qty": 2 },
+            { "cardId": "jungle-057-nidoranf", "qty": 2 },
+            { "cardId": "jungle-040-nidorina", "qty": 1 },
+            { "cardId": "base-set-094-potion", "qty": 1 },
+            { "cardId": "base-set-090-super-potion", "qty": 1 },
+            { "cardId": "base-set-091-bill", "qty": 2 },
+            { "cardId": "base-set-084-pluspower", "qty": 1 },
             { "cardId": "team-rocket-079-sleep", "qty": 1 },
             { "cardId": "base-set-099-grass-energy", "qty": 10 }
           ]
@@ -205,7 +171,7 @@
       "objective": "La canción de Jigglypuff: Lucía intentará dormir a tu Pokémon activo. Ten un Switch a mano."
     },
     {
-      "index": 4,
+      "index": 3,
       "id": "centro-pokemon-ruta-4-vendedor-marcos",
       "location": "Centro Pokémon Ruta 4",
       "opponent": {
@@ -217,34 +183,31 @@
           "normal": [
             { "cardId": "base-set-035-magikarp", "qty": 4 },
             { "cardId": "team-rocket-047-magikarp", "qty": 2 },
-            { "cardId": "base-set-006-gyarados", "qty": 1 },
-            { "cardId": "base-set-094-potion", "qty": 1 },
-            { "cardId": "base-set-102-water-energy", "qty": 12 }
+            { "cardId": "base-set-006-gyarados", "qty": 2 },
+            { "cardId": "base-set-090-super-potion", "qty": 1 },
+            { "cardId": "base-set-091-bill", "qty": 1 },
+            { "cardId": "base-set-102-water-energy", "qty": 11 }
           ],
           "hard": [
             { "cardId": "base-set-035-magikarp", "qty": 3 },
             { "cardId": "team-rocket-047-magikarp", "qty": 2 },
-            { "cardId": "base-set-006-gyarados", "qty": 1 },
+            { "cardId": "base-set-006-gyarados", "qty": 2 },
             { "cardId": "team-rocket-008-dark-gyarados", "qty": 1 },
-            { "cardId": "base-set-090-super-potion", "qty": 1 },
+            { "cardId": "base-set-090-super-potion", "qty": 2 },
             { "cardId": "base-set-091-bill", "qty": 1 },
             { "cardId": "base-set-084-pluspower", "qty": 1 },
-            { "cardId": "base-set-102-water-energy", "qty": 14 }
+            { "cardId": "base-set-102-water-energy", "qty": 13 }
           ]
         }
       },
       "treasurePool": "tier1",
       "fixedOffer": ["a2-magikarp", "t1-bill", "t1-tactica"],
       "modifiers": [],
-      "modifiersByDifficulty": {
-        "hard": [
-          { "type": "opponentSetup", "active": ["team-rocket-047-magikarp"], "bench": [["base-set-035-magikarp"]] }
-        ]
-      },
+      "modifiersByDifficulty": { "hard": [{ "type": "opponentSetup", "active": ["team-rocket-047-magikarp"], "bench": [["base-set-035-magikarp"]] }] },
       "objective": "«¡Un Magikarp por solo 500 monedas!» Vence al vendedor y su Magikarp con Gyarados entra en tus tesoros."
     },
     {
-      "index": 5,
+      "index": 4,
       "id": "monte-moon-montanero-alberto",
       "location": "Monte Moon",
       "opponent": {
@@ -254,44 +217,48 @@
         "lead": "base-set-056-onix",
         "deckByDifficulty": {
           "normal": [
-            { "cardId": "fossil-047-geodude", "qty": 3 },
-            { "cardId": "fossil-037-graveler", "qty": 1 },
+            { "cardId": "fossil-047-geodude", "qty": 4 },
+            { "cardId": "fossil-037-graveler", "qty": 2 },
             { "cardId": "base-set-056-onix", "qty": 2 },
             { "cardId": "fossil-057-zubat", "qty": 4 },
-            { "cardId": "base-set-094-potion", "qty": 1 },
-            { "cardId": "base-set-091-bill", "qty": 1 },
-            { "cardId": "base-set-097-fighting-energy", "qty": 6 },
-            { "cardId": "base-set-099-grass-energy", "qty": 4 }
+            { "cardId": "fossil-034-golbat", "qty": 1 },
+            { "cardId": "base-set-094-potion", "qty": 2 },
+            { "cardId": "base-set-097-fighting-energy", "qty": 8 },
+            { "cardId": "base-set-099-grass-energy", "qty": 5 }
           ],
           "hard": [
-            { "cardId": "fossil-047-geodude", "qty": 3 },
+            { "cardId": "fossil-047-geodude", "qty": 4 },
             { "cardId": "fossil-037-graveler", "qty": 2 },
             { "cardId": "fossil-036-golem", "qty": 1 },
             { "cardId": "base-set-056-onix", "qty": 2 },
             { "cardId": "fossil-057-zubat", "qty": 4 },
             { "cardId": "fossil-034-golbat", "qty": 2 },
             { "cardId": "base-set-094-potion", "qty": 1 },
-            { "cardId": "base-set-090-super-potion", "qty": 1 },
-            { "cardId": "base-set-091-bill", "qty": 1 },
-            { "cardId": "base-set-084-pluspower", "qty": 1 },
-            { "cardId": "base-set-097-fighting-energy", "qty": 5 },
-            { "cardId": "base-set-099-grass-energy", "qty": 3 }
+            { "cardId": "base-set-090-super-potion", "qty": 2 },
+            { "cardId": "base-set-084-pluspower", "qty": 2 },
+            { "cardId": "base-set-097-fighting-energy", "qty": 8 },
+            { "cardId": "base-set-099-grass-energy", "qty": 6 }
           ]
         }
       },
       "treasurePool": "major",
-      "modifiers": [{ "type": "opponentSetup", "active": ["fossil-047-geodude"], "bench": [["fossil-057-zubat"], ["fossil-057-zubat"]] }],
+      "modifiers": [
+        { "type": "prizeCount", "player": 2, "opponent": 2 },
+        { "type": "opponentSetup", "active": ["fossil-047-geodude"], "bench": [["fossil-057-zubat"], ["fossil-057-zubat"]] },
+        { "type": "darkness" }
+      ],
       "modifiersByDifficulty": {
         "hard": [
           { "type": "prizeCount", "opponent": 2 },
-          { "type": "opponentSetup", "active": ["base-set-056-onix"], "bench": [["fossil-057-zubat"], ["fossil-057-zubat"], ["fossil-057-zubat"]] }
+          { "type": "opponentSetup", "active": ["base-set-056-onix"], "bench": [["fossil-057-zubat"], ["fossil-057-zubat"], ["fossil-057-zubat"]] },
+          { "type": "darkness" }
         ]
       },
-      "objective": "Emboscada de Zubat: en la oscuridad del Monte Moon, el rival empieza con Zubat en la banca.",
-      "objectiveByDifficulty": { "hard": "Emboscada de Zubat, y el rival gana con 2 premios: cuida a tus Pokémon." }
+      "objective": "Emboscada en la oscuridad: el rival empieza con Zubat en la banca, y en la cueva cada ataque necesita una moneda (cruz: el ataque falla).",
+      "objectiveByDifficulty": { "hard": "Emboscada en la oscuridad: cada ataque necesita una moneda (cruz: falla), y el rival gana con 2 premios." }
     },
     {
-      "index": 6,
+      "index": 5,
       "id": "monte-moon-cientifico-seymour",
       "location": "Monte Moon",
       "opponent": {
@@ -333,7 +300,7 @@
       "objectiveByDifficulty": { "hard": "La Piedra Lunar ya hizo efecto: un Clefable de Seymour te espera en la banca." }
     },
     {
-      "index": 7,
+      "index": 6,
       "id": "monte-moon-team-rocket",
       "location": "Monte Moon",
       "opponent": {
@@ -383,7 +350,7 @@
       }
     },
     {
-      "index": 8,
+      "index": 7,
       "id": "monte-moon-super-nerd-miguel",
       "location": "Monte Moon",
       "opponent": {
@@ -393,42 +360,94 @@
         "lead": "fossil-048-grimer",
         "deckByDifficulty": {
           "normal": [
-            { "cardId": "fossil-048-grimer", "qty": 3 },
+            { "cardId": "fossil-048-grimer", "qty": 4 },
             { "cardId": "base-set-067-voltorb", "qty": 3 },
             { "cardId": "jungle-002-electrode", "qty": 1 },
             { "cardId": "base-set-051-koffing", "qty": 3 },
-            { "cardId": "base-set-094-potion", "qty": 1 },
-            { "cardId": "base-set-091-bill", "qty": 1 },
-            { "cardId": "base-set-099-grass-energy", "qty": 6 },
-            { "cardId": "base-set-100-lightning-energy", "qty": 4 }
+            { "cardId": "base-set-094-potion", "qty": 2 },
+            { "cardId": "base-set-099-grass-energy", "qty": 9 },
+            { "cardId": "base-set-100-lightning-energy", "qty": 6 }
           ],
           "hard": [
             { "cardId": "fossil-048-grimer", "qty": 3 },
             { "cardId": "fossil-013-muk", "qty": 1 },
             { "cardId": "base-set-067-voltorb", "qty": 3 },
             { "cardId": "jungle-002-electrode", "qty": 2 },
-            { "cardId": "base-set-051-koffing", "qty": 3 },
+            { "cardId": "base-set-051-koffing", "qty": 4 },
             { "cardId": "fossil-045-weezing", "qty": 2 },
-            { "cardId": "base-set-090-super-potion", "qty": 1 },
-            { "cardId": "base-set-091-bill", "qty": 1 },
-            { "cardId": "base-set-084-pluspower", "qty": 1 },
+            { "cardId": "base-set-090-super-potion", "qty": 2 },
+            { "cardId": "base-set-084-pluspower", "qty": 2 },
             { "cardId": "base-set-093-gust-of-wind", "qty": 1 },
-            { "cardId": "base-set-099-grass-energy", "qty": 5 },
-            { "cardId": "base-set-100-lightning-energy", "qty": 3 }
+            { "cardId": "base-set-099-grass-energy", "qty": 9 },
+            { "cardId": "base-set-100-lightning-energy", "qty": 5 }
           ]
         }
       },
       "treasurePool": "tier2",
       "fixedOffer": ["a2-fosil-helix", "a2-fosil-domo"],
-      "modifiers": [],
+      "modifiers": [
+        { "type": "prizeCount", "player": 2, "opponent": 2 },
+        { "type": "darkness" }
+      ],
       "modifiersByDifficulty": {
         "hard": [
           { "type": "prizeCount", "opponent": 2 },
-          { "type": "opponentSetup", "active": ["base-set-051-koffing"], "bench": [["fossil-048-grimer"], ["base-set-067-voltorb"]] }
+          { "type": "opponentSetup", "active": ["base-set-051-koffing"], "bench": [["fossil-048-grimer"], ["base-set-067-voltorb"]] },
+          { "type": "darkness" }
         ]
       },
-      "objective": "Miguel custodia dos fósiles: gánale y elige el Fósil Helix (Omanyte) o el Fósil Domo (Kabuto).",
-      "objectiveByDifficulty": { "hard": "Gánale a Miguel y elige el Fósil Helix o el Fósil Domo. El rival gana con 2 premios: cuida a tus Pokémon." }
+      "objective": "En lo más oscuro del Monte Moon cada ataque necesita una moneda (cruz: falla). Gánale a Miguel y elige el Fósil Helix (Omanyte) o el Fósil Domo (Kabuto).",
+      "objectiveByDifficulty": {
+        "hard": "Oscuridad total: cada ataque necesita una moneda y el rival gana con 2 premios. Gánale y elige el Fósil Helix o el Fósil Domo."
+      }
+    },
+    {
+      "index": 8,
+      "id": "ruta-4-pescador-pedro",
+      "location": "Ruta 4",
+      "opponent": {
+        "name": "Pedro",
+        "trainerClass": "Pescador",
+        "sprite": "/sprites/adventure/trainers/fisherman.png",
+        "lead": "fossil-053-psyduck",
+        "deckByDifficulty": {
+          "normal": [
+            { "cardId": "fossil-053-psyduck", "qty": 4 },
+            { "cardId": "fossil-035-golduck", "qty": 1 },
+            { "cardId": "base-set-059-poliwag", "qty": 3 },
+            { "cardId": "base-set-038-poliwhirl", "qty": 1 },
+            { "cardId": "jungle-053-goldeen", "qty": 3 },
+            { "cardId": "jungle-046-seaking", "qty": 1 },
+            { "cardId": "base-set-094-potion", "qty": 2 },
+            { "cardId": "base-set-102-water-energy", "qty": 13 }
+          ],
+          "hard": [
+            { "cardId": "fossil-053-psyduck", "qty": 4 },
+            { "cardId": "fossil-035-golduck", "qty": 2 },
+            { "cardId": "base-set-059-poliwag", "qty": 3 },
+            { "cardId": "base-set-038-poliwhirl", "qty": 2 },
+            { "cardId": "jungle-053-goldeen", "qty": 2 },
+            { "cardId": "jungle-046-seaking", "qty": 1 },
+            { "cardId": "base-set-090-super-potion", "qty": 2 },
+            { "cardId": "base-set-084-pluspower", "qty": 1 },
+            { "cardId": "base-set-102-water-energy", "qty": 15 }
+          ]
+        }
+      },
+      "treasurePool": "tier2",
+      "modifiers": [
+        { "type": "prizeCount", "player": 2, "opponent": 2 },
+        { "type": "alwaysConfused" }
+      ],
+      "modifiersByDifficulty": {
+        "hard": [
+          { "type": "alwaysConfused" },
+          { "type": "opponentSetup", "active": ["fossil-053-psyduck"], "bench": [["base-set-059-poliwag"]] },
+          { "type": "opponentPassives", "passives": ["start_attached_energy"] }
+        ]
+      },
+      "objective": "La laguna de Psyduck: un dolor de cabeza que no se va. Los dos Pokémon activos están confundidos todo el tiempo.",
+      "objectiveByDifficulty": { "hard": "Los dos Pokémon activos están confundidos todo el tiempo, y el rival empieza con Psyduck y Poliwag en juego." }
     },
     {
       "index": 9,
@@ -622,29 +641,79 @@
       "description": "Rivales con mazos evolucionados y reglas de jefe; el Team Rocket roba 3 cartas y elige las mejores.",
       "hearts": 2,
       "treasurePools": {
-        "tier1": ["h1-cazador", "h1-emboscada", "h1-apuesta", "t1-evolucion", "h1-tijera", "t1-moneda", "h1-kangaskhan", "a2-fosil"],
-        "major": ["m-final", "m-atajo", "m-corazon", "h5-criador", "m-profesor", "h2-todo-o-nada"],
+        "tier1": [
+          "h1-cazador",
+          "h1-emboscada",
+          "h1-apuesta",
+          "t1-evolucion",
+          "h1-kangaskhan",
+          "t1-moneda",
+          "a2-fosil",
+          "a2-spearow",
+          "a2-jigglypuff",
+          "a2-nidoran-m",
+          "a2-nidoran-f",
+          "a2-ekans",
+          "a2-sandshrew"
+        ],
+        "major": ["m-final", "m-atajo", "m-corazon", "h5-criador", "m-profesor", "a2-golem"],
         "tier2": [
           "h2-todo-o-nada",
           "h2-golpe-bajo",
           "t1-energia",
           "h2-peso-pesado",
-          "h2-bandada",
           "t2-dce",
           "t2-removal",
           "t2-plus",
           "h2-buscador",
           "t2-mano",
-          "a2-piedra-lunar"
+          "a2-piedra-lunar",
+          "a2-zubat",
+          "a2-geodude",
+          "a2-paras",
+          "a2-onix",
+          "a2-centro",
+          "a2-laguna"
         ]
       },
       "treasureOffer": { "rarityWeights": { "common": 4, "rare": 4, "epic": 2 }, "maxPassives": 1 }
     }
   },
   "treasurePools": {
-    "tier1": ["t1-evolucion", "t1-pociones", "t1-bill", "t1-tactica", "t1-pikachu", "t1-moneda", "a2-fosil"],
-    "major": ["m-final", "m-corazon", "m-atajo", "m-profesor"],
-    "tier2": ["t2-oak", "t2-superpocion", "t2-plus", "t2-removal", "t2-bandada", "t2-defensa", "t2-dce", "t2-mano", "t1-energia", "a2-piedra-lunar"]
+    "tier1": [
+      "t1-evolucion",
+      "t1-pociones",
+      "t1-bill",
+      "t1-tactica",
+      "t1-moneda",
+      "a2-fosil",
+      "a2-rattata",
+      "a2-spearow",
+      "a2-jigglypuff",
+      "a2-nidoran-m",
+      "a2-nidoran-f",
+      "a2-ekans",
+      "a2-sandshrew"
+    ],
+    "major": ["m-final", "m-corazon", "m-atajo", "m-profesor", "a2-golem"],
+    "tier2": [
+      "t2-oak",
+      "t2-superpocion",
+      "t2-plus",
+      "t2-removal",
+      "t2-defensa",
+      "t2-dce",
+      "t2-mano",
+      "t1-energia",
+      "a2-piedra-lunar",
+      "a2-zubat",
+      "a2-geodude",
+      "a2-paras",
+      "a2-onix",
+      "a2-meowth",
+      "a2-centro",
+      "a2-laguna"
+    ]
   },
   "treasureOffer": { "rarityWeights": { "common": 6, "rare": 3, "epic": 1 }, "maxPassives": 1 },
   "treasures": [
@@ -654,7 +723,10 @@
       "description": "+1 básico y +1 Stage 1 de tu inicial",
       "rarity": "rare",
       "kind": "cards",
-      "cards": [{ "ref": "starter.basic", "qty": 1 }, { "ref": "starter.stage1", "qty": 1 }]
+      "cards": [
+        { "ref": "starter.basic", "qty": 1 },
+        { "ref": "starter.stage1", "qty": 1 }
+      ]
     },
     {
       "id": "t1-pociones",
@@ -678,15 +750,10 @@
       "description": "+1 Switch y +1 Gust of Wind",
       "rarity": "common",
       "kind": "cards",
-      "cards": [{ "cardId": "base-set-095-switch", "qty": 1 }, { "cardId": "base-set-093-gust-of-wind", "qty": 1 }]
-    },
-    {
-      "id": "t1-pikachu",
-      "name": "Compañero eléctrico",
-      "description": "+2 Pikachu y +2 energías Rayo",
-      "rarity": "rare",
-      "kind": "cards",
-      "cards": [{ "cardId": "base-set-058-pikachu", "qty": 2 }, { "cardId": "base-set-100-lightning-energy", "qty": 2 }]
+      "cards": [
+        { "cardId": "base-set-095-switch", "qty": 1 },
+        { "cardId": "base-set-093-gust-of-wind", "qty": 1 }
+      ]
     },
     {
       "id": "t1-moneda",
@@ -710,7 +777,10 @@
       "description": "+1 Stage 2 y +1 Stage 1 de tu inicial",
       "rarity": "epic",
       "kind": "cards",
-      "cards": [{ "ref": "starter.stage2", "qty": 1 }, { "ref": "starter.stage1", "qty": 1 }]
+      "cards": [
+        { "ref": "starter.stage2", "qty": 1 },
+        { "ref": "starter.stage1", "qty": 1 }
+      ]
     },
     {
       "id": "m-corazon",
@@ -734,7 +804,10 @@
       "description": "+1 Professor Oak y +1 Computer Search",
       "rarity": "epic",
       "kind": "cards",
-      "cards": [{ "cardId": "base-set-088-professor-oak", "qty": 1 }, { "cardId": "base-set-071-computer-search", "qty": 1 }]
+      "cards": [
+        { "cardId": "base-set-088-professor-oak", "qty": 1 },
+        { "cardId": "base-set-071-computer-search", "qty": 1 }
+      ]
     },
     {
       "id": "t2-oak",
@@ -767,14 +840,6 @@
       "rarity": "rare",
       "kind": "cards",
       "cards": [{ "cardId": "base-set-092-energy-removal", "qty": 2 }]
-    },
-    {
-      "id": "t2-bandada",
-      "name": "Bandada",
-      "description": "+2 Pidgey y +1 Pidgeotto",
-      "rarity": "rare",
-      "kind": "cards",
-      "cards": [{ "cardId": "base-set-057-pidgey", "qty": 2 }, { "cardId": "base-set-022-pidgeotto", "qty": 1 }]
     },
     {
       "id": "t2-defensa",
@@ -814,7 +879,10 @@
       "description": "+1 Gust of Wind y +1 PlusPower",
       "rarity": "common",
       "kind": "cards",
-      "cards": [{ "cardId": "base-set-093-gust-of-wind", "qty": 1 }, { "cardId": "base-set-084-pluspower", "qty": 1 }]
+      "cards": [
+        { "cardId": "base-set-093-gust-of-wind", "qty": 1 },
+        { "cardId": "base-set-084-pluspower", "qty": 1 }
+      ]
     },
     {
       "id": "h1-apuesta",
@@ -822,15 +890,10 @@
       "description": "+1 Gambler y +1 Bill",
       "rarity": "common",
       "kind": "cards",
-      "cards": [{ "cardId": "fossil-060-gambler", "qty": 1 }, { "cardId": "base-set-091-bill", "qty": 1 }]
-    },
-    {
-      "id": "h1-tijera",
-      "name": "Filo del bosque",
-      "description": "+1 Scyther y +1 Double Colorless Energy",
-      "rarity": "rare",
-      "kind": "cards",
-      "cards": [{ "cardId": "jungle-010-scyther", "qty": 1 }, { "cardId": "base-set-096-double-colorless-energy", "qty": 1 }]
+      "cards": [
+        { "cardId": "fossil-060-gambler", "qty": 1 },
+        { "cardId": "base-set-091-bill", "qty": 1 }
+      ]
     },
     {
       "id": "h1-kangaskhan",
@@ -838,7 +901,10 @@
       "description": "+1 Kangaskhan y +2 Double Colorless Energy",
       "rarity": "epic",
       "kind": "cards",
-      "cards": [{ "cardId": "jungle-005-kangaskhan", "qty": 1 }, { "cardId": "base-set-096-double-colorless-energy", "qty": 2 }]
+      "cards": [
+        { "cardId": "jungle-005-kangaskhan", "qty": 1 },
+        { "cardId": "base-set-096-double-colorless-energy", "qty": 2 }
+      ]
     },
     {
       "id": "h5-criador",
@@ -846,7 +912,10 @@
       "description": "+1 Stage 2 de tu inicial y +2 Pokémon Breeder",
       "rarity": "epic",
       "kind": "cards",
-      "cards": [{ "ref": "starter.stage2", "qty": 1 }, { "cardId": "base-set-076-pokemon-breeder", "qty": 2 }]
+      "cards": [
+        { "ref": "starter.stage2", "qty": 1 },
+        { "cardId": "base-set-076-pokemon-breeder", "qty": 2 }
+      ]
     },
     {
       "id": "h2-todo-o-nada",
@@ -854,7 +923,10 @@
       "description": "+2 Professor Oak y +1 Computer Search: robas mucho, pero descartas tu mano",
       "rarity": "epic",
       "kind": "cards",
-      "cards": [{ "cardId": "base-set-088-professor-oak", "qty": 2 }, { "cardId": "base-set-071-computer-search", "qty": 1 }]
+      "cards": [
+        { "cardId": "base-set-088-professor-oak", "qty": 2 },
+        { "cardId": "base-set-071-computer-search", "qty": 1 }
+      ]
     },
     {
       "id": "h2-golpe-bajo",
@@ -870,18 +942,9 @@
       "description": "+1 Snorlax y +1 Double Colorless Energy",
       "rarity": "rare",
       "kind": "cards",
-      "cards": [{ "cardId": "jungle-011-snorlax", "qty": 1 }, { "cardId": "base-set-096-double-colorless-energy", "qty": 1 }]
-    },
-    {
-      "id": "h2-bandada",
-      "name": "Bandada veloz",
-      "description": "+1 Pidgey, +1 Pidgeotto y +1 Pidgeot",
-      "rarity": "rare",
-      "kind": "cards",
       "cards": [
-        { "cardId": "base-set-057-pidgey", "qty": 1 },
-        { "cardId": "base-set-022-pidgeotto", "qty": 1 },
-        { "cardId": "jungle-008-pidgeot", "qty": 1 }
+        { "cardId": "jungle-011-snorlax", "qty": 1 },
+        { "cardId": "base-set-096-double-colorless-energy", "qty": 1 }
       ]
     },
     {
@@ -890,15 +953,22 @@
       "description": "+1 Computer Search y +1 Energy Retrieval",
       "rarity": "common",
       "kind": "cards",
-      "cards": [{ "cardId": "base-set-071-computer-search", "qty": 1 }, { "cardId": "base-set-081-energy-retrieval", "qty": 1 }]
+      "cards": [
+        { "cardId": "base-set-071-computer-search", "qty": 1 },
+        { "cardId": "base-set-081-energy-retrieval", "qty": 1 }
+      ]
     },
     {
       "id": "a2-magikarp",
       "name": "Oferta del vendedor",
-      "description": "+2 Magikarp y +1 Gyarados: el «Magikarp de oferta» resultó ser un buen negocio",
+      "description": "+2 Magikarp, +1 Gyarados y +2 energías Agua: el «Magikarp de oferta» resultó ser un buen negocio",
       "rarity": "rare",
       "kind": "cards",
-      "cards": [{ "cardId": "base-set-035-magikarp", "qty": 2 }, { "cardId": "base-set-006-gyarados", "qty": 1 }]
+      "cards": [
+        { "cardId": "base-set-035-magikarp", "qty": 2 },
+        { "cardId": "base-set-006-gyarados", "qty": 1 },
+        { "cardId": "base-set-102-water-energy", "qty": 2 }
+      ]
     },
     {
       "id": "a2-fosil",
@@ -914,30 +984,207 @@
       "description": "+2 Clefairy y +1 Clefable: los Clefairy del Monte Moon se unen a tu equipo",
       "rarity": "rare",
       "kind": "cards",
-      "cards": [{ "cardId": "base-set-005-clefairy", "qty": 2 }, { "cardId": "jungle-001-clefable", "qty": 1 }]
+      "cards": [
+        { "cardId": "base-set-005-clefairy", "qty": 2 },
+        { "cardId": "jungle-001-clefable", "qty": 1 }
+      ]
     },
     {
       "id": "a2-fosil-helix",
       "name": "Fósil Helix",
-      "description": "+2 Mysterious Fossil, +2 Omanyte y +1 Omastar",
+      "description": "+2 Mysterious Fossil, +2 Omanyte, +1 Omastar y +2 energías Agua",
       "rarity": "epic",
       "kind": "cards",
       "cards": [
         { "cardId": "fossil-062-mysterious-fossil", "qty": 2 },
         { "cardId": "fossil-052-omanyte", "qty": 2 },
-        { "cardId": "fossil-040-omastar", "qty": 1 }
+        { "cardId": "fossil-040-omastar", "qty": 1 },
+        { "cardId": "base-set-102-water-energy", "qty": 2 }
       ]
     },
     {
       "id": "a2-fosil-domo",
       "name": "Fósil Domo",
-      "description": "+2 Mysterious Fossil, +2 Kabuto y +1 Kabutops",
+      "description": "+2 Mysterious Fossil, +2 Kabuto, +1 Kabutops y +2 energías Lucha",
       "rarity": "epic",
       "kind": "cards",
       "cards": [
         { "cardId": "fossil-062-mysterious-fossil", "qty": 2 },
         { "cardId": "fossil-050-kabuto", "qty": 2 },
-        { "cardId": "fossil-009-kabutops", "qty": 1 }
+        { "cardId": "fossil-009-kabutops", "qty": 1 },
+        { "cardId": "base-set-097-fighting-energy", "qty": 2 }
+      ]
+    },
+    {
+      "id": "a2-rattata",
+      "name": "Ratas de la Ruta 3",
+      "description": "+2 Rattata y +1 Raticate",
+      "rarity": "common",
+      "kind": "cards",
+      "cards": [
+        { "cardId": "base-set-061-rattata", "qty": 2 },
+        { "cardId": "base-set-040-raticate", "qty": 1 }
+      ]
+    },
+    {
+      "id": "a2-spearow",
+      "name": "Pico afilado",
+      "description": "+2 Spearow y +1 Fearow",
+      "rarity": "rare",
+      "kind": "cards",
+      "cards": [
+        { "cardId": "jungle-062-spearow", "qty": 2 },
+        { "cardId": "jungle-036-fearow", "qty": 1 }
+      ]
+    },
+    {
+      "id": "a2-jigglypuff",
+      "name": "Canción de cuna",
+      "description": "+2 Jigglypuff y +1 Wigglytuff",
+      "rarity": "rare",
+      "kind": "cards",
+      "cards": [
+        { "cardId": "jungle-054-jigglypuff", "qty": 2 },
+        { "cardId": "jungle-016-wigglytuff", "qty": 1 }
+      ]
+    },
+    {
+      "id": "a2-nidoran-m",
+      "name": "Nido de Nidoran♂",
+      "description": "+2 Nidoran♂, +1 Nidorino y +2 energías Planta",
+      "rarity": "rare",
+      "kind": "cards",
+      "cards": [
+        { "cardId": "base-set-055-nidoran", "qty": 2 },
+        { "cardId": "base-set-037-nidorino", "qty": 1 },
+        { "cardId": "base-set-099-grass-energy", "qty": 2 }
+      ]
+    },
+    {
+      "id": "a2-nidoran-f",
+      "name": "Nido de Nidoran♀",
+      "description": "+2 Nidoran♀, +1 Nidorina y +2 energías Planta",
+      "rarity": "rare",
+      "kind": "cards",
+      "cards": [
+        { "cardId": "jungle-057-nidoranf", "qty": 2 },
+        { "cardId": "jungle-040-nidorina", "qty": 1 },
+        { "cardId": "base-set-099-grass-energy", "qty": 2 }
+      ]
+    },
+    {
+      "id": "a2-ekans",
+      "name": "Serpientes de la ruta",
+      "description": "+2 Ekans, +1 Arbok y +2 energías Planta",
+      "rarity": "rare",
+      "kind": "cards",
+      "cards": [
+        { "cardId": "fossil-046-ekans", "qty": 2 },
+        { "cardId": "fossil-031-arbok", "qty": 1 },
+        { "cardId": "base-set-099-grass-energy", "qty": 2 }
+      ]
+    },
+    {
+      "id": "a2-sandshrew",
+      "name": "Arena de la Ruta 3",
+      "description": "+2 Sandshrew, +1 Sandslash y +2 energías Lucha",
+      "rarity": "rare",
+      "kind": "cards",
+      "cards": [
+        { "cardId": "base-set-062-sandshrew", "qty": 2 },
+        { "cardId": "fossil-041-sandslash", "qty": 1 },
+        { "cardId": "base-set-097-fighting-energy", "qty": 2 }
+      ]
+    },
+    {
+      "id": "a2-zubat",
+      "name": "Murciélagos del Monte Moon",
+      "description": "+2 Zubat, +1 Golbat y +2 energías Planta",
+      "rarity": "rare",
+      "kind": "cards",
+      "cards": [
+        { "cardId": "fossil-057-zubat", "qty": 2 },
+        { "cardId": "fossil-034-golbat", "qty": 1 },
+        { "cardId": "base-set-099-grass-energy", "qty": 2 }
+      ]
+    },
+    {
+      "id": "a2-geodude",
+      "name": "Rocas del Monte Moon",
+      "description": "+2 Geodude, +1 Graveler y +2 energías Lucha",
+      "rarity": "rare",
+      "kind": "cards",
+      "cards": [
+        { "cardId": "fossil-047-geodude", "qty": 2 },
+        { "cardId": "fossil-037-graveler", "qty": 1 },
+        { "cardId": "base-set-097-fighting-energy", "qty": 2 }
+      ]
+    },
+    {
+      "id": "a2-golem",
+      "name": "Avalancha",
+      "description": "+1 Geodude, +1 Graveler, +1 Golem y +2 energías Lucha",
+      "rarity": "epic",
+      "kind": "cards",
+      "cards": [
+        { "cardId": "fossil-047-geodude", "qty": 1 },
+        { "cardId": "fossil-037-graveler", "qty": 1 },
+        { "cardId": "fossil-036-golem", "qty": 1 },
+        { "cardId": "base-set-097-fighting-energy", "qty": 2 }
+      ]
+    },
+    {
+      "id": "a2-paras",
+      "name": "Hongos del Monte Moon",
+      "description": "+2 Paras, +1 Parasect y +2 energías Planta",
+      "rarity": "common",
+      "kind": "cards",
+      "cards": [
+        { "cardId": "jungle-059-paras", "qty": 2 },
+        { "cardId": "jungle-041-parasect", "qty": 1 },
+        { "cardId": "base-set-099-grass-energy", "qty": 2 }
+      ]
+    },
+    {
+      "id": "a2-onix",
+      "name": "Gigante de roca",
+      "description": "+1 Onix y +2 energías Lucha",
+      "rarity": "rare",
+      "kind": "cards",
+      "cards": [
+        { "cardId": "base-set-056-onix", "qty": 1 },
+        { "cardId": "base-set-097-fighting-energy", "qty": 2 }
+      ]
+    },
+    {
+      "id": "a2-meowth",
+      "name": "Paga extra",
+      "description": "+2 Meowth",
+      "rarity": "common",
+      "kind": "cards",
+      "cards": [{ "cardId": "jungle-056-meowth", "qty": 2 }]
+    },
+    {
+      "id": "a2-centro",
+      "name": "Centro Pokémon",
+      "description": "+1 Pokémon Center y +1 Super Potion",
+      "rarity": "rare",
+      "kind": "cards",
+      "cards": [
+        { "cardId": "base-set-085-pokemon-center", "qty": 1 },
+        { "cardId": "base-set-090-super-potion", "qty": 1 }
+      ]
+    },
+    {
+      "id": "a2-laguna",
+      "name": "Laguna de la Ruta 4",
+      "description": "+2 Psyduck, +1 Golduck y +2 energías Agua",
+      "rarity": "rare",
+      "kind": "cards",
+      "cards": [
+        { "cardId": "fossil-053-psyduck", "qty": 2 },
+        { "cardId": "fossil-035-golduck", "qty": 1 },
+        { "cardId": "base-set-102-water-energy", "qty": 2 }
       ]
     }
   ],

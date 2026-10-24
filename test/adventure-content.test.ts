@@ -162,7 +162,7 @@ describe("Adventure 2 content", () => {
     expect(adventure.rules).toEqual({ hearts: 3, prizeCount: 3, openingHand: 7, minDeckSize: 20, maxDeckSize: 40, maxCopies: null });
   });
 
-  it("starters: adventure 1's three improved plus a locked Pikachu, 24–28 cards each", () => {
+  it("starters: adventure 1's three improved plus a locked Pikachu, 24–28 cards each, no Stage 2", () => {
     const adventure = adventure2();
     expect(adventure.starters.map((s) => [s.id, !!s.requiresUnlock])).toEqual([
       ["charmander", false], ["squirtle", false], ["bulbasaur", false], ["pikachu", true],
@@ -170,45 +170,73 @@ describe("Adventure 2 content", () => {
     for (const starter of adventure.starters) {
       expect(sum(starter.deck), starter.id).toBeGreaterThanOrEqual(24);
       expect(sum(starter.deck), starter.id).toBeLessThanOrEqual(28);
-      // Every line's last stage is in the deck (Pikachu's line ends at Raichu)
-      const last = starter.line.stage2 ?? starter.line.stage1;
-      expect(starter.deck.some((e) => e.cardId === last), starter.id).toBe(true);
+      // The Stage 1 is in the deck, the Stage 2 only comes from treasures (owner, 2026-10-24)
+      expect(starter.deck.some((e) => e.cardId === starter.line.stage1), starter.id).toBe(true);
+      expect(starter.deck.some((e) => e.cardId === starter.line.stage2), starter.id).toBe(false);
       expect(starter.deck.some((e) => e.cardId === "base-set-088-professor-oak"), starter.id).toBe(true);
     }
   });
 
-  it("battles: sprites, Team Rocket steals at 7 and 9, the fixed offers at 4 and 8, the Zubat ambush at 5", () => {
+  it("battles: sprites, Team Rocket steals at 6 and 9, the fixed offers at 3 and 7, the Zubat ambush at 4", () => {
     const { battles, treasures } = adventure2();
     expect(battles.map((b) => b.opponent.sprite)).toEqual(
-      ["youngster", "bugcatcher", "lass", "magikarp-salesman", "hiker", "scientist", "jessie-james", "supernerd", "jessie-james", "rival-blue"].map(
+      ["youngster", "lass", "magikarp-salesman", "hiker", "scientist", "jessie-james", "supernerd", "fisherman", "jessie-james", "rival-blue"].map(
         (n) => `/sprites/adventure/trainers/${n}.png`,
       ),
     );
     expect(battles.map((b) => b.opponent.trainerClass)).toEqual([
-      "Joven", "Cazabichos", "Chica", "Vendedor", "Montañero", "Científico", "Team Rocket", "Súper Nerd", "Team Rocket", "Rival",
+      "Joven", "Chica", "Vendedor", "Montañero", "Científico", "Team Rocket", "Súper Nerd", "Pescador", "Team Rocket", "Rival",
     ]);
-    expect(battles[5].opponent.name).toBe("Seymour");
-    expect(battles[6].opponent.name).toBe("Jessie y James");
-    expect(battles[7].opponent.name).toBe("Miguel");
+    expect(battles[4].opponent.name).toBe("Seymour");
+    expect(battles[5].opponent.name).toBe("Jessie y James");
+    expect(battles[6].opponent.name).toBe("Miguel");
+    expect(battles[7].opponent.name).toBe("Pedro");
     expect(battles[8].opponent.name).toBe("Jessie y James");
     const steal = { type: "stealCards", count: 2, countByDifficulty: { hard: 3 } };
-    expect(battles.map((b) => b.onLoss ?? null)).toEqual([null, null, null, null, null, null, steal, null, steal, null]);
+    expect(battles.map((b) => b.onLoss ?? null)).toEqual([null, null, null, null, null, steal, null, null, steal, null]);
     expect(battles.map((b) => b.onWin ?? null)).toEqual([null, null, null, null, null, null, null, null, { type: "recoverStolen" }, null]);
 
     const cardsOf = (id: string) => {
       const t = treasures.find((x) => x.id === id)!;
       return t.kind === "cards" ? t.cards.map((c) => ("cardId" in c ? c.cardId : c.ref)) : [];
     };
-    expect(cardsOf(battles[3].fixedOffer![0])).toEqual(expect.arrayContaining(["base-set-035-magikarp", "base-set-006-gyarados"]));
-    expect(battles[7].fixedOffer!.map(cardsOf)).toEqual([
+    expect(cardsOf(battles[2].fixedOffer![0])).toEqual(expect.arrayContaining(["base-set-035-magikarp", "base-set-006-gyarados"]));
+    expect(battles[6].fixedOffer!.map(cardsOf)).toEqual([
       expect.arrayContaining(["fossil-062-mysterious-fossil", "fossil-052-omanyte", "fossil-040-omastar"]),
       expect.arrayContaining(["fossil-062-mysterious-fossil", "fossil-050-kabuto", "fossil-009-kabutops"]),
     ]);
     for (const difficulty of ["normal", "hard"] as const) {
-      const setup = battleModifiers(battles[4], difficulty, "charmander").find((m) => m.type === "opponentSetup");
+      const setup = battleModifiers(battles[3], difficulty, "charmander").find((m) => m.type === "opponentSetup");
       expect(setup?.bench.flat().filter((id) => cardOf(id).name === "Zubat").length, difficulty).toBeGreaterThanOrEqual(1);
     }
     for (const battle of battles) expect(battle.objective ?? battle.objectiveByDifficulty, `batalla ${battle.index}`).toBeTruthy();
+  });
+
+  it("special battles: darkness in Monte Moon (Montañero, Súper Nerd), always Confused at Psyduck's pond, in both difficulties", () => {
+    const { battles } = adventure2();
+    const types = (index: number, difficulty: "normal" | "hard") => battleModifiers(battles[index - 1], difficulty, "charmander").map((m) => m.type);
+    for (const difficulty of ["normal", "hard"] as const) {
+      const special = battles.map((b) => types(b.index, difficulty).filter((t) => t === "darkness" || t === "alwaysConfused"));
+      expect(special, difficulty).toEqual([[], [], [], ["darkness"], [], [], ["darkness"], ["alwaysConfused"], [], []]);
+    }
+    expect(describeModifier({ type: "darkness" })).toBe("Oscuridad: antes de cada ataque se lanza una moneda; si sale cruz, el ataque falla");
+    expect(describeModifier({ type: "alwaysConfused" })).toBe("Los dos Pokémon activos están confundidos todo el tiempo");
+  });
+
+  it("treasures: a Pokémon that isn't Colorless comes with Energy of its type (owner, 2026-10-24)", () => {
+    const { treasures } = adventure2();
+    for (const treasure of treasures) {
+      if (treasure.kind !== "cards") continue;
+      const entries = treasure.cards.filter((c): c is { cardId: string; qty: number } => "cardId" in c);
+      const energyTypes = new Set(entries.map((c) => cardOf(c.cardId)).filter((c) => c.kind === "energy").map((c) => (c as { energyType: string }).energyType));
+      for (const entry of entries) {
+        const card = cardOf(entry.cardId);
+        if (!isPokemonCard(card)) continue;
+        const type = card.types[0];
+        if (type === "colorless") continue;
+        expect(energyTypes.has(type), `${treasure.id}: ${card.name} (${type})`).toBe(true);
+      }
+    }
   });
 
   it("hard: evolved rival decks in every battle, one per starter at the final", () => {

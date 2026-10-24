@@ -113,6 +113,8 @@ function checkModifierList(problems: string[], where: string, modifiers: readonl
       case "prizeCount":
       case "openingHand":
       case "opponentPassives":
+      case "darkness":
+      case "alwaysConfused":
         break;
     }
   }

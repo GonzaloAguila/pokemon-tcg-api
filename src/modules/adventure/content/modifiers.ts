@@ -67,5 +67,9 @@ export function describeModifier(modifier: BattleModifier): string {
     }
     case "opponentPassives":
       return `El rival tiene ${joinSpanish(modifier.passives.map((p) => PASSIVE_NAMES[p]))}`;
+    case "darkness":
+      return "Oscuridad: antes de cada ataque se lanza una moneda; si sale cruz, el ataque falla";
+    case "alwaysConfused":
+      return "Los dos Pokémon activos están confundidos todo el tiempo";
   }
 }

@@ -48,6 +48,8 @@ export const modifierSchema = z.union([
     })
     .strict(),
   z.object({ type: z.literal("opponentPassives"), passives: z.array(passiveSchema).min(1).max(5) }).strict(),
+  z.object({ type: z.literal("darkness") }).strict(),
+  z.object({ type: z.literal("alwaysConfused") }).strict(),
 ]);
 
 const modifierListSchema = z.array(modifierSchema).max(10);
