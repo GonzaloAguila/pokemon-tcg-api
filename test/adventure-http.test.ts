@@ -395,3 +395,117 @@ describe("GET /api/adventures", () => {
     expect(res.body.battles[6].opponent).toEqual({ name: "Teo", trainerClass: "Cazabichos", lead: "base-set-054-metapod" });
   });
 });
+
+describe("adventure 2: entry cost, gym requirement, coins reward", () => {
+  const ADV2 = "ciudad-plateada-ciudad-celeste";
+  const REQUIREMENT = "Vence a Brock en su gimnasio para desbloquearla";
+  const startAdv2 = (token: string, body: Record<string, unknown> = {}) => startRun(token, { adventureId: ADV2, ...body });
+  const coinsOf = async (userId: string) => (await prisma.user.findUniqueOrThrow({ where: { id: userId } })).coins;
+  const battleRow = () => ({ roomId: "adv-test", startedAt: new Date().toISOString() });
+
+  async function playerWith(coins: number, medal = true) {
+    const user = await createUser({ coins });
+    if (medal) await prisma.userMedal.create({ data: { userId: user.id, medalId: "boulder" } });
+    return { user, token: tokenFor(user) };
+  }
+
+  it("is locked without a Brock win and POST /adventure/runs answers 403 with the requirement text", async () => {
+    const { user, token } = await playerWith(100, false);
+    const res = await startAdv2(token);
+    expect(res.status).toBe(403);
+    expect(res.body.error.message).toBe(REQUIREMENT);
+    expect(await coinsOf(user.id)).toBe(100);
+    expect(await prisma.adventureRun.count({ where: { userId: user.id } })).toBe(0);
+    const list = (await app.request("GET", "/api/adventures", { token })).body.find((a: { id: string }) => a.id === ADV2);
+    expect(list.requirement).toEqual({ text: REQUIREMENT, met: false });
+  });
+
+  it("a boulder medal unlocks it; starting charges exactly 20 coins and logs the transaction", async () => {
+    const { user, token } = await playerWith(100);
+    const res = await startAdv2(token);
+    expect(res.status).toBe(201);
+    expect(await coinsOf(user.id)).toBe(80);
+    expect(await prisma.transaction.findMany({ where: { userId: user.id, type: "adventure_entry" } })).toMatchObject([
+      { amount: -20, currency: "coins", balanceAfter: 80 },
+    ]);
+    expect(res.body).toMatchObject({ stolen: [], cardsStolen: 0 });
+    const list = (await app.request("GET", "/api/adventures", { token })).body.find((a: { id: string }) => a.id === ADV2);
+    expect(list.requirement).toEqual({ text: REQUIREMENT, met: true });
+  });
+
+  it("an expert-only Brock series win (gym Match rows, no medal) unlocks it", async () => {
+    const { user, token } = await playerWith(100, false);
+    const gym = (game: number, challenger: number, leader: number) => ({
+      leaderId: "brock", leaderName: "Brock", mode: "expert", game, bestOf: 3, score: { leader, challenger },
+    });
+    await prisma.match.create({ data: { mode: "gym", status: "finished", player1Id: user.id, gym: gym(2, 0, 2) } });
+    expect((await startAdv2(token)).status).toBe(403);
+    await prisma.match.create({ data: { mode: "gym", status: "finished", player1Id: user.id, gym: gym(2, 2, 0) } });
+    expect((await startAdv2(token)).status).toBe(201);
+  });
+
+  it("with 19 coins the run is not created and no coins move", async () => {
+    const { user, token } = await playerWith(19);
+    const res = await startAdv2(token);
+    expect(res.status).toBe(400);
+    expect(res.body.error.message).toMatch(/monedas/i);
+    expect(await coinsOf(user.id)).toBe(19);
+    expect(await prisma.adventureRun.count({ where: { userId: user.id } })).toBe(0);
+    expect(await prisma.adventureProgress.count({ where: { userId: user.id } })).toBe(0);
+  });
+
+  it("adventure 1 stays free (coins unchanged)", async () => {
+    const { user, token } = await playerWith(5, false);
+    expect((await startRun(token)).status).toBe(201);
+    expect(await coinsOf(user.id)).toBe(5);
+  });
+
+  it("GET /adventures lists El Comienzo first with entryCost 0 and requirement null, sorted by order", async () => {
+    const { token } = await playerWith(0, false);
+    const body = (await app.request("GET", "/api/adventures", { token })).body;
+    expect(body.map((a: { id: string }) => a.id)).toEqual([ADVENTURE, ADV2]);
+    expect(body[0]).toMatchObject({ order: 1, entryCost: 0, requirement: null, image: expect.stringMatching(/^\/adventures\//) });
+    expect(body[1]).toMatchObject({ order: 2, entryCost: 20 });
+    const detail = (await app.request("GET", `/api/adventures/${ADV2}`, { token })).body;
+    expect(detail).toMatchObject({ order: 2, entryCost: 20, requirement: { met: false } });
+    expect(detail.battles.every((b: { opponent: { sprite?: string } }) => typeof b.opponent.sprite === "string")).toBe(true);
+  });
+
+  it("the first hard clear credits 1000 coins once; a second hard clear credits nothing", async () => {
+    const { user } = await playerWith(100);
+    const hardWin = async () => {
+      const created = await adventure.createRun(user.id, { adventureId: ADV2, difficulty: "hard", starterId: "squirtle" });
+      await setRun(created.id, { currentBattle: 10, phase: "in_battle", battle: battleRow() });
+      return adventure.applyRunBattleResult(created.id, { victory: true, reason: "prizes", turns: 20 });
+    };
+    const first = await hardWin();
+    expect(first!.reward).toEqual({ type: "coins", amount: 1000, name: "1000 monedas" });
+    expect(await coinsOf(user.id)).toBe(100 - 20 + 1000);
+    expect(await prisma.transaction.count({ where: { userId: user.id, type: "adventure_reward" } })).toBe(1);
+    const second = await hardWin();
+    expect(second!.reward).toBeNull();
+    expect(await coinsOf(user.id)).toBe(100 - 40 + 1000);
+  });
+
+  it("a defeat with Team Rocket reports the stolen cards in the result events and the run view", async () => {
+    const { user } = await playerWith(100);
+    const created = await adventure.createRun(user.id, { adventureId: ADV2, difficulty: "normal", starterId: "charmander" });
+    await setRun(created.id, { currentBattle: 9, phase: "in_battle", battle: battleRow() });
+    const lost = await adventure.applyRunBattleResult(created.id, { victory: false, reason: "prizes", turns: 8 });
+    expect(lost!.events.find((e) => e.type === "stolen")).toBeDefined();
+    expect(lost!.run.cardsStolen).toBeGreaterThan(0);
+    expect(lost!.run.stolen.length).toBeGreaterThan(0);
+  });
+
+  it("a hard Pikachu offer after the major-pool battle has 3 options", async () => {
+    const { user } = await playerWith(200);
+    await prisma.userStarterUnlock.create({ data: { userId: user.id, starterId: "pikachu" } });
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const created = await adventure.createRun(user.id, { adventureId: ADV2, difficulty: "hard", starterId: "pikachu" });
+      await setRun(created.id, { currentBattle: 5, phase: "in_battle", seed: `seed-${attempt}`, battle: battleRow() });
+      const won = await adventure.applyRunBattleResult(created.id, { victory: true, reason: "prizes", turns: 10 });
+      expect(won!.run.offer).toHaveLength(3);
+      await prisma.adventureRun.update({ where: { id: created.id }, data: { status: "abandoned", phase: "finished" } });
+    }
+  });
+});

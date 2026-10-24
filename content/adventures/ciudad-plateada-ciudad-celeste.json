@@ -623,7 +623,7 @@
       "hearts": 2,
       "treasurePools": {
         "tier1": ["h1-cazador", "h1-emboscada", "h1-apuesta", "t1-evolucion", "h1-tijera", "t1-moneda", "h1-kangaskhan", "a2-fosil"],
-        "major": ["m-final", "m-atajo", "m-corazon", "h5-criador"],
+        "major": ["m-final", "m-atajo", "m-corazon", "h5-criador", "m-profesor", "h2-todo-o-nada"],
         "tier2": [
           "h2-todo-o-nada",
           "h2-golpe-bajo",
@@ -970,14 +970,14 @@
     {
       "id": "adventure-2-all-starters",
       "name": "Equipo completo",
-      "description": "Completa De Ciudad Plateada a Ciudad Celeste con los 4 iniciales",
+      "description": "Completa De Ciudad Plateada a Ciudad Celeste con los 3 iniciales",
       "tier": "silver",
       "condition": { "type": "allStarters" }
     },
     {
       "id": "adventure-2-all-starters-hard",
       "name": "Leyenda del Monte Moon",
-      "description": "Completa De Ciudad Plateada a Ciudad Celeste en difícil con los 4 iniciales",
+      "description": "Completa De Ciudad Plateada a Ciudad Celeste en difícil con los 3 iniciales",
       "tier": "platinum",
       "condition": { "type": "allStarters", "difficulty": "hard" }
     },

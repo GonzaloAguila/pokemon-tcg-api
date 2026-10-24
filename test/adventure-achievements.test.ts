@@ -197,3 +197,53 @@ describe("Bosque Verde card back", () => {
     expect(result.ok ? [] : result.problems).toContain("Recompensa normal: dorso de carta desconocido cardback-nope");
   });
 });
+
+describe("adventure 2 progress", () => {
+  const ADV2 = "ciudad-plateada-ciudad-celeste";
+
+  async function winAdv2(userId: string, stolen: boolean) {
+    await prisma.user.update({ where: { id: userId }, data: { coins: { increment: 50 } } });
+    await prisma.userMedal.upsert({ where: { userId_medalId: { userId, medalId: "boulder" } }, update: {}, create: { userId, medalId: "boulder" } });
+    const run = await adventure.createRun(userId, { adventureId: ADV2, difficulty: "normal", starterId: "charmander" });
+    await prisma.adventureRun.update({
+      where: { id: run.id },
+      data: {
+        currentBattle: 10,
+        phase: "in_battle",
+        cardsStolen: stolen ? 2 : 0,
+        stolen: stolen ? [{ cardId: "base-set-004-charizard", qty: 1 }] : [],
+        battle: { roomId: "adv-test", startedAt: new Date().toISOString() },
+      },
+    });
+    return adventure.applyRunBattleResult(run.id, { victory: true, reason: "prizes", turns: 20 });
+  }
+
+  it("a clear without steals counts for noSteal; a clear with a steal does not", async () => {
+    const dirty = await createUser({}, { stats: true });
+    await winAdv2(dirty.id, true);
+    const dirtyList = await listAchievements(dirty.id);
+    expect(dirtyList.find((a) => a.id === "adventure-2-no-steal")!.claimable).toBe(false);
+    expect(dirtyList.find((a) => a.id === "adventure-2-clear-normal")!.claimable).toBe(true);
+
+    const clean = await createUser({}, { stats: true });
+    await winAdv2(clean.id, false);
+    expect((await listAchievements(clean.id)).find((a) => a.id === "adventure-2-no-steal")!.claimable).toBe(true);
+    expect(await prisma.adventureProgress.findUniqueOrThrow({ where: { userId_adventureId: { userId: clean.id, adventureId: ADV2 } } })).toMatchObject({ noStealClears: 1 });
+  });
+
+  it("all-starters counts only starters without requiresUnlock (3 of 3, Pikachu not required)", async () => {
+    const user = await createUser({}, { stats: true });
+    await prisma.adventureProgress.create({
+      data: { userId: user.id, adventureId: ADV2, clearedStartersNormal: ["charmander", "squirtle", "bulbasaur"] },
+    });
+    await checkAndUpdateProgress(user.id);
+    const list = await listAchievements(user.id);
+    expect(list.find((a) => a.id === "adventure-2-all-starters")).toMatchObject({ progress: 3, progressTarget: 3, claimable: true });
+    expect(list.find((a) => a.id === "adventure-2-all-starters")!.description).toContain("3 iniciales");
+    expect(list.find((a) => a.id === "adventure-2-all-starters-hard")!.description).toContain("3 iniciales");
+    const other = await createUser({}, { stats: true });
+    await prisma.adventureProgress.create({ data: { userId: other.id, adventureId: ADV2, clearedStartersNormal: ["pikachu", "charmander"] } });
+    await checkAndUpdateProgress(other.id);
+    expect((await listAchievements(other.id)).find((a) => a.id === "adventure-2-all-starters")).toMatchObject({ progress: 1, progressTarget: 3 });
+  });
+});

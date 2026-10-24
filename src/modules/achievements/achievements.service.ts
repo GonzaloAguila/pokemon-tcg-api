@@ -172,7 +172,7 @@ function adventureDefs(): AchievementDef[] {
       name: a.name,
       description: a.description,
       tier: a.tier,
-      progressTarget: a.condition.type === "allStarters" ? adventure.starters.length : 1,
+      progressTarget: a.condition.type === "allStarters" ? requiredStarterIds(adventure.id).length : 1,
       checker: "adventure" as const,
       status: "active" as const,
       adventureId: adventure.id,
@@ -214,6 +214,12 @@ interface AdventureProgressRow {
   flawlessClears: number;
   puristClears: number;
   monotypeClears: number;
+  noStealClears: number;
+}
+
+/** Starters every player has: the ones behind an unlock (Pikachu) are not needed for "all starters". */
+function requiredStarterIds(adventureId: string): string[] {
+  return (getAdventures().get(adventureId)?.starters ?? []).filter((s) => !s.requiresUnlock).map((s) => s.id);
 }
 
 /** Progress of an "adventure" achievement from the user's AdventureProgress row. */
@@ -232,13 +238,13 @@ function adventureProgress(def: AchievementDef, row: AdventureProgressRow | unde
     case "monotype":
       return row.monotypeClears;
     case "noSteal":
-      return 0; // no progress counter yet: wired with the run logic that records steals
+      return row.noStealClears;
     case "allStarters": {
       const starters =
         condition.difficulty === "hard" ? row.clearedStartersHard
         : condition.difficulty === "normal" ? row.clearedStartersNormal
         : [...row.clearedStartersNormal, ...row.clearedStartersHard];
-      const known = new Set(getAdventures().get(row.adventureId)?.starters.map((s) => s.id) ?? []);
+      const known = new Set(requiredStarterIds(row.adventureId));
       return new Set(starters.filter((id) => known.has(id))).size;
     }
   }

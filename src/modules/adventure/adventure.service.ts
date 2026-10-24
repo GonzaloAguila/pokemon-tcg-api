@@ -13,6 +13,7 @@ import { lockUsers } from "../users/xp.service.js";
 import type { Db } from "../users/users.service.js";
 import { recordCardChange } from "../users/card-ledger.js";
 import { claimOnce, hasClaim } from "../economy/claims.js";
+import { creditBalance, spendCoins } from "../users/users.service.js";
 import { checkAndUpdateProgress } from "../achievements/achievements.service.js";
 import { cardOf } from "./content/cards.js";
 import { getAdventure, getAdventures, type Adventure } from "./content/load.js";
@@ -20,6 +21,7 @@ import { battleModifiers, battleObjective, difficultyRules, rivalDeckOf } from "
 import { describeModifier } from "./content/modifiers.js";
 import { DIFFICULTIES, type AdventureBattle, type AdventureReward, type Difficulty } from "./content/schema.js";
 import { achievementCosmeticView } from "./cosmetics.js";
+import { requirementMet, requirementText } from "./requirements.js";
 import type { AdventurePassive, CardEntry } from "./engine-types.js";
 import * as logic from "./run-logic.js";
 import { RunPhaseError, RunRuleError, type DeckEdit, type RunEvent, type RunState, type TreasureChoice } from "./run-logic.types.js";
@@ -171,6 +173,8 @@ export function serializeRun(row: AdventureRun) {
     treasuresTaken: state.treasuresTaken,
     treasuresSkipped: state.treasuresSkipped,
     pendingOffer: state.pendingOffer,
+    stolen: state.stolen,
+    cardsStolen: state.cardsStolen,
     offer: state.pendingOffer.map((id) => treasureView(adventure, state, id)).filter((t) => t !== null),
     battle: snapshot ? { roomId: snapshot.roomId } : null,
     currentBattleInfo: battle
@@ -217,6 +221,12 @@ async function progressOf(db: Db, userId: string, adventureId: string) {
   };
 }
 
+/** The adventure's unlock rule for this user, null when it has none. */
+async function requirementView(db: Db, userId: string, adventure: Adventure) {
+  const req = adventure.requires;
+  return req ? { text: requirementText(req), met: await requirementMet(db, userId, req) } : null;
+}
+
 async function rewardsView(userId: string, adventure: Adventure) {
   const view = async (difficulty: Difficulty) => ({
     ...adventure.rewards[difficulty],
@@ -247,9 +257,15 @@ function difficultiesView(adventure: Adventure, detail: boolean) {
 export async function listAdventures(userId: string) {
   const active = await prisma.adventureRun.findFirst({ where: { userId, status: "active" } });
   return Promise.all(
-    [...getAdventures().values()].map(async (adventure) => ({
+    [...getAdventures().values()]
+      .sort((a, b) => a.order - b.order)
+      .map(async (adventure) => ({
       id: adventure.id,
       version: adventure.version,
+      order: adventure.order,
+      image: adventure.image,
+      entryCost: adventure.entryCost ?? 0,
+      requirement: await requirementView(prisma, userId, adventure),
       name: adventure.name,
       description: adventure.description,
       starters: adventure.starters.map((s) => ({ id: s.id, name: s.name, energyType: s.energyType })),
@@ -295,6 +311,10 @@ export async function getAdventureDetail(userId: string, adventureId: string) {
   return {
     id: adventure.id,
     version: adventure.version,
+    order: adventure.order,
+    image: adventure.image,
+    entryCost: adventure.entryCost ?? 0,
+    requirement: await requirementView(prisma, userId, adventure),
     name: adventure.name,
     description: adventure.description,
     rules: adventure.rules,
@@ -314,7 +334,7 @@ export async function getAdventureDetail(userId: string, adventureId: string) {
         index: battle.index,
         id: battle.id,
         location: battle.location,
-        opponent: { name: battle.opponent.name, trainerClass: battle.opponent.trainerClass, lead: leadOf(battle, deck) },
+        opponent: { name: battle.opponent.name, trainerClass: battle.opponent.trainerClass, sprite: battle.opponent.sprite, lead: leadOf(battle, deck) },
         treasurePool: battle.treasurePool,
         beaten,
         current: battle.index === current,
@@ -344,12 +364,18 @@ export async function createRun(userId: string, input: { adventureId: string; di
   try {
     const row = await prisma.$transaction(async (tx) => {
       await lockUsers(tx, [userId]);
+      if (adventure.requires && !(await requirementMet(tx, userId, adventure.requires))) {
+        throw Errors.Forbidden(requirementText(adventure.requires));
+      }
       if (starter.requiresUnlock) {
         const unlock = await tx.userStarterUnlock.findUnique({ where: { userId_starterId: { userId, starterId: starter.id } } });
         if (!unlock) throw Errors.Forbidden("Todavía no desbloqueaste este inicial");
       }
       if (await tx.adventureRun.findFirst({ where: { userId, status: "active" }, select: { id: true } })) {
         throw Errors.Conflict("Ya tienes una aventura en curso");
+      }
+      if (adventure.entryCost) {
+        await spendCoins(userId, adventure.entryCost, "adventure_entry", `Aventura: ${adventure.name}`, tx);
       }
       const state = logic.newRun(adventure, { difficulty: input.difficulty, starterId: starter.id, seed: randomBytes(16).toString("hex") });
       await tx.adventureProgress.upsert({
@@ -459,6 +485,9 @@ async function grantReward(tx: Db, userId: string, adventure: Adventure, difficu
     case "starter_unlock":
       await tx.userStarterUnlock.createMany({ data: [{ userId, starterId: reward.id }], skipDuplicates: true });
       break;
+    case "coins":
+      await creditBalance(userId, "coins", reward.amount, "adventure_reward", `Aventura: ${adventure.name}`, tx);
+      break;
     case "card":
       await tx.userCard.upsert({
         where: { userId_cardDefId: { userId, cardDefId: reward.cardId } },
@@ -483,6 +512,7 @@ async function recordClear(tx: Db, userId: string, adventure: Adventure, state: 
     ...(facts.flawless ? { flawlessClears: { increment: 1 } } : {}),
     ...(facts.purist ? { puristClears: { increment: 1 } } : {}),
     ...(facts.monotype ? { monotypeClears: { increment: 1 } } : {}),
+    ...(facts.noSteal ? { noStealClears: { increment: 1 } } : {}),
   };
   await tx.adventureProgress.upsert({
     where: { userId_adventureId: { userId, adventureId: adventure.id } },
@@ -497,6 +527,7 @@ async function recordClear(tx: Db, userId: string, adventure: Adventure, state: 
       flawlessClears: facts.flawless ? 1 : 0,
       puristClears: facts.purist ? 1 : 0,
       monotypeClears: facts.monotype ? 1 : 0,
+      noStealClears: facts.noSteal ? 1 : 0,
     },
   });
 }
