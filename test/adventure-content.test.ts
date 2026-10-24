@@ -153,7 +153,7 @@ describe("Adventure 2 content", () => {
     expect(getAdventure("pueblo-paleta-bosque-verde")!.name).toBe("El Comienzo");
     const adventure = adventure2();
     expect(adventure).toMatchObject({
-      name: "De Ciudad Plateada a Ciudad Celeste",
+      name: "De camino a Ciudad Celeste",
       order: 2,
       image: "/adventures/ciudad-plateada-ciudad-celeste.jpg",
       entryCost: 20,
