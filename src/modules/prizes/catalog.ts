@@ -65,8 +65,9 @@ export const ADVENTURE_CARD_BACKS: CosmeticItem[] = [
 /**
  * Gym Leaders' card backs (docs/gym-leaders.md): the leader's own side uses its card back in gym
  * battles (room cosmetics), and a version's first victory grants one (content `rewards`, gym
- * rewards.ts). Never sold, won elsewhere, random nor grantable from the backoffice. Frontend
- * CARD_BACKS entries with source "gym-leader".
+ * rewards.ts). Never sold, won elsewhere nor random; admins can grant them (owner, 2026-10-23).
+ * A granted EXPERT back is that version's first-victory marker: the user's later EXPERT win pays
+ * no reward. Frontend CARD_BACKS entries with source "gym-leader".
  */
 export const GYM_LEADER_CARD_BACKS: CosmeticItem[] = [
   { itemId: "cardback-brock", name: "Brock", imageUrl: "/gym-leaders/brock/brock_bkc.png" },

@@ -10,6 +10,7 @@ import {
   ADVENTURE_CARD_BACKS,
   ADVENTURE_PLAYMATS,
   ALL_VARIANTS,
+  GYM_LEADER_CARD_BACKS,
   AVAILABLE_AVATARS,
   AVAILABLE_CARD_BACKS,
   AVAILABLE_COINS,
@@ -39,6 +40,7 @@ export const GRANTABLE_COSMETICS: Record<CosmeticType, ReadonlySet<string>> = {
   cardBack: new Set([
     ...AVAILABLE_CARD_BACKS.map((c) => c.itemId),
     ...ADVENTURE_CARD_BACKS.map((c) => c.itemId),
+    ...GYM_LEADER_CARD_BACKS.map((c) => c.itemId),
     ...RELEASED_SETS.map((set) => ECONOMY.setMilestones.cardBackId(set.id)),
   ]),
   avatar: new Set(AVAILABLE_AVATARS.map((a) => a.itemId).filter((id) => !FREE_AVATAR_IDS.has(id))),
