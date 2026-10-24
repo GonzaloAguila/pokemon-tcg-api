@@ -30,13 +30,13 @@ const deckSize = (deck: readonly CardEntry[]) => deck.reduce((n, e) => n + e.qty
 export function rivalDecks(battle: AdventureBattle): { label: string; deck: CardEntry[]; difficulties: Difficulty[] }[] {
   const { deck, deckByDifficulty } = battle.opponent;
   if (deck) return [{ label: "", deck, difficulties: [...DIFFICULTIES] }];
-  const { normal, hard } = deckByDifficulty!;
-  return [
-    { label: " (normal)", deck: normal, difficulties: ["normal"] },
-    ...(Array.isArray(hard)
-      ? [{ label: " (difícil)", deck: hard, difficulties: ["hard" as const] }]
-      : Object.entries(hard.byStarter).map(([starter, d]) => ({ label: ` (difícil, ${starter})`, deck: d, difficulties: ["hard" as const] }))),
-  ];
+  return (["normal", "hard"] as const).flatMap((difficulty) => {
+    const own = deckByDifficulty![difficulty];
+    const name = difficulty === "normal" ? "normal" : "difícil";
+    return Array.isArray(own)
+      ? [{ label: ` (${name})`, deck: own, difficulties: [difficulty] as Difficulty[] }]
+      : Object.entries(own.byStarter).map(([starter, d]) => ({ label: ` (${name}, ${starter})`, deck: d, difficulties: [difficulty] as Difficulty[] }));
+  });
 }
 
 function checkCards(problems: string[], where: string, ids: readonly string[]) {

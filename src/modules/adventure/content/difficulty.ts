@@ -74,12 +74,14 @@ export function battleModifierLists(battle: AdventureBattle): { label: string; d
   const lists: { label: string; difficulty: Difficulty | null; starterId: string | null; modifiers: BattleModifier[] }[] = [
     { label: "", difficulty: null, starterId: null, modifiers: battle.modifiers as BattleModifier[] },
   ];
-  const { normal, hard } = battle.modifiersByDifficulty ?? {};
-  if (normal) lists.push({ label: " (normal)", difficulty: "normal", starterId: null, modifiers: normal as BattleModifier[] });
-  if (hard && Array.isArray(hard)) lists.push({ label: " (difícil)", difficulty: "hard", starterId: null, modifiers: hard as BattleModifier[] });
-  if (hard && !Array.isArray(hard)) {
-    for (const [starterId, modifiers] of Object.entries(hard.byStarter)) {
-      lists.push({ label: ` (difícil, ${starterId})`, difficulty: "hard", starterId, modifiers: modifiers as BattleModifier[] });
+  for (const difficulty of ["normal", "hard"] as const) {
+    const own = battle.modifiersByDifficulty?.[difficulty];
+    const name = difficulty === "normal" ? "normal" : "difícil";
+    if (own && Array.isArray(own)) lists.push({ label: ` (${name})`, difficulty, starterId: null, modifiers: own as BattleModifier[] });
+    if (own && !Array.isArray(own)) {
+      for (const [starterId, modifiers] of Object.entries(own.byStarter)) {
+        lists.push({ label: ` (${name}, ${starterId})`, difficulty, starterId, modifiers: modifiers as BattleModifier[] });
+      }
     }
   }
   return lists;
@@ -91,14 +93,13 @@ export function battleObjective(battle: AdventureBattle, difficulty: Difficulty)
 }
 
 /**
- * The rival deck of a battle for a run: `deck`, or `deckByDifficulty` (hard: one deck, or the
- * run's starter's). Null when a hard `byStarter` has no deck for that starter.
+ * The rival deck of a battle for a run: `deck`, or `deckByDifficulty` (one deck, or the
+ * run's starter's). Null when a `byStarter` has no deck for that starter.
  */
 export function rivalDeckOf(battle: AdventureBattle, difficulty: Difficulty, starterId: string): CardEntry[] | null {
   const { deck, deckByDifficulty } = battle.opponent;
   if (deck) return deck;
   if (!deckByDifficulty) return null;
-  if (difficulty === "normal") return deckByDifficulty.normal;
-  const hard = deckByDifficulty.hard;
-  return Array.isArray(hard) ? hard : (hard.byStarter[starterId] ?? null);
+  const own = deckByDifficulty[difficulty];
+  return Array.isArray(own) ? own : (own.byStarter[starterId] ?? null);
 }

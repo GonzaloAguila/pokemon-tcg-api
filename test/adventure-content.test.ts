@@ -301,6 +301,25 @@ describe("Adventure 2 content", () => {
     expect(adventure.difficulties.hard.hearts).toBe(2);
   });
 
+  it("the final rival on normal plays the starter that beats yours, up to its Stage 1, and opens with it", () => {
+    const final = adventure2().battles[9];
+    const counters: Record<string, [string, string]> = {
+      charmander: ["base-set-063-squirtle", "base-set-042-wartortle"],
+      squirtle: ["base-set-044-bulbasaur", "base-set-030-ivysaur"],
+      bulbasaur: ["base-set-046-charmander", "base-set-024-charmeleon"],
+      pikachu: ["jungle-051-eevee", "jungle-004-jolteon"],
+    };
+    for (const [starter, [basic, stage1]] of Object.entries(counters)) {
+      const deck = rivalDeckOf(final, "normal", starter)!;
+      expect(deck.some((e) => e.cardId === basic), starter).toBe(true);
+      expect(deck.some((e) => e.cardId === stage1), starter).toBe(true);
+      expect(deck.some((e) => cardOf(e.cardId).kind === "pokemon" && (cardOf(e.cardId) as { stage: string }).stage === "stage-2"), starter).toBe(false);
+      const setup = battleModifiers(final, "normal", starter).find((m) => m.type === "opponentSetup");
+      expect(setup?.active, starter).toEqual([basic]);
+      expect(setup?.bench.length, starter).toBeGreaterThanOrEqual(1);
+    }
+  });
+
   it("rewards: the Monte Moon card back on normal, 1000 coins on hard; adventure-2 achievements with noSteal", () => {
     const adventure = adventure2();
     expect(adventure.rewards).toEqual({

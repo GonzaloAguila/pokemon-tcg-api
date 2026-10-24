@@ -64,10 +64,10 @@ const opponentSchema = z
     /** Trainer portrait on the map (a public sprite). */
     sprite: z.string().regex(/^\/sprites\/adventure\/trainers\/[a-z0-9-]+\.png$/, "sprite inválido").optional(),
     deck: deckSchema.optional(),
-    /** A deck per difficulty: hard is one deck, or one per starter (`byStarter`). */
+    /** A deck per difficulty: one deck, or one per starter (`byStarter`, e.g. the final rival). */
     deckByDifficulty: z
       .object({
-        normal: deckSchema,
+        normal: z.union([deckSchema, z.object({ byStarter: z.record(id, deckSchema) }).strict()]),
         hard: z.union([deckSchema, z.object({ byStarter: z.record(id, deckSchema) }).strict()]),
       })
       .strict()
@@ -100,12 +100,12 @@ const battleSchema = z
     treasurePool: z.enum(TREASURE_POOLS).nullable(),
     modifiers: z.array(modifierSchema).max(10),
     /**
-     * A difficulty's own battle rules: they replace `modifiers` in runs of that difficulty. Hard
+     * A difficulty's own battle rules: they replace `modifiers` in runs of that difficulty. Each
      * may give one list per starter (`byStarter`), like its decks (e.g. the final rival's setup).
      */
     modifiersByDifficulty: z
       .object({
-        normal: modifierListSchema.optional(),
+        normal: z.union([modifierListSchema, z.object({ byStarter: z.record(id, modifierListSchema) }).strict()]).optional(),
         hard: z.union([modifierListSchema, z.object({ byStarter: z.record(id, modifierListSchema) }).strict()]).optional(),
       })
       .strict()

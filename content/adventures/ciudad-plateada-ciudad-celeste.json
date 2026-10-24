@@ -515,20 +515,78 @@
         "sprite": "/sprites/adventure/trainers/rival-blue.png",
         "lead": "base-set-022-pidgeotto",
         "deckByDifficulty": {
-          "normal": [
-            { "cardId": "base-set-057-pidgey", "qty": 3 },
-            { "cardId": "base-set-022-pidgeotto", "qty": 2 },
-            { "cardId": "base-set-061-rattata", "qty": 3 },
-            { "cardId": "base-set-040-raticate", "qty": 1 },
-            { "cardId": "base-set-043-abra", "qty": 3 },
-            { "cardId": "base-set-032-kadabra", "qty": 1 },
-            { "cardId": "base-set-094-potion", "qty": 1 },
-            { "cardId": "base-set-091-bill", "qty": 2 },
-            { "cardId": "base-set-093-gust-of-wind", "qty": 1 },
-            { "cardId": "base-set-084-pluspower", "qty": 1 },
-            { "cardId": "base-set-096-double-colorless-energy", "qty": 2 },
-            { "cardId": "base-set-101-psychic-energy", "qty": 6 }
-          ],
+          "normal": {
+            "byStarter": {
+              "charmander": [
+                { "cardId": "base-set-063-squirtle", "qty": 3 },
+                { "cardId": "base-set-042-wartortle", "qty": 1 },
+                { "cardId": "base-set-057-pidgey", "qty": 2 },
+                { "cardId": "base-set-022-pidgeotto", "qty": 1 },
+                { "cardId": "base-set-061-rattata", "qty": 2 },
+                { "cardId": "base-set-040-raticate", "qty": 1 },
+                { "cardId": "base-set-043-abra", "qty": 2 },
+                { "cardId": "base-set-032-kadabra", "qty": 1 },
+                { "cardId": "base-set-094-potion", "qty": 1 },
+                { "cardId": "base-set-091-bill", "qty": 2 },
+                { "cardId": "base-set-093-gust-of-wind", "qty": 1 },
+                { "cardId": "base-set-084-pluspower", "qty": 1 },
+                { "cardId": "base-set-096-double-colorless-energy", "qty": 2 },
+                { "cardId": "base-set-102-water-energy", "qty": 5 },
+                { "cardId": "base-set-101-psychic-energy", "qty": 3 }
+              ],
+              "squirtle": [
+                { "cardId": "base-set-044-bulbasaur", "qty": 3 },
+                { "cardId": "base-set-030-ivysaur", "qty": 1 },
+                { "cardId": "base-set-057-pidgey", "qty": 2 },
+                { "cardId": "base-set-022-pidgeotto", "qty": 1 },
+                { "cardId": "base-set-061-rattata", "qty": 2 },
+                { "cardId": "base-set-040-raticate", "qty": 1 },
+                { "cardId": "base-set-043-abra", "qty": 2 },
+                { "cardId": "base-set-032-kadabra", "qty": 1 },
+                { "cardId": "base-set-094-potion", "qty": 1 },
+                { "cardId": "base-set-091-bill", "qty": 2 },
+                { "cardId": "base-set-093-gust-of-wind", "qty": 1 },
+                { "cardId": "base-set-084-pluspower", "qty": 1 },
+                { "cardId": "base-set-096-double-colorless-energy", "qty": 2 },
+                { "cardId": "base-set-099-grass-energy", "qty": 5 },
+                { "cardId": "base-set-101-psychic-energy", "qty": 3 }
+              ],
+              "bulbasaur": [
+                { "cardId": "base-set-046-charmander", "qty": 2 },
+                { "cardId": "base-set-024-charmeleon", "qty": 1 },
+                { "cardId": "base-set-057-pidgey", "qty": 2 },
+                { "cardId": "base-set-022-pidgeotto", "qty": 1 },
+                { "cardId": "base-set-061-rattata", "qty": 3 },
+                { "cardId": "base-set-040-raticate", "qty": 1 },
+                { "cardId": "base-set-043-abra", "qty": 2 },
+                { "cardId": "base-set-032-kadabra", "qty": 1 },
+                { "cardId": "base-set-094-potion", "qty": 1 },
+                { "cardId": "base-set-091-bill", "qty": 2 },
+                { "cardId": "base-set-093-gust-of-wind", "qty": 1 },
+                { "cardId": "base-set-084-pluspower", "qty": 1 },
+                { "cardId": "base-set-096-double-colorless-energy", "qty": 2 },
+                { "cardId": "base-set-098-fire-energy", "qty": 4 },
+                { "cardId": "base-set-101-psychic-energy", "qty": 4 }
+              ],
+              "pikachu": [
+                { "cardId": "jungle-051-eevee", "qty": 3 },
+                { "cardId": "jungle-004-jolteon", "qty": 1 },
+                { "cardId": "base-set-057-pidgey", "qty": 2 },
+                { "cardId": "base-set-022-pidgeotto", "qty": 1 },
+                { "cardId": "base-set-061-rattata", "qty": 2 },
+                { "cardId": "base-set-040-raticate", "qty": 1 },
+                { "cardId": "base-set-043-abra", "qty": 2 },
+                { "cardId": "base-set-032-kadabra", "qty": 1 },
+                { "cardId": "base-set-094-potion", "qty": 1 },
+                { "cardId": "base-set-091-bill", "qty": 2 },
+                { "cardId": "base-set-093-gust-of-wind", "qty": 1 },
+                { "cardId": "base-set-084-pluspower", "qty": 1 },
+                { "cardId": "base-set-096-double-colorless-energy", "qty": 2 },
+                { "cardId": "base-set-100-lightning-energy", "qty": 5 },
+                { "cardId": "base-set-101-psychic-energy", "qty": 3 }
+              ]
+            }
+          },
           "hard": {
             "byStarter": {
               "charmander": [
@@ -630,9 +688,17 @@
               { "type": "opponentSetup", "active": ["jungle-051-eevee"], "bench": [["base-set-057-pidgey"]] }
             ]
           }
+        },
+        "normal": {
+          "byStarter": {
+            "charmander": [{ "type": "opponentSetup", "active": ["base-set-063-squirtle"], "bench": [["base-set-057-pidgey"]] }],
+            "squirtle": [{ "type": "opponentSetup", "active": ["base-set-044-bulbasaur"], "bench": [["base-set-057-pidgey"]] }],
+            "bulbasaur": [{ "type": "opponentSetup", "active": ["base-set-046-charmander"], "bench": [["base-set-057-pidgey"]] }],
+            "pikachu": [{ "type": "opponentSetup", "active": ["jungle-051-eevee"], "bench": [["base-set-057-pidgey"]] }]
+          }
         }
       },
-      "objective": "Azul llegó antes que tú a Ciudad Celeste y quiere probar su equipo: demuéstrale quién entrenó mejor.",
+      "objective": "Azul te espera en Ciudad Celeste con el inicial que le gana al tuyo. ¡Demuéstrale quién es el mejor entrenador!",
       "objectiveByDifficulty": { "hard": "Azul armó su equipo pensando en el tuyo, y gana con 2 premios: cuida a tus Pokémon." }
     }
   ],
