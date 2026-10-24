@@ -2,6 +2,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../src/lib/prisma.js";
 import { createUser } from "./helpers.js";
+import { runStateOf } from "../src/modules/adventure/adventure.service.js";
 
 afterAll(async () => {
   await prisma.$disconnect();
@@ -33,6 +34,21 @@ describe("adventure models", () => {
     const second = prisma.adventureRun.create({ data: runData(user.id) });
     await expect(second).rejects.toBeInstanceOf(Prisma.PrismaClientKnownRequestError);
     await expect(prisma.adventureRun.create({ data: runData(user.id) })).rejects.toMatchObject({ code: "P2002" });
+  });
+
+  it("a run row round-trips stolen and cardsStolen", async () => {
+    const user = await createUser();
+    const fresh = await prisma.adventureRun.create({ data: runData(user.id) });
+    expect(runStateOf(fresh)).toMatchObject({ stolen: [], cardsStolen: 0 });
+    await prisma.adventureRun.update({
+      where: { id: fresh.id },
+      data: { stolen: [{ cardId: "base-set-091-bill", qty: 1 }], cardsStolen: 2 },
+    });
+    const row = await prisma.adventureRun.findUniqueOrThrow({ where: { id: fresh.id } });
+    expect(runStateOf(row).stolen).toEqual([{ cardId: "base-set-091-bill", qty: 1 }]);
+    expect(runStateOf(row).cardsStolen).toBe(2);
+    const progress = await prisma.adventureProgress.create({ data: { userId: user.id, adventureId: "x" } });
+    expect(progress.noStealClears).toBe(0);
   });
 
   it("keeps any number of finished runs next to the active one", async () => {

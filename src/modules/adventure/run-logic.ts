@@ -97,6 +97,8 @@ export function newRun(
     treasuresSkipped: 0,
     pendingOffer: [],
     offTypeUsed: false,
+    stolen: [],
+    cardsStolen: 0,
     seed: options.seed,
   };
 }

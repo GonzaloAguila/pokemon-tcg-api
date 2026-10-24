@@ -23,6 +23,8 @@ export interface RunState {
   treasuresSkipped: number;
   pendingOffer: string[];
   offTypeUsed: boolean;
+  stolen: CardEntry[];
+  cardsStolen: number;
   seed: string;
 }
 

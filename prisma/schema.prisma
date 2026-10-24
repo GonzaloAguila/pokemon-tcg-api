@@ -644,6 +644,8 @@ model AdventureRun {
   treasuresSkipped Int       @default(0)
   pendingOffer     String[] // treasure ids offered after a victory; empty = none
   offTypeUsed      Boolean   @default(false) // a battle was started with a card off the starter's type (monotype achievement)
+  stolen           Json      @default("[]") // [{ cardId, qty }] taken from the deck by rivals, recoverable
+  cardsStolen      Int       @default(0) // total cards ever stolen in the run
   seed             String // server secret (128 random bits, hex), never sent to the client
   battle           Json? // live battle snapshot { roomId, state, rngState, aiPlan, humanActions }
   createdAt        DateTime  @default(now())
@@ -686,6 +688,7 @@ model AdventureProgress {
   flawlessClears        Int      @default(0)
   puristClears          Int      @default(0)
   monotypeClears        Int      @default(0)
+  noStealClears         Int      @default(0)
   user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, adventureId])

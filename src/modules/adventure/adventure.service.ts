@@ -83,6 +83,8 @@ export function runStateOf(row: AdventureRun): RunState {
     treasuresSkipped: row.treasuresSkipped,
     pendingOffer: row.pendingOffer,
     offTypeUsed: row.offTypeUsed,
+    stolen: row.stolen as unknown as CardEntry[],
+    cardsStolen: row.cardsStolen,
     seed: row.seed,
   };
 }
@@ -103,6 +105,8 @@ function stateData(state: RunState) {
     treasuresSkipped: state.treasuresSkipped,
     pendingOffer: state.pendingOffer,
     offTypeUsed: state.offTypeUsed,
+    stolen: state.stolen as unknown as Prisma.InputJsonValue,
+    cardsStolen: state.cardsStolen,
     ...(state.phase === "finished" ? { finishedAt: new Date() } : {}),
   };
 }
