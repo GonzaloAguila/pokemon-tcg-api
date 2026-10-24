@@ -184,9 +184,30 @@ describe("dashboard stats", () => {
 
     const all = await api.get("/api/admin/stats");
     expect(all.body).toMatchObject({ period: "all", since: null });
-    expect(all.body.activeUsers).toBe(await prisma.user.count({ where: { lastLoginAt: { not: null } } }));
+    expect(all.body.activeUsers).toBe(
+      await prisma.user.count({ where: { OR: [{ lastLoginAt: { not: null } }, { refreshSessions: { some: {} } }] } }),
+    );
     expect((await api.get("/api/admin/stats?period=all")).body.period).toBe("all");
     expect((await api.get("/api/admin/stats?period=year")).status).toBe(400);
+  });
+
+  it("active users: whoever logged in OR came back with a saved session in the period, once each", async () => {
+    const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000);
+    const session = (userId: string, lastUsedAt: Date) =>
+      prisma.refreshSession.create({ data: { userId, tokenHash: `hash-${userId}-${lastUsedAt.getTime()}`, lastUsedAt, expiresAt: daysAgo(-30) } });
+    const before = (await adminService.getAdminStats("day")).activeUsers;
+    // Logged in days ago, back today with the saved session: active today
+    const returning = await createUser();
+    await prisma.user.update({ where: { id: returning.id }, data: { lastLoginAt: daysAgo(3) } });
+    await session(returning.id, new Date());
+    // Logged in today and used the session today too: counted once
+    const fresh = await createUser();
+    await prisma.user.update({ where: { id: fresh.id }, data: { lastLoginAt: new Date() } });
+    await session(fresh.id, new Date());
+    // Only came back two days ago: not active today
+    const away = await createUser();
+    await session(away.id, daysAgo(2));
+    expect((await adminService.getAdminStats("day")).activeUsers).toBe(before + 2);
   });
 
   it("'Mensajes enviados' and the admin list leave out welcome messages", async () => {

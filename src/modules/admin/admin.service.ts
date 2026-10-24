@@ -871,15 +871,20 @@ function getPeriodStart(period: StatsPeriod, now = new Date()): Date {
 /**
  * Dashboard numbers. With a period, active users / games / messages are counted from its start
  * (`since`); without one ("all"), games and messages are all-time and active users are the
- * accounts that ever logged in. `period` and `since` say which window was used.
+ * accounts that ever logged in or kept a session. Active = logged in or came back with a saved
+ * session in the window. `period` and `since` say which window was used.
  */
 export async function getAdminStats(period?: StatsPeriod) {
   const since = period ? getPeriodStart(period) : null;
 
   const [totalUsers, activeUsers, totalGamesPlayed, totalMessages] = await Promise.all([
     prisma.user.count(),
+    // Logging in sets lastLoginAt, but most visits come back with a saved session (its refresh
+    // stamps the device's lastUsedAt): either one makes the user active, counted once
     prisma.user.count({
-      where: { lastLoginAt: since ? { gte: since } : { not: null } },
+      where: since
+        ? { OR: [{ lastLoginAt: { gte: since } }, { refreshSessions: { some: { lastUsedAt: { gte: since } } } }] }
+        : { OR: [{ lastLoginAt: { not: null } }, { refreshSessions: { some: {} } }] },
     }),
     prisma.match.count({
       where: {
