@@ -212,12 +212,12 @@ describe("Adventure 2 content", () => {
     for (const battle of battles) expect(battle.objective ?? battle.objectiveByDifficulty, `batalla ${battle.index}`).toBeTruthy();
   });
 
-  it("special battles: darkness in Monte Moon (Montañero, Súper Nerd), always Confused at Psyduck's pond, in both difficulties", () => {
+  it("special battles: darkness in Monte Moon's cave (Montañero), always Confused at the Slowpoke lake, in both difficulties", () => {
     const { battles } = adventure2();
     const types = (index: number, difficulty: "normal" | "hard") => battleModifiers(battles[index - 1], difficulty, "charmander").map((m) => m.type);
     for (const difficulty of ["normal", "hard"] as const) {
       const special = battles.map((b) => types(b.index, difficulty).filter((t) => t === "darkness" || t === "alwaysConfused"));
-      expect(special, difficulty).toEqual([[], [], [], ["darkness"], [], [], ["darkness"], ["alwaysConfused"], [], []]);
+      expect(special, difficulty).toEqual([[], [], [], ["darkness"], [], [], [], ["alwaysConfused"], [], []]);
     }
     expect(describeModifier({ type: "darkness" })).toBe("Oscuridad: antes de cada ataque se lanza una moneda; si sale cruz, el ataque falla");
     expect(describeModifier({ type: "alwaysConfused" })).toBe("Los dos Pokémon activos están confundidos todo el tiempo");

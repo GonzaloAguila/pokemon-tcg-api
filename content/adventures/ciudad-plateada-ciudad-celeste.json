@@ -360,13 +360,16 @@
         "lead": "fossil-048-grimer",
         "deckByDifficulty": {
           "normal": [
-            { "cardId": "fossil-048-grimer", "qty": 4 },
+            { "cardId": "fossil-048-grimer", "qty": 3 },
             { "cardId": "base-set-067-voltorb", "qty": 3 },
             { "cardId": "jungle-002-electrode", "qty": 1 },
             { "cardId": "base-set-051-koffing", "qty": 3 },
-            { "cardId": "base-set-094-potion", "qty": 2 },
-            { "cardId": "base-set-099-grass-energy", "qty": 9 },
-            { "cardId": "base-set-100-lightning-energy", "qty": 6 }
+            { "cardId": "fossil-045-weezing", "qty": 1 },
+            { "cardId": "base-set-094-potion", "qty": 1 },
+            { "cardId": "base-set-091-bill", "qty": 1 },
+            { "cardId": "base-set-084-pluspower", "qty": 1 },
+            { "cardId": "base-set-099-grass-energy", "qty": 7 },
+            { "cardId": "base-set-100-lightning-energy", "qty": 4 }
           ],
           "hard": [
             { "cardId": "fossil-048-grimer", "qty": 3 },
@@ -385,21 +388,15 @@
       },
       "treasurePool": "tier2",
       "fixedOffer": ["a2-fosil-helix", "a2-fosil-domo"],
-      "modifiers": [
-        { "type": "prizeCount", "player": 2, "opponent": 2 },
-        { "type": "darkness" }
-      ],
+      "modifiers": [],
       "modifiersByDifficulty": {
         "hard": [
           { "type": "prizeCount", "opponent": 2 },
-          { "type": "opponentSetup", "active": ["base-set-051-koffing"], "bench": [["fossil-048-grimer"], ["base-set-067-voltorb"]] },
-          { "type": "darkness" }
+          { "type": "opponentSetup", "active": ["base-set-051-koffing"], "bench": [["fossil-048-grimer"], ["base-set-067-voltorb"]] }
         ]
       },
-      "objective": "En lo más oscuro del Monte Moon cada ataque necesita una moneda (cruz: falla). Gánale a Miguel y elige el Fósil Helix (Omanyte) o el Fósil Domo (Kabuto).",
-      "objectiveByDifficulty": {
-        "hard": "Oscuridad total: cada ataque necesita una moneda y el rival gana con 2 premios. Gánale y elige el Fósil Helix o el Fósil Domo."
-      }
+      "objective": "Miguel custodia dos fósiles en el fondo del Monte Moon: gánale y elige el Fósil Helix (Omanyte) o el Fósil Domo (Kabuto).",
+      "objectiveByDifficulty": { "hard": "Gánale a Miguel y elige el Fósil Helix o el Fósil Domo. El rival gana con 2 premios: cuida a tus Pokémon." }
     },
     {
       "index": 8,
@@ -409,28 +406,28 @@
         "name": "Pedro",
         "trainerClass": "Pescador",
         "sprite": "/sprites/adventure/trainers/fisherman.png",
-        "lead": "fossil-053-psyduck",
+        "lead": "fossil-055-slowpoke",
         "deckByDifficulty": {
           "normal": [
-            { "cardId": "fossil-053-psyduck", "qty": 4 },
+            { "cardId": "fossil-055-slowpoke", "qty": 4 },
+            { "cardId": "fossil-043-slowbro", "qty": 2 },
+            { "cardId": "fossil-053-psyduck", "qty": 3 },
             { "cardId": "fossil-035-golduck", "qty": 1 },
-            { "cardId": "base-set-059-poliwag", "qty": 3 },
-            { "cardId": "base-set-038-poliwhirl", "qty": 1 },
-            { "cardId": "jungle-053-goldeen", "qty": 3 },
-            { "cardId": "jungle-046-seaking", "qty": 1 },
-            { "cardId": "base-set-094-potion", "qty": 2 },
-            { "cardId": "base-set-102-water-energy", "qty": 13 }
+            { "cardId": "base-set-059-poliwag", "qty": 2 },
+            { "cardId": "base-set-094-potion", "qty": 1 },
+            { "cardId": "base-set-102-water-energy", "qty": 9 },
+            { "cardId": "base-set-101-psychic-energy", "qty": 5 }
           ],
           "hard": [
-            { "cardId": "fossil-053-psyduck", "qty": 4 },
+            { "cardId": "fossil-055-slowpoke", "qty": 4 },
+            { "cardId": "fossil-043-slowbro", "qty": 2 },
+            { "cardId": "fossil-053-psyduck", "qty": 3 },
             { "cardId": "fossil-035-golduck", "qty": 2 },
-            { "cardId": "base-set-059-poliwag", "qty": 3 },
-            { "cardId": "base-set-038-poliwhirl", "qty": 2 },
-            { "cardId": "jungle-053-goldeen", "qty": 2 },
-            { "cardId": "jungle-046-seaking", "qty": 1 },
-            { "cardId": "base-set-090-super-potion", "qty": 2 },
-            { "cardId": "base-set-084-pluspower", "qty": 1 },
-            { "cardId": "base-set-102-water-energy", "qty": 15 }
+            { "cardId": "base-set-059-poliwag", "qty": 2 },
+            { "cardId": "base-set-090-super-potion", "qty": 1 },
+            { "cardId": "base-set-084-pluspower", "qty": 2 },
+            { "cardId": "base-set-102-water-energy", "qty": 10 },
+            { "cardId": "base-set-101-psychic-energy", "qty": 6 }
           ]
         }
       },
@@ -442,12 +439,12 @@
       "modifiersByDifficulty": {
         "hard": [
           { "type": "alwaysConfused" },
-          { "type": "opponentSetup", "active": ["fossil-053-psyduck"], "bench": [["base-set-059-poliwag"]] },
+          { "type": "opponentSetup", "active": ["fossil-055-slowpoke"], "bench": [["fossil-053-psyduck"]] },
           { "type": "opponentPassives", "passives": ["start_attached_energy"] }
         ]
       },
-      "objective": "La laguna de Psyduck: un dolor de cabeza que no se va. Los dos Pokémon activos están confundidos todo el tiempo.",
-      "objectiveByDifficulty": { "hard": "Los dos Pokémon activos están confundidos todo el tiempo, y el rival empieza con Psyduck y Poliwag en juego." }
+      "objective": "La laguna de los Slowpoke: entre ellos y los Psyduck, el dolor de cabeza no se va. Los dos Pokémon activos están confundidos todo el tiempo.",
+      "objectiveByDifficulty": { "hard": "Los dos Pokémon activos están confundidos todo el tiempo, y el rival empieza con Slowpoke y Psyduck en juego." }
     },
     {
       "index": 9,
@@ -673,7 +670,8 @@
           "a2-paras",
           "a2-onix",
           "a2-centro",
-          "a2-laguna"
+          "a2-laguna",
+          "a2-slowpoke"
         ]
       },
       "treasureOffer": { "rarityWeights": { "common": 4, "rare": 4, "epic": 2 }, "maxPassives": 1 }
@@ -712,7 +710,8 @@
       "a2-onix",
       "a2-meowth",
       "a2-centro",
-      "a2-laguna"
+      "a2-laguna",
+      "a2-slowpoke"
     ]
   },
   "treasureOffer": { "rarityWeights": { "common": 6, "rare": 3, "epic": 1 }, "maxPassives": 1 },
@@ -1185,6 +1184,18 @@
         { "cardId": "fossil-053-psyduck", "qty": 2 },
         { "cardId": "fossil-035-golduck", "qty": 1 },
         { "cardId": "base-set-102-water-energy", "qty": 2 }
+      ]
+    },
+    {
+      "id": "a2-slowpoke",
+      "name": "Siesta en la laguna",
+      "description": "+2 Slowpoke, +1 Slowbro y +2 energías Psíquicas",
+      "rarity": "rare",
+      "kind": "cards",
+      "cards": [
+        { "cardId": "fossil-055-slowpoke", "qty": 2 },
+        { "cardId": "fossil-043-slowbro", "qty": 1 },
+        { "cardId": "base-set-101-psychic-energy", "qty": 2 }
       ]
     }
   ],
