@@ -131,13 +131,19 @@ export function editDeck(run: RunState, adventure: Adventure, edit: DeckEdit): R
   return { ...run, deck };
 }
 
-/** A treasure's cards with the `starter.*` tokens resolved to the starter's line. */
+const lineCardOf = (starter: AdventureStarter, ref: string): string | undefined =>
+  starter.line[ref.slice("starter.".length) as keyof AdventureStarter["line"]];
+
+/**
+ * A treasure's cards with the `starter.*` tokens resolved to the starter's line (a stage the line
+ * lacks, e.g. Pikachu's Stage 2, resolves to nothing: such a treasure is never offered, cardsFit).
+ */
 export function resolveTreasureCards(treasure: AdventureTreasure, starter: AdventureStarter): CardEntry[] {
   if (treasure.kind !== "cards") return [];
-  return treasure.cards.map((c) => {
-    if ("cardId" in c) return { cardId: c.cardId, qty: c.qty };
-    const stage = c.ref.slice("starter.".length) as keyof AdventureStarter["line"];
-    return { cardId: starter.line[stage], qty: c.qty };
+  return treasure.cards.flatMap((c) => {
+    if ("cardId" in c) return [{ cardId: c.cardId, qty: c.qty }];
+    const cardId = lineCardOf(starter, c.ref);
+    return cardId ? [{ cardId, qty: c.qty }] : [];
   });
 }
 
@@ -154,7 +160,10 @@ function treasureById(adventure: Adventure, id: string): AdventureTreasure {
  */
 function cardsFit(run: RunState, adventure: Adventure, treasure: AdventureTreasure): boolean {
   if (treasure.kind !== "cards") return true;
-  const deck = addCards(run.deck, resolveTreasureCards(treasure, starterOf(adventure, run.starterId)));
+  const starter = starterOf(adventure, run.starterId);
+  // A Stage 2 treasure means nothing to a starter whose line has no Stage 2
+  if (treasure.cards.some((c) => "ref" in c && !lineCardOf(starter, c.ref))) return false;
+  const deck = addCards(run.deck, resolveTreasureCards(treasure, starter));
   return deckProblem(deck, adventure, { allowOversize: true }) === null;
 }
 

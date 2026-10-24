@@ -1,0 +1,1006 @@
+{
+  "id": "ciudad-plateada-ciudad-celeste",
+  "version": 1,
+  "order": 2,
+  "image": "/adventures/ciudad-plateada-ciudad-celeste.jpg",
+  "entryCost": 20,
+  "requires": { "type": "gymLeader", "leaderId": "brock" },
+  "name": "De Ciudad Plateada a Ciudad Celeste",
+  "description": "Con la medalla Roca en el bolsillo, cruza la Ruta 3 y el Monte Moon hasta Ciudad Celeste. El Team Rocket anda cerca: si te gana, te roba cartas del mazo.",
+  "rules": { "hearts": 3, "prizeCount": 3, "openingHand": 7, "minDeckSize": 20, "maxDeckSize": 40, "maxCopies": null },
+  "starters": [
+    {
+      "id": "charmander",
+      "name": "Charmander",
+      "energyType": "fire",
+      "line": { "basic": "base-set-046-charmander", "stage1": "base-set-024-charmeleon", "stage2": "base-set-004-charizard" },
+      "deck": [
+        { "cardId": "base-set-046-charmander", "qty": 4 },
+        { "cardId": "base-set-024-charmeleon", "qty": 2 },
+        { "cardId": "base-set-004-charizard", "qty": 1 },
+        { "cardId": "jungle-054-jigglypuff", "qty": 2 },
+        { "cardId": "base-set-094-potion", "qty": 1 },
+        { "cardId": "base-set-090-super-potion", "qty": 1 },
+        { "cardId": "base-set-091-bill", "qty": 2 },
+        { "cardId": "base-set-088-professor-oak", "qty": 1 },
+        { "cardId": "base-set-095-switch", "qty": 1 },
+        { "cardId": "base-set-098-fire-energy", "qty": 12 }
+      ]
+    },
+    {
+      "id": "squirtle",
+      "name": "Squirtle",
+      "energyType": "water",
+      "line": { "basic": "base-set-063-squirtle", "stage1": "base-set-042-wartortle", "stage2": "base-set-002-blastoise" },
+      "deck": [
+        { "cardId": "base-set-063-squirtle", "qty": 4 },
+        { "cardId": "base-set-042-wartortle", "qty": 2 },
+        { "cardId": "base-set-002-blastoise", "qty": 1 },
+        { "cardId": "jungle-054-jigglypuff", "qty": 2 },
+        { "cardId": "base-set-094-potion", "qty": 1 },
+        { "cardId": "base-set-090-super-potion", "qty": 1 },
+        { "cardId": "base-set-091-bill", "qty": 2 },
+        { "cardId": "base-set-088-professor-oak", "qty": 1 },
+        { "cardId": "base-set-095-switch", "qty": 1 },
+        { "cardId": "base-set-102-water-energy", "qty": 11 }
+      ]
+    },
+    {
+      "id": "bulbasaur",
+      "name": "Bulbasaur",
+      "energyType": "grass",
+      "line": { "basic": "base-set-044-bulbasaur", "stage1": "base-set-030-ivysaur", "stage2": "base-set-015-venusaur" },
+      "deck": [
+        { "cardId": "base-set-044-bulbasaur", "qty": 4 },
+        { "cardId": "base-set-030-ivysaur", "qty": 2 },
+        { "cardId": "base-set-015-venusaur", "qty": 1 },
+        { "cardId": "jungle-054-jigglypuff", "qty": 2 },
+        { "cardId": "base-set-094-potion", "qty": 1 },
+        { "cardId": "base-set-090-super-potion", "qty": 1 },
+        { "cardId": "base-set-091-bill", "qty": 2 },
+        { "cardId": "base-set-088-professor-oak", "qty": 1 },
+        { "cardId": "base-set-095-switch", "qty": 1 },
+        { "cardId": "base-set-099-grass-energy", "qty": 11 }
+      ]
+    },
+    {
+      "id": "pikachu",
+      "name": "Pikachu",
+      "energyType": "lightning",
+      "line": { "basic": "base-set-058-pikachu", "stage1": "base-set-014-raichu" },
+      "requiresUnlock": true,
+      "deck": [
+        { "cardId": "base-set-058-pikachu", "qty": 4 },
+        { "cardId": "base-set-014-raichu", "qty": 2 },
+        { "cardId": "fossil-014-raichu", "qty": 1 },
+        { "cardId": "jungle-054-jigglypuff", "qty": 2 },
+        { "cardId": "base-set-094-potion", "qty": 2 },
+        { "cardId": "base-set-091-bill", "qty": 2 },
+        { "cardId": "base-set-088-professor-oak", "qty": 1 },
+        { "cardId": "base-set-095-switch", "qty": 1 },
+        { "cardId": "base-set-100-lightning-energy", "qty": 11 }
+      ]
+    }
+  ],
+  "battles": [
+    {
+      "index": 1,
+      "id": "ruta-3-joven-tomas",
+      "location": "Ruta 3",
+      "opponent": {
+        "name": "Tomás",
+        "trainerClass": "Joven",
+        "sprite": "/sprites/adventure/trainers/youngster.png",
+        "lead": "base-set-061-rattata",
+        "deckByDifficulty": {
+          "normal": [
+            { "cardId": "base-set-061-rattata", "qty": 3 },
+            { "cardId": "jungle-062-spearow", "qty": 3 },
+            { "cardId": "fossil-046-ekans", "qty": 2 },
+            { "cardId": "base-set-094-potion", "qty": 1 },
+            { "cardId": "base-set-099-grass-energy", "qty": 11 }
+          ],
+          "hard": [
+            { "cardId": "base-set-061-rattata", "qty": 3 },
+            { "cardId": "base-set-040-raticate", "qty": 2 },
+            { "cardId": "jungle-062-spearow", "qty": 3 },
+            { "cardId": "jungle-036-fearow", "qty": 1 },
+            { "cardId": "fossil-046-ekans", "qty": 2 },
+            { "cardId": "fossil-031-arbok", "qty": 1 },
+            { "cardId": "base-set-094-potion", "qty": 1 },
+            { "cardId": "base-set-091-bill", "qty": 1 },
+            { "cardId": "base-set-084-pluspower", "qty": 1 },
+            { "cardId": "base-set-099-grass-energy", "qty": 9 }
+          ]
+        }
+      },
+      "treasurePool": "tier1",
+      "modifiers": [],
+      "modifiersByDifficulty": {
+        "hard": [{ "type": "opponentSetup", "active": ["jungle-062-spearow"], "bench": [["base-set-061-rattata"]] }]
+      },
+      "objective": "Tomás presume de su Rattata, «uno de los más fuertes»: demuéstrale que el tuyo es mejor."
+    },
+    {
+      "index": 2,
+      "id": "ruta-3-cazabichos-ramon",
+      "location": "Ruta 3",
+      "opponent": {
+        "name": "Ramón",
+        "trainerClass": "Cazabichos",
+        "sprite": "/sprites/adventure/trainers/bugcatcher.png",
+        "lead": "base-set-069-weedle",
+        "deckByDifficulty": {
+          "normal": [
+            { "cardId": "base-set-045-caterpie", "qty": 3 },
+            { "cardId": "base-set-054-metapod", "qty": 2 },
+            { "cardId": "base-set-069-weedle", "qty": 3 },
+            { "cardId": "base-set-033-kakuna", "qty": 2 },
+            { "cardId": "base-set-094-potion", "qty": 1 },
+            { "cardId": "base-set-099-grass-energy", "qty": 9 }
+          ],
+          "hard": [
+            { "cardId": "base-set-045-caterpie", "qty": 3 },
+            { "cardId": "base-set-054-metapod", "qty": 2 },
+            { "cardId": "jungle-033-butterfree", "qty": 1 },
+            { "cardId": "base-set-069-weedle", "qty": 3 },
+            { "cardId": "base-set-033-kakuna", "qty": 2 },
+            { "cardId": "base-set-017-beedrill", "qty": 1 },
+            { "cardId": "base-set-094-potion", "qty": 1 },
+            { "cardId": "base-set-091-bill", "qty": 1 },
+            { "cardId": "base-set-095-switch", "qty": 1 },
+            { "cardId": "base-set-099-grass-energy", "qty": 9 }
+          ]
+        }
+      },
+      "treasurePool": "tier1",
+      "modifiers": [],
+      "modifiersByDifficulty": {
+        "hard": [
+          { "type": "opponentSetup", "active": ["base-set-069-weedle"], "bench": [["base-set-045-caterpie"]] },
+          { "type": "opponentPassives", "passives": ["start_attached_energy"] }
+        ]
+      },
+      "objective": "Los bichos de Ramón evolucionan rápido: noquéalos antes de que lleguen a la última fase."
+    },
+    {
+      "index": 3,
+      "id": "ruta-3-chica-lucia",
+      "location": "Ruta 3",
+      "opponent": {
+        "name": "Lucía",
+        "trainerClass": "Chica",
+        "sprite": "/sprites/adventure/trainers/lass.png",
+        "lead": "jungle-054-jigglypuff",
+        "deckByDifficulty": {
+          "normal": [
+            { "cardId": "jungle-054-jigglypuff", "qty": 3 },
+            { "cardId": "base-set-057-pidgey", "qty": 3 },
+            { "cardId": "jungle-057-nidoranf", "qty": 2 },
+            { "cardId": "base-set-094-potion", "qty": 1 },
+            { "cardId": "base-set-099-grass-energy", "qty": 11 }
+          ],
+          "hard": [
+            { "cardId": "jungle-054-jigglypuff", "qty": 3 },
+            { "cardId": "jungle-016-wigglytuff", "qty": 1 },
+            { "cardId": "base-set-057-pidgey", "qty": 3 },
+            { "cardId": "base-set-022-pidgeotto", "qty": 1 },
+            { "cardId": "jungle-057-nidoranf", "qty": 2 },
+            { "cardId": "jungle-040-nidorina", "qty": 1 },
+            { "cardId": "base-set-094-potion", "qty": 1 },
+            { "cardId": "base-set-091-bill", "qty": 1 },
+            { "cardId": "team-rocket-079-sleep", "qty": 1 },
+            { "cardId": "base-set-099-grass-energy", "qty": 10 }
+          ]
+        }
+      },
+      "treasurePool": "tier1",
+      "modifiers": [{ "type": "bonusCards", "side": "opponent", "cards": [{ "cardId": "team-rocket-079-sleep", "qty": 1 }], "to": "hand" }],
+      "modifiersByDifficulty": {
+        "hard": [
+          { "type": "bonusCards", "side": "opponent", "cards": [{ "cardId": "team-rocket-079-sleep", "qty": 1 }], "to": "hand" },
+          { "type": "opponentSetup", "active": ["jungle-054-jigglypuff"], "bench": [["base-set-057-pidgey"]] }
+        ]
+      },
+      "objective": "La canción de Jigglypuff: Lucía intentará dormir a tu Pokémon activo. Ten un Switch a mano."
+    },
+    {
+      "index": 4,
+      "id": "centro-pokemon-ruta-4-vendedor-marcos",
+      "location": "Centro Pokémon Ruta 4",
+      "opponent": {
+        "name": "Marcos",
+        "trainerClass": "Vendedor",
+        "sprite": "/sprites/adventure/trainers/magikarp-salesman.png",
+        "lead": "base-set-006-gyarados",
+        "deckByDifficulty": {
+          "normal": [
+            { "cardId": "base-set-035-magikarp", "qty": 4 },
+            { "cardId": "team-rocket-047-magikarp", "qty": 2 },
+            { "cardId": "base-set-006-gyarados", "qty": 1 },
+            { "cardId": "base-set-094-potion", "qty": 1 },
+            { "cardId": "base-set-102-water-energy", "qty": 12 }
+          ],
+          "hard": [
+            { "cardId": "base-set-035-magikarp", "qty": 3 },
+            { "cardId": "team-rocket-047-magikarp", "qty": 2 },
+            { "cardId": "base-set-006-gyarados", "qty": 1 },
+            { "cardId": "team-rocket-008-dark-gyarados", "qty": 1 },
+            { "cardId": "base-set-090-super-potion", "qty": 1 },
+            { "cardId": "base-set-091-bill", "qty": 1 },
+            { "cardId": "base-set-084-pluspower", "qty": 1 },
+            { "cardId": "base-set-102-water-energy", "qty": 14 }
+          ]
+        }
+      },
+      "treasurePool": "tier1",
+      "fixedOffer": ["a2-magikarp", "t1-bill", "t1-tactica"],
+      "modifiers": [],
+      "modifiersByDifficulty": {
+        "hard": [
+          { "type": "opponentSetup", "active": ["team-rocket-047-magikarp"], "bench": [["base-set-035-magikarp"]] }
+        ]
+      },
+      "objective": "«¡Un Magikarp por solo 500 monedas!» Vence al vendedor y su Magikarp con Gyarados entra en tus tesoros."
+    },
+    {
+      "index": 5,
+      "id": "monte-moon-montanero-alberto",
+      "location": "Monte Moon",
+      "opponent": {
+        "name": "Alberto",
+        "trainerClass": "Montañero",
+        "sprite": "/sprites/adventure/trainers/hiker.png",
+        "lead": "base-set-056-onix",
+        "deckByDifficulty": {
+          "normal": [
+            { "cardId": "fossil-047-geodude", "qty": 3 },
+            { "cardId": "fossil-037-graveler", "qty": 1 },
+            { "cardId": "base-set-056-onix", "qty": 2 },
+            { "cardId": "fossil-057-zubat", "qty": 4 },
+            { "cardId": "base-set-094-potion", "qty": 1 },
+            { "cardId": "base-set-091-bill", "qty": 1 },
+            { "cardId": "base-set-097-fighting-energy", "qty": 6 },
+            { "cardId": "base-set-099-grass-energy", "qty": 4 }
+          ],
+          "hard": [
+            { "cardId": "fossil-047-geodude", "qty": 3 },
+            { "cardId": "fossil-037-graveler", "qty": 2 },
+            { "cardId": "fossil-036-golem", "qty": 1 },
+            { "cardId": "base-set-056-onix", "qty": 2 },
+            { "cardId": "fossil-057-zubat", "qty": 4 },
+            { "cardId": "fossil-034-golbat", "qty": 2 },
+            { "cardId": "base-set-094-potion", "qty": 1 },
+            { "cardId": "base-set-090-super-potion", "qty": 1 },
+            { "cardId": "base-set-091-bill", "qty": 1 },
+            { "cardId": "base-set-084-pluspower", "qty": 1 },
+            { "cardId": "base-set-097-fighting-energy", "qty": 5 },
+            { "cardId": "base-set-099-grass-energy", "qty": 3 }
+          ]
+        }
+      },
+      "treasurePool": "major",
+      "modifiers": [{ "type": "opponentSetup", "active": ["fossil-047-geodude"], "bench": [["fossil-057-zubat"], ["fossil-057-zubat"]] }],
+      "modifiersByDifficulty": {
+        "hard": [
+          { "type": "prizeCount", "opponent": 2 },
+          { "type": "opponentSetup", "active": ["base-set-056-onix"], "bench": [["fossil-057-zubat"], ["fossil-057-zubat"], ["fossil-057-zubat"]] }
+        ]
+      },
+      "objective": "Emboscada de Zubat: en la oscuridad del Monte Moon, el rival empieza con Zubat en la banca.",
+      "objectiveByDifficulty": { "hard": "Emboscada de Zubat, y el rival gana con 2 premios: cuida a tus Pokémon." }
+    },
+    {
+      "index": 6,
+      "id": "monte-moon-cientifico-seymour",
+      "location": "Monte Moon",
+      "opponent": {
+        "name": "Seymour",
+        "trainerClass": "Científico",
+        "sprite": "/sprites/adventure/trainers/scientist.png",
+        "lead": "base-set-005-clefairy",
+        "deckByDifficulty": {
+          "normal": [
+            { "cardId": "base-set-005-clefairy", "qty": 4 },
+            { "cardId": "jungle-001-clefable", "qty": 1 },
+            { "cardId": "jungle-059-paras", "qty": 3 },
+            { "cardId": "base-set-094-potion", "qty": 2 },
+            { "cardId": "base-set-091-bill", "qty": 1 },
+            { "cardId": "base-set-099-grass-energy", "qty": 11 }
+          ],
+          "hard": [
+            { "cardId": "base-set-005-clefairy", "qty": 4 },
+            { "cardId": "jungle-001-clefable", "qty": 2 },
+            { "cardId": "jungle-059-paras", "qty": 2 },
+            { "cardId": "jungle-041-parasect", "qty": 1 },
+            { "cardId": "base-set-094-potion", "qty": 1 },
+            { "cardId": "base-set-090-super-potion", "qty": 1 },
+            { "cardId": "base-set-091-bill", "qty": 1 },
+            { "cardId": "base-set-084-pluspower", "qty": 1 },
+            { "cardId": "base-set-099-grass-energy", "qty": 11 }
+          ]
+        }
+      },
+      "treasurePool": "tier2",
+      "modifiers": [],
+      "modifiersByDifficulty": {
+        "hard": [
+          { "type": "opponentSetup", "active": ["base-set-005-clefairy"], "bench": [["base-set-005-clefairy", "jungle-001-clefable"], ["jungle-059-paras"]] },
+          { "type": "opponentPassives", "passives": ["lucky_coin"] }
+        ]
+      },
+      "objective": "La Piedra Lunar: Seymour protege a los Clefairy del Monte Moon. Gánale y te dejará seguir.",
+      "objectiveByDifficulty": { "hard": "La Piedra Lunar ya hizo efecto: un Clefable de Seymour te espera en la banca." }
+    },
+    {
+      "index": 7,
+      "id": "monte-moon-team-rocket",
+      "location": "Monte Moon",
+      "opponent": {
+        "name": "Jessie y James",
+        "trainerClass": "Team Rocket",
+        "sprite": "/sprites/adventure/trainers/jessie-james.png",
+        "lead": "team-rocket-062-meowth",
+        "deckByDifficulty": {
+          "normal": [
+            { "cardId": "team-rocket-056-ekans", "qty": 3 },
+            { "cardId": "team-rocket-002-dark-arbok", "qty": 1 },
+            { "cardId": "team-rocket-058-koffing", "qty": 3 },
+            { "cardId": "team-rocket-014-dark-weezing", "qty": 1 },
+            { "cardId": "team-rocket-062-meowth", "qty": 2 },
+            { "cardId": "team-rocket-016-rockets-sneak-attack", "qty": 1 },
+            { "cardId": "base-set-094-potion", "qty": 1 },
+            { "cardId": "base-set-099-grass-energy", "qty": 10 }
+          ],
+          "hard": [
+            { "cardId": "team-rocket-056-ekans", "qty": 3 },
+            { "cardId": "team-rocket-002-dark-arbok", "qty": 2 },
+            { "cardId": "team-rocket-058-koffing", "qty": 3 },
+            { "cardId": "team-rocket-014-dark-weezing", "qty": 2 },
+            { "cardId": "team-rocket-062-meowth", "qty": 2 },
+            { "cardId": "team-rocket-042-dark-persian", "qty": 1 },
+            { "cardId": "team-rocket-016-rockets-sneak-attack", "qty": 1 },
+            { "cardId": "team-rocket-073-the-bosss-way", "qty": 1 },
+            { "cardId": "team-rocket-076-imposter-oaks-revenge", "qty": 1 },
+            { "cardId": "base-set-094-potion", "qty": 1 },
+            { "cardId": "base-set-084-pluspower", "qty": 1 },
+            { "cardId": "base-set-099-grass-energy", "qty": 8 }
+          ]
+        }
+      },
+      "treasurePool": "tier2",
+      "modifiers": [],
+      "modifiersByDifficulty": {
+        "hard": [
+          { "type": "opponentSetup", "active": ["team-rocket-056-ekans"], "bench": [["team-rocket-058-koffing"]] },
+          { "type": "opponentPassives", "passives": ["start_attached_energy"] }
+        ]
+      },
+      "onLoss": { "type": "stealCards", "count": 2, "countByDifficulty": { "hard": 3 } },
+      "objectiveByDifficulty": {
+        "normal": "¡Prepárate para los problemas! Si pierdes, el Team Rocket se lleva 2 cartas de tu mazo.",
+        "hard": "¡Prepárate para los problemas! Si pierdes, el Team Rocket se lleva 3 cartas de tu mazo, y elige las mejores."
+      }
+    },
+    {
+      "index": 8,
+      "id": "monte-moon-super-nerd-miguel",
+      "location": "Monte Moon",
+      "opponent": {
+        "name": "Miguel",
+        "trainerClass": "Súper Nerd",
+        "sprite": "/sprites/adventure/trainers/supernerd.png",
+        "lead": "fossil-048-grimer",
+        "deckByDifficulty": {
+          "normal": [
+            { "cardId": "fossil-048-grimer", "qty": 3 },
+            { "cardId": "base-set-067-voltorb", "qty": 3 },
+            { "cardId": "jungle-002-electrode", "qty": 1 },
+            { "cardId": "base-set-051-koffing", "qty": 3 },
+            { "cardId": "base-set-094-potion", "qty": 1 },
+            { "cardId": "base-set-091-bill", "qty": 1 },
+            { "cardId": "base-set-099-grass-energy", "qty": 6 },
+            { "cardId": "base-set-100-lightning-energy", "qty": 4 }
+          ],
+          "hard": [
+            { "cardId": "fossil-048-grimer", "qty": 3 },
+            { "cardId": "fossil-013-muk", "qty": 1 },
+            { "cardId": "base-set-067-voltorb", "qty": 3 },
+            { "cardId": "jungle-002-electrode", "qty": 2 },
+            { "cardId": "base-set-051-koffing", "qty": 3 },
+            { "cardId": "fossil-045-weezing", "qty": 2 },
+            { "cardId": "base-set-090-super-potion", "qty": 1 },
+            { "cardId": "base-set-091-bill", "qty": 1 },
+            { "cardId": "base-set-084-pluspower", "qty": 1 },
+            { "cardId": "base-set-093-gust-of-wind", "qty": 1 },
+            { "cardId": "base-set-099-grass-energy", "qty": 5 },
+            { "cardId": "base-set-100-lightning-energy", "qty": 3 }
+          ]
+        }
+      },
+      "treasurePool": "tier2",
+      "fixedOffer": ["a2-fosil-helix", "a2-fosil-domo"],
+      "modifiers": [],
+      "modifiersByDifficulty": {
+        "hard": [
+          { "type": "prizeCount", "opponent": 2 },
+          { "type": "opponentSetup", "active": ["base-set-051-koffing"], "bench": [["fossil-048-grimer"], ["base-set-067-voltorb"]] }
+        ]
+      },
+      "objective": "Miguel custodia dos fósiles: gánale y elige el Fósil Helix (Omanyte) o el Fósil Domo (Kabuto).",
+      "objectiveByDifficulty": { "hard": "Gánale a Miguel y elige el Fósil Helix o el Fósil Domo. El rival gana con 2 premios: cuida a tus Pokémon." }
+    },
+    {
+      "index": 9,
+      "id": "gimnasio-celeste-team-rocket",
+      "location": "Gimnasio Celeste",
+      "opponent": {
+        "name": "Jessie y James",
+        "trainerClass": "Team Rocket",
+        "sprite": "/sprites/adventure/trainers/jessie-james.png",
+        "lead": "fossil-031-arbok",
+        "deckByDifficulty": {
+          "normal": [
+            { "cardId": "fossil-046-ekans", "qty": 3 },
+            { "cardId": "fossil-031-arbok", "qty": 2 },
+            { "cardId": "base-set-051-koffing", "qty": 3 },
+            { "cardId": "fossil-045-weezing", "qty": 2 },
+            { "cardId": "jungle-056-meowth", "qty": 2 },
+            { "cardId": "team-rocket-016-rockets-sneak-attack", "qty": 1 },
+            { "cardId": "team-rocket-076-imposter-oaks-revenge", "qty": 1 },
+            { "cardId": "base-set-094-potion", "qty": 1 },
+            { "cardId": "base-set-091-bill", "qty": 1 },
+            { "cardId": "base-set-099-grass-energy", "qty": 8 }
+          ],
+          "hard": [
+            { "cardId": "team-rocket-056-ekans", "qty": 3 },
+            { "cardId": "team-rocket-002-dark-arbok", "qty": 2 },
+            { "cardId": "team-rocket-058-koffing", "qty": 3 },
+            { "cardId": "team-rocket-014-dark-weezing", "qty": 2 },
+            { "cardId": "team-rocket-062-meowth", "qty": 2 },
+            { "cardId": "team-rocket-042-dark-persian", "qty": 1 },
+            { "cardId": "team-rocket-016-rockets-sneak-attack", "qty": 1 },
+            { "cardId": "team-rocket-073-the-bosss-way", "qty": 1 },
+            { "cardId": "team-rocket-078-goop-gas-attack", "qty": 1 },
+            { "cardId": "base-set-090-super-potion", "qty": 1 },
+            { "cardId": "base-set-084-pluspower", "qty": 1 },
+            { "cardId": "base-set-093-gust-of-wind", "qty": 1 },
+            { "cardId": "base-set-099-grass-energy", "qty": 9 }
+          ]
+        }
+      },
+      "treasurePool": "tier2",
+      "modifiers": [{ "type": "opponentSetup", "active": ["fossil-046-ekans"], "bench": [["base-set-051-koffing"]] }],
+      "modifiersByDifficulty": {
+        "hard": [
+          { "type": "prizeCount", "opponent": 2 },
+          { "type": "opponentPassives", "passives": ["start_attached_energy"] },
+          { "type": "opponentSetup", "active": ["team-rocket-056-ekans"], "bench": [["team-rocket-058-koffing"], ["team-rocket-062-meowth"]] }
+        ]
+      },
+      "onLoss": { "type": "stealCards", "count": 2, "countByDifficulty": { "hard": 3 } },
+      "onWin": { "type": "recoverStolen" },
+      "objectiveByDifficulty": {
+        "normal": "El Team Rocket asalta el Gimnasio Celeste. Si pierdes, se lleva 2 cartas; si ganas, recuperas todo lo que te robó.",
+        "hard": "Si pierdes, el Team Rocket se lleva 3 cartas; si ganas, recuperas todo lo robado. El rival gana con 2 premios."
+      }
+    },
+    {
+      "index": 10,
+      "id": "ciudad-celeste-rival-azul",
+      "location": "Ciudad Celeste",
+      "opponent": {
+        "name": "Azul",
+        "trainerClass": "Rival",
+        "sprite": "/sprites/adventure/trainers/rival-blue.png",
+        "lead": "base-set-022-pidgeotto",
+        "deckByDifficulty": {
+          "normal": [
+            { "cardId": "base-set-057-pidgey", "qty": 3 },
+            { "cardId": "base-set-022-pidgeotto", "qty": 2 },
+            { "cardId": "base-set-061-rattata", "qty": 3 },
+            { "cardId": "base-set-040-raticate", "qty": 1 },
+            { "cardId": "base-set-043-abra", "qty": 3 },
+            { "cardId": "base-set-032-kadabra", "qty": 1 },
+            { "cardId": "base-set-094-potion", "qty": 1 },
+            { "cardId": "base-set-091-bill", "qty": 2 },
+            { "cardId": "base-set-093-gust-of-wind", "qty": 1 },
+            { "cardId": "base-set-084-pluspower", "qty": 1 },
+            { "cardId": "base-set-096-double-colorless-energy", "qty": 2 },
+            { "cardId": "base-set-101-psychic-energy", "qty": 6 }
+          ],
+          "hard": {
+            "byStarter": {
+              "charmander": [
+                { "cardId": "base-set-063-squirtle", "qty": 4 },
+                { "cardId": "base-set-042-wartortle", "qty": 2 },
+                { "cardId": "base-set-002-blastoise", "qty": 1 },
+                { "cardId": "base-set-057-pidgey", "qty": 2 },
+                { "cardId": "base-set-022-pidgeotto", "qty": 1 },
+                { "cardId": "base-set-043-abra", "qty": 2 },
+                { "cardId": "base-set-032-kadabra", "qty": 1 },
+                { "cardId": "base-set-090-super-potion", "qty": 1 },
+                { "cardId": "base-set-091-bill", "qty": 2 },
+                { "cardId": "base-set-093-gust-of-wind", "qty": 1 },
+                { "cardId": "base-set-084-pluspower", "qty": 1 },
+                { "cardId": "base-set-092-energy-removal", "qty": 1 },
+                { "cardId": "base-set-102-water-energy", "qty": 8 },
+                { "cardId": "base-set-101-psychic-energy", "qty": 3 }
+              ],
+              "squirtle": [
+                { "cardId": "base-set-044-bulbasaur", "qty": 4 },
+                { "cardId": "base-set-030-ivysaur", "qty": 2 },
+                { "cardId": "base-set-015-venusaur", "qty": 1 },
+                { "cardId": "base-set-057-pidgey", "qty": 2 },
+                { "cardId": "base-set-022-pidgeotto", "qty": 1 },
+                { "cardId": "base-set-043-abra", "qty": 2 },
+                { "cardId": "base-set-032-kadabra", "qty": 1 },
+                { "cardId": "base-set-090-super-potion", "qty": 1 },
+                { "cardId": "base-set-091-bill", "qty": 2 },
+                { "cardId": "base-set-093-gust-of-wind", "qty": 1 },
+                { "cardId": "base-set-084-pluspower", "qty": 1 },
+                { "cardId": "base-set-092-energy-removal", "qty": 1 },
+                { "cardId": "base-set-099-grass-energy", "qty": 8 },
+                { "cardId": "base-set-101-psychic-energy", "qty": 3 }
+              ],
+              "bulbasaur": [
+                { "cardId": "base-set-046-charmander", "qty": 4 },
+                { "cardId": "base-set-024-charmeleon", "qty": 2 },
+                { "cardId": "base-set-004-charizard", "qty": 1 },
+                { "cardId": "base-set-057-pidgey", "qty": 2 },
+                { "cardId": "base-set-022-pidgeotto", "qty": 1 },
+                { "cardId": "base-set-043-abra", "qty": 2 },
+                { "cardId": "base-set-032-kadabra", "qty": 1 },
+                { "cardId": "base-set-090-super-potion", "qty": 1 },
+                { "cardId": "base-set-091-bill", "qty": 2 },
+                { "cardId": "base-set-093-gust-of-wind", "qty": 1 },
+                { "cardId": "base-set-084-pluspower", "qty": 1 },
+                { "cardId": "base-set-092-energy-removal", "qty": 1 },
+                { "cardId": "base-set-098-fire-energy", "qty": 9 },
+                { "cardId": "base-set-101-psychic-energy", "qty": 3 }
+              ],
+              "pikachu": [
+                { "cardId": "jungle-051-eevee", "qty": 4 },
+                { "cardId": "jungle-004-jolteon", "qty": 2 },
+                { "cardId": "base-set-061-rattata", "qty": 2 },
+                { "cardId": "base-set-040-raticate", "qty": 1 },
+                { "cardId": "base-set-057-pidgey", "qty": 2 },
+                { "cardId": "base-set-022-pidgeotto", "qty": 1 },
+                { "cardId": "base-set-043-abra", "qty": 2 },
+                { "cardId": "base-set-032-kadabra", "qty": 1 },
+                { "cardId": "base-set-090-super-potion", "qty": 1 },
+                { "cardId": "base-set-091-bill", "qty": 2 },
+                { "cardId": "base-set-093-gust-of-wind", "qty": 1 },
+                { "cardId": "base-set-084-pluspower", "qty": 1 },
+                { "cardId": "base-set-092-energy-removal", "qty": 1 },
+                { "cardId": "base-set-100-lightning-energy", "qty": 8 },
+                { "cardId": "base-set-101-psychic-energy", "qty": 3 }
+              ]
+            }
+          }
+        }
+      },
+      "treasurePool": null,
+      "modifiers": [{ "type": "opponentSetup", "active": ["base-set-057-pidgey"], "bench": [["base-set-043-abra"]] }],
+      "modifiersByDifficulty": {
+        "hard": {
+          "byStarter": {
+            "charmander": [
+              { "type": "prizeCount", "opponent": 2 },
+              { "type": "bonusCards", "side": "opponent", "cards": [{ "cardId": "base-set-084-pluspower", "qty": 1 }], "to": "hand" },
+              { "type": "opponentPassives", "passives": ["start_attached_energy"] },
+              { "type": "opponentSetup", "active": ["base-set-063-squirtle"], "bench": [["base-set-057-pidgey"]] }
+            ],
+            "squirtle": [
+              { "type": "prizeCount", "opponent": 2 },
+              { "type": "bonusCards", "side": "opponent", "cards": [{ "cardId": "base-set-084-pluspower", "qty": 1 }], "to": "hand" },
+              { "type": "opponentPassives", "passives": ["start_attached_energy"] },
+              { "type": "opponentSetup", "active": ["base-set-044-bulbasaur"], "bench": [["base-set-057-pidgey"]] }
+            ],
+            "bulbasaur": [
+              { "type": "prizeCount", "opponent": 2 },
+              { "type": "bonusCards", "side": "opponent", "cards": [{ "cardId": "base-set-084-pluspower", "qty": 1 }], "to": "hand" },
+              { "type": "opponentPassives", "passives": ["start_attached_energy"] },
+              { "type": "opponentSetup", "active": ["base-set-046-charmander"], "bench": [["base-set-057-pidgey"]] }
+            ],
+            "pikachu": [
+              { "type": "prizeCount", "opponent": 2 },
+              { "type": "bonusCards", "side": "opponent", "cards": [{ "cardId": "base-set-084-pluspower", "qty": 1 }], "to": "hand" },
+              { "type": "opponentPassives", "passives": ["start_attached_energy"] },
+              { "type": "opponentSetup", "active": ["jungle-051-eevee"], "bench": [["base-set-057-pidgey"]] }
+            ]
+          }
+        }
+      },
+      "objective": "Azul llegó antes que tú a Ciudad Celeste y quiere probar su equipo: demuéstrale quién entrenó mejor.",
+      "objectiveByDifficulty": { "hard": "Azul armó su equipo pensando en el tuyo, y gana con 2 premios: cuida a tus Pokémon." }
+    }
+  ],
+  "difficulties": {
+    "normal": { "description": "Rivales a tu medida de la Ruta 3 a Ciudad Celeste; el Team Rocket roba 2 cartas si te gana." },
+    "hard": {
+      "description": "Rivales con mazos evolucionados y reglas de jefe; el Team Rocket roba 3 cartas y elige las mejores.",
+      "hearts": 2,
+      "treasurePools": {
+        "tier1": ["h1-cazador", "h1-emboscada", "h1-apuesta", "t1-evolucion", "h1-tijera", "t1-moneda", "h1-kangaskhan", "a2-fosil"],
+        "major": ["m-final", "m-atajo", "m-corazon", "h5-criador"],
+        "tier2": [
+          "h2-todo-o-nada",
+          "h2-golpe-bajo",
+          "t1-energia",
+          "h2-peso-pesado",
+          "h2-bandada",
+          "t2-dce",
+          "t2-removal",
+          "t2-plus",
+          "h2-buscador",
+          "t2-mano",
+          "a2-piedra-lunar"
+        ]
+      },
+      "treasureOffer": { "rarityWeights": { "common": 4, "rare": 4, "epic": 2 }, "maxPassives": 1 }
+    }
+  },
+  "treasurePools": {
+    "tier1": ["t1-evolucion", "t1-pociones", "t1-bill", "t1-tactica", "t1-pikachu", "t1-moneda", "a2-fosil"],
+    "major": ["m-final", "m-corazon", "m-atajo", "m-profesor"],
+    "tier2": ["t2-oak", "t2-superpocion", "t2-plus", "t2-removal", "t2-bandada", "t2-defensa", "t2-dce", "t2-mano", "t1-energia", "a2-piedra-lunar"]
+  },
+  "treasureOffer": { "rarityWeights": { "common": 6, "rare": 3, "epic": 1 }, "maxPassives": 1 },
+  "treasures": [
+    {
+      "id": "t1-evolucion",
+      "name": "Pack de evolución",
+      "description": "+1 básico y +1 Stage 1 de tu inicial",
+      "rarity": "rare",
+      "kind": "cards",
+      "cards": [{ "ref": "starter.basic", "qty": 1 }, { "ref": "starter.stage1", "qty": 1 }]
+    },
+    {
+      "id": "t1-pociones",
+      "name": "Botiquín",
+      "description": "+2 Potion",
+      "rarity": "rare",
+      "kind": "cards",
+      "cards": [{ "cardId": "base-set-094-potion", "qty": 2 }]
+    },
+    {
+      "id": "t1-bill",
+      "name": "Investigación",
+      "description": "+2 Bill",
+      "rarity": "common",
+      "kind": "cards",
+      "cards": [{ "cardId": "base-set-091-bill", "qty": 2 }]
+    },
+    {
+      "id": "t1-tactica",
+      "name": "Táctica",
+      "description": "+1 Switch y +1 Gust of Wind",
+      "rarity": "common",
+      "kind": "cards",
+      "cards": [{ "cardId": "base-set-095-switch", "qty": 1 }, { "cardId": "base-set-093-gust-of-wind", "qty": 1 }]
+    },
+    {
+      "id": "t1-pikachu",
+      "name": "Compañero eléctrico",
+      "description": "+2 Pikachu y +2 energías Rayo",
+      "rarity": "rare",
+      "kind": "cards",
+      "cards": [{ "cardId": "base-set-058-pikachu", "qty": 2 }, { "cardId": "base-set-100-lightning-energy", "qty": 2 }]
+    },
+    {
+      "id": "t1-moneda",
+      "name": "Moneda de la suerte",
+      "description": "La primera moneda que lanzas en cada batalla sale cara",
+      "rarity": "common",
+      "kind": "passive",
+      "passive": "lucky_coin"
+    },
+    {
+      "id": "t1-energia",
+      "name": "Arranque rápido",
+      "description": "Al empezar cada batalla, tu Pokémon activo recibe 1 energía básica de tu mazo",
+      "rarity": "epic",
+      "kind": "passive",
+      "passive": "start_attached_energy"
+    },
+    {
+      "id": "m-final",
+      "name": "Evolución final",
+      "description": "+1 Stage 2 y +1 Stage 1 de tu inicial",
+      "rarity": "epic",
+      "kind": "cards",
+      "cards": [{ "ref": "starter.stage2", "qty": 1 }, { "ref": "starter.stage1", "qty": 1 }]
+    },
+    {
+      "id": "m-corazon",
+      "name": "Corazón extra",
+      "description": "+1 corazón ahora y +1 al máximo",
+      "rarity": "epic",
+      "kind": "passive",
+      "passive": "extra_heart"
+    },
+    {
+      "id": "m-atajo",
+      "name": "Atajo",
+      "description": "Juegas cada batalla con 1 premio menos",
+      "rarity": "epic",
+      "kind": "passive",
+      "passive": "prize_minus_one"
+    },
+    {
+      "id": "m-profesor",
+      "name": "Mochila del profesor",
+      "description": "+1 Professor Oak y +1 Computer Search",
+      "rarity": "epic",
+      "kind": "cards",
+      "cards": [{ "cardId": "base-set-088-professor-oak", "qty": 1 }, { "cardId": "base-set-071-computer-search", "qty": 1 }]
+    },
+    {
+      "id": "t2-oak",
+      "name": "Profesor Oak",
+      "description": "+1 Professor Oak",
+      "rarity": "common",
+      "kind": "cards",
+      "cards": [{ "cardId": "base-set-088-professor-oak", "qty": 1 }]
+    },
+    {
+      "id": "t2-superpocion",
+      "name": "Super botiquín",
+      "description": "+2 Super Potion",
+      "rarity": "common",
+      "kind": "cards",
+      "cards": [{ "cardId": "base-set-090-super-potion", "qty": 2 }]
+    },
+    {
+      "id": "t2-plus",
+      "name": "Golpe extra",
+      "description": "+2 PlusPower",
+      "rarity": "common",
+      "kind": "cards",
+      "cards": [{ "cardId": "base-set-084-pluspower", "qty": 2 }]
+    },
+    {
+      "id": "t2-removal",
+      "name": "Sabotaje",
+      "description": "+2 Energy Removal",
+      "rarity": "rare",
+      "kind": "cards",
+      "cards": [{ "cardId": "base-set-092-energy-removal", "qty": 2 }]
+    },
+    {
+      "id": "t2-bandada",
+      "name": "Bandada",
+      "description": "+2 Pidgey y +1 Pidgeotto",
+      "rarity": "rare",
+      "kind": "cards",
+      "cards": [{ "cardId": "base-set-057-pidgey", "qty": 2 }, { "cardId": "base-set-022-pidgeotto", "qty": 1 }]
+    },
+    {
+      "id": "t2-defensa",
+      "name": "Defensa",
+      "description": "+2 Defender",
+      "rarity": "common",
+      "kind": "cards",
+      "cards": [{ "cardId": "base-set-080-defender", "qty": 2 }]
+    },
+    {
+      "id": "t2-dce",
+      "name": "Energía doble",
+      "description": "+2 Double Colorless Energy",
+      "rarity": "rare",
+      "kind": "cards",
+      "cards": [{ "cardId": "base-set-096-double-colorless-energy", "qty": 2 }]
+    },
+    {
+      "id": "t2-mano",
+      "name": "Mano preparada",
+      "description": "Empiezas cada batalla con 8 cartas en la mano",
+      "rarity": "common",
+      "kind": "passive",
+      "passive": "opening_hand_plus_1"
+    },
+    {
+      "id": "h1-cazador",
+      "name": "Cazador",
+      "description": "+2 Poké Ball",
+      "rarity": "common",
+      "kind": "cards",
+      "cards": [{ "cardId": "jungle-064-poke-ball", "qty": 2 }]
+    },
+    {
+      "id": "h1-emboscada",
+      "name": "Emboscada",
+      "description": "+1 Gust of Wind y +1 PlusPower",
+      "rarity": "common",
+      "kind": "cards",
+      "cards": [{ "cardId": "base-set-093-gust-of-wind", "qty": 1 }, { "cardId": "base-set-084-pluspower", "qty": 1 }]
+    },
+    {
+      "id": "h1-apuesta",
+      "name": "Apuesta",
+      "description": "+1 Gambler y +1 Bill",
+      "rarity": "common",
+      "kind": "cards",
+      "cards": [{ "cardId": "fossil-060-gambler", "qty": 1 }, { "cardId": "base-set-091-bill", "qty": 1 }]
+    },
+    {
+      "id": "h1-tijera",
+      "name": "Filo del bosque",
+      "description": "+1 Scyther y +1 Double Colorless Energy",
+      "rarity": "rare",
+      "kind": "cards",
+      "cards": [{ "cardId": "jungle-010-scyther", "qty": 1 }, { "cardId": "base-set-096-double-colorless-energy", "qty": 1 }]
+    },
+    {
+      "id": "h1-kangaskhan",
+      "name": "Puño cometa",
+      "description": "+1 Kangaskhan y +2 Double Colorless Energy",
+      "rarity": "epic",
+      "kind": "cards",
+      "cards": [{ "cardId": "jungle-005-kangaskhan", "qty": 1 }, { "cardId": "base-set-096-double-colorless-energy", "qty": 2 }]
+    },
+    {
+      "id": "h5-criador",
+      "name": "Criador experto",
+      "description": "+1 Stage 2 de tu inicial y +2 Pokémon Breeder",
+      "rarity": "epic",
+      "kind": "cards",
+      "cards": [{ "ref": "starter.stage2", "qty": 1 }, { "cardId": "base-set-076-pokemon-breeder", "qty": 2 }]
+    },
+    {
+      "id": "h2-todo-o-nada",
+      "name": "Todo o nada",
+      "description": "+2 Professor Oak y +1 Computer Search: robas mucho, pero descartas tu mano",
+      "rarity": "epic",
+      "kind": "cards",
+      "cards": [{ "cardId": "base-set-088-professor-oak", "qty": 2 }, { "cardId": "base-set-071-computer-search", "qty": 1 }]
+    },
+    {
+      "id": "h2-golpe-bajo",
+      "name": "Golpe bajo",
+      "description": "+2 Super Energy Removal: le quitas 2 energías al rival descartando 1 tuya",
+      "rarity": "epic",
+      "kind": "cards",
+      "cards": [{ "cardId": "base-set-079-super-energy-removal", "qty": 2 }]
+    },
+    {
+      "id": "h2-peso-pesado",
+      "name": "Peso pesado",
+      "description": "+1 Snorlax y +1 Double Colorless Energy",
+      "rarity": "rare",
+      "kind": "cards",
+      "cards": [{ "cardId": "jungle-011-snorlax", "qty": 1 }, { "cardId": "base-set-096-double-colorless-energy", "qty": 1 }]
+    },
+    {
+      "id": "h2-bandada",
+      "name": "Bandada veloz",
+      "description": "+1 Pidgey, +1 Pidgeotto y +1 Pidgeot",
+      "rarity": "rare",
+      "kind": "cards",
+      "cards": [
+        { "cardId": "base-set-057-pidgey", "qty": 1 },
+        { "cardId": "base-set-022-pidgeotto", "qty": 1 },
+        { "cardId": "jungle-008-pidgeot", "qty": 1 }
+      ]
+    },
+    {
+      "id": "h2-buscador",
+      "name": "Buscador",
+      "description": "+1 Computer Search y +1 Energy Retrieval",
+      "rarity": "common",
+      "kind": "cards",
+      "cards": [{ "cardId": "base-set-071-computer-search", "qty": 1 }, { "cardId": "base-set-081-energy-retrieval", "qty": 1 }]
+    },
+    {
+      "id": "a2-magikarp",
+      "name": "Oferta del vendedor",
+      "description": "+2 Magikarp y +1 Gyarados: el «Magikarp de oferta» resultó ser un buen negocio",
+      "rarity": "rare",
+      "kind": "cards",
+      "cards": [{ "cardId": "base-set-035-magikarp", "qty": 2 }, { "cardId": "base-set-006-gyarados", "qty": 1 }]
+    },
+    {
+      "id": "a2-fosil",
+      "name": "Fósil misterioso",
+      "description": "+2 Mysterious Fossil: se juegan como básicos y no dan premios",
+      "rarity": "common",
+      "kind": "cards",
+      "cards": [{ "cardId": "fossil-062-mysterious-fossil", "qty": 2 }]
+    },
+    {
+      "id": "a2-piedra-lunar",
+      "name": "Piedra Lunar",
+      "description": "+2 Clefairy y +1 Clefable: los Clefairy del Monte Moon se unen a tu equipo",
+      "rarity": "rare",
+      "kind": "cards",
+      "cards": [{ "cardId": "base-set-005-clefairy", "qty": 2 }, { "cardId": "jungle-001-clefable", "qty": 1 }]
+    },
+    {
+      "id": "a2-fosil-helix",
+      "name": "Fósil Helix",
+      "description": "+2 Mysterious Fossil, +2 Omanyte y +1 Omastar",
+      "rarity": "epic",
+      "kind": "cards",
+      "cards": [
+        { "cardId": "fossil-062-mysterious-fossil", "qty": 2 },
+        { "cardId": "fossil-052-omanyte", "qty": 2 },
+        { "cardId": "fossil-040-omastar", "qty": 1 }
+      ]
+    },
+    {
+      "id": "a2-fosil-domo",
+      "name": "Fósil Domo",
+      "description": "+2 Mysterious Fossil, +2 Kabuto y +1 Kabutops",
+      "rarity": "epic",
+      "kind": "cards",
+      "cards": [
+        { "cardId": "fossil-062-mysterious-fossil", "qty": 2 },
+        { "cardId": "fossil-050-kabuto", "qty": 2 },
+        { "cardId": "fossil-009-kabutops", "qty": 1 }
+      ]
+    }
+  ],
+  "rewards": {
+    "normal": { "type": "cosmetic", "cosmeticType": "cardBack", "id": "cardback-monte-moon", "name": "Dorso Monte Moon" },
+    "hard": { "type": "coins", "amount": 1000, "name": "1000 monedas" }
+  },
+  "achievements": [
+    {
+      "id": "adventure-2-clear-normal",
+      "name": "Rumbo a Ciudad Celeste",
+      "description": "Completa De Ciudad Plateada a Ciudad Celeste en normal",
+      "tier": "bronze",
+      "condition": { "type": "clear", "difficulty": "normal" }
+    },
+    {
+      "id": "adventure-2-clear-hard",
+      "name": "Más allá del Monte Moon",
+      "description": "Completa De Ciudad Plateada a Ciudad Celeste en difícil",
+      "tier": "platinum",
+      "condition": { "type": "clear", "difficulty": "hard" }
+    },
+    {
+      "id": "adventure-2-flawless",
+      "name": "Sin perder el rumbo",
+      "description": "Completa De Ciudad Plateada a Ciudad Celeste sin perder corazones",
+      "tier": "silver",
+      "condition": { "type": "flawless" }
+    },
+    {
+      "id": "adventure-2-all-starters",
+      "name": "Equipo completo",
+      "description": "Completa De Ciudad Plateada a Ciudad Celeste con los 4 iniciales",
+      "tier": "silver",
+      "condition": { "type": "allStarters" }
+    },
+    {
+      "id": "adventure-2-all-starters-hard",
+      "name": "Leyenda del Monte Moon",
+      "description": "Completa De Ciudad Plateada a Ciudad Celeste en difícil con los 4 iniciales",
+      "tier": "platinum",
+      "condition": { "type": "allStarters", "difficulty": "hard" }
+    },
+    {
+      "id": "adventure-2-purist",
+      "name": "Viajero ligero",
+      "description": "Completa De Ciudad Plateada a Ciudad Celeste saltando todos los tesoros",
+      "tier": "gold",
+      "condition": { "type": "purist" }
+    },
+    {
+      "id": "adventure-2-monotype",
+      "name": "Fiel a tu tipo",
+      "description": "Completa De Ciudad Plateada a Ciudad Celeste sin cartas ni energías de otro tipo que el de tu inicial (incoloros permitidos)",
+      "tier": "silver",
+      "condition": { "type": "monotype" }
+    },
+    {
+      "id": "adventure-2-no-steal",
+      "name": "Ni una carta para el Team Rocket",
+      "description": "Completa De Ciudad Plateada a Ciudad Celeste sin que el Team Rocket te robe ninguna carta",
+      "tier": "silver",
+      "condition": { "type": "noSteal" }
+    }
+  ]
+}

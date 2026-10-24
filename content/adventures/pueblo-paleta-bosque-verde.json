@@ -3,7 +3,7 @@
   "version": 4,
   "order": 1,
   "image": "/adventures/pueblo-paleta-bosque-verde.jpg",
-  "name": "De Pueblo Paleta al Bosque Verde",
+  "name": "El Comienzo",
   "description": "Elige tu inicial y abre camino por la Ruta 1, Ciudad Verde, la Ruta 22 y el Bosque Verde hasta las puertas de Ciudad Plateada, donde te espera tu rival.",
   "rules": { "hearts": 3, "prizeCount": 3, "openingHand": 7, "minDeckSize": 20, "maxDeckSize": 40, "maxCopies": null },
   "starters": [
@@ -829,14 +829,14 @@
     {
       "id": "adventure-1-clear-normal",
       "name": "Primer paso",
-      "description": "Completa De Pueblo Paleta al Bosque Verde en normal",
+      "description": "Completa El Comienzo en normal",
       "tier": "bronze",
       "condition": { "type": "clear", "difficulty": "normal" }
     },
     {
       "id": "adventure-1-clear-hard",
       "name": "Esta vez en serio",
-      "description": "Completa De Pueblo Paleta al Bosque Verde en difícil",
+      "description": "Completa El Comienzo en difícil",
       "tier": "platinum",
       "condition": { "type": "clear", "difficulty": "hard" },
       "cosmetic": { "type": "playmat", "id": "playmat-ciudad-plateada", "name": "Tapete Ciudad Plateada" }

@@ -6,7 +6,7 @@ import { isPokemonCard } from "@gonzaloaguila/game-core";
 import { cardOf, isBasicPokemonCard } from "../src/modules/adventure/content/cards.js";
 import { battleModifiers, battleObjective, difficultyRules, rivalDeckOf } from "../src/modules/adventure/content/difficulty.js";
 import { describeModifier } from "../src/modules/adventure/content/modifiers.js";
-import { ADVENTURE_PLAYMATS } from "../src/modules/prizes/catalog.js";
+import { ADVENTURE_CARD_BACKS, ADVENTURE_PLAYMATS } from "../src/modules/prizes/catalog.js";
 import type { BattleModifier } from "../src/modules/adventure/engine-types.js";
 
 const FILE = path.resolve(__dirname, "../content/adventures/pueblo-paleta-bosque-verde.json");
@@ -27,8 +27,10 @@ describe("Adventure 1 content", () => {
     const result = validateAdventure(raw());
     expect(result.ok ? [] : result.problems).toEqual([]);
     const adventure = getAdventure("pueblo-paleta-bosque-verde");
-    expect(adventure?.name).toBe("De Pueblo Paleta al Bosque Verde");
-    expect([...getAdventures().keys()]).toEqual(["pueblo-paleta-bosque-verde"]);
+    expect(adventure?.name).toBe("El Comienzo");
+    expect(adventure?.entryCost).toBeUndefined();
+    expect(adventure?.requires).toBeUndefined();
+    for (const a of adventure!.achievements) expect(a.description).not.toContain("Pueblo Paleta");
   });
 
   it("has the spec's rules, starters, battles and pools", () => {
@@ -136,6 +138,113 @@ describe("Adventure 1 content", () => {
     const achievement = getAdventure("pueblo-paleta-bosque-verde")!.achievements.find((a) => a.id === "adventure-1-clear-hard")!;
     expect(achievement).toMatchObject({ tier: "platinum", cosmetic: { type: "playmat", id: "playmat-ciudad-plateada" } });
     expect(ADVENTURE_PLAYMATS.map((p) => p.itemId)).toContain("playmat-ciudad-plateada");
+  });
+});
+
+describe("Adventure 2 content", () => {
+  const ADV2 = "ciudad-plateada-ciudad-celeste";
+  const FILE2 = path.resolve(__dirname, `../content/adventures/${ADV2}.json`);
+  const adventure2 = () => getAdventure(ADV2)!;
+
+  it("loads both adventures, El Comienzo first, adventure 2 costs 20 and requires Brock", () => {
+    const result = validateAdventure(JSON.parse(readFileSync(FILE2, "utf8")));
+    expect(result.ok ? [] : result.problems).toEqual([]);
+    expect([...getAdventures().keys()]).toEqual(["pueblo-paleta-bosque-verde", ADV2]);
+    expect(getAdventure("pueblo-paleta-bosque-verde")!.name).toBe("El Comienzo");
+    const adventure = adventure2();
+    expect(adventure).toMatchObject({
+      name: "De Ciudad Plateada a Ciudad Celeste",
+      order: 2,
+      image: "/adventures/ciudad-plateada-ciudad-celeste.jpg",
+      entryCost: 20,
+      requires: { type: "gymLeader", leaderId: "brock" },
+    });
+    expect(adventure.rules).toEqual({ hearts: 3, prizeCount: 3, openingHand: 7, minDeckSize: 20, maxDeckSize: 40, maxCopies: null });
+  });
+
+  it("starters: adventure 1's three improved plus a locked Pikachu, 24–28 cards each", () => {
+    const adventure = adventure2();
+    expect(adventure.starters.map((s) => [s.id, !!s.requiresUnlock])).toEqual([
+      ["charmander", false], ["squirtle", false], ["bulbasaur", false], ["pikachu", true],
+    ]);
+    for (const starter of adventure.starters) {
+      expect(sum(starter.deck), starter.id).toBeGreaterThanOrEqual(24);
+      expect(sum(starter.deck), starter.id).toBeLessThanOrEqual(28);
+      // Every line's last stage is in the deck (Pikachu's line ends at Raichu)
+      const last = starter.line.stage2 ?? starter.line.stage1;
+      expect(starter.deck.some((e) => e.cardId === last), starter.id).toBe(true);
+      expect(starter.deck.some((e) => e.cardId === "base-set-088-professor-oak"), starter.id).toBe(true);
+    }
+  });
+
+  it("battles: sprites, Team Rocket steals at 7 and 9, the fixed offers at 4 and 8, the Zubat ambush at 5", () => {
+    const { battles, treasures } = adventure2();
+    expect(battles.map((b) => b.opponent.sprite)).toEqual(
+      ["youngster", "bugcatcher", "lass", "magikarp-salesman", "hiker", "scientist", "jessie-james", "supernerd", "jessie-james", "rival-blue"].map(
+        (n) => `/sprites/adventure/trainers/${n}.png`,
+      ),
+    );
+    expect(battles.map((b) => b.opponent.trainerClass)).toEqual([
+      "Joven", "Cazabichos", "Chica", "Vendedor", "Montañero", "Científico", "Team Rocket", "Súper Nerd", "Team Rocket", "Rival",
+    ]);
+    expect(battles[5].opponent.name).toBe("Seymour");
+    expect(battles[6].opponent.name).toBe("Jessie y James");
+    expect(battles[7].opponent.name).toBe("Miguel");
+    expect(battles[8].opponent.name).toBe("Jessie y James");
+    const steal = { type: "stealCards", count: 2, countByDifficulty: { hard: 3 } };
+    expect(battles.map((b) => b.onLoss ?? null)).toEqual([null, null, null, null, null, null, steal, null, steal, null]);
+    expect(battles.map((b) => b.onWin ?? null)).toEqual([null, null, null, null, null, null, null, null, { type: "recoverStolen" }, null]);
+
+    const cardsOf = (id: string) => {
+      const t = treasures.find((x) => x.id === id)!;
+      return t.kind === "cards" ? t.cards.map((c) => ("cardId" in c ? c.cardId : c.ref)) : [];
+    };
+    expect(cardsOf(battles[3].fixedOffer![0])).toEqual(expect.arrayContaining(["base-set-035-magikarp", "base-set-006-gyarados"]));
+    expect(battles[7].fixedOffer!.map(cardsOf)).toEqual([
+      expect.arrayContaining(["fossil-062-mysterious-fossil", "fossil-052-omanyte", "fossil-040-omastar"]),
+      expect.arrayContaining(["fossil-062-mysterious-fossil", "fossil-050-kabuto", "fossil-009-kabutops"]),
+    ]);
+    for (const difficulty of ["normal", "hard"] as const) {
+      const setup = battleModifiers(battles[4], difficulty, "charmander").find((m) => m.type === "opponentSetup");
+      expect(setup?.bench.flat().filter((id) => cardOf(id).name === "Zubat").length, difficulty).toBeGreaterThanOrEqual(1);
+    }
+    for (const battle of battles) expect(battle.objective ?? battle.objectiveByDifficulty, `batalla ${battle.index}`).toBeTruthy();
+  });
+
+  it("hard: evolved rival decks in every battle, one per starter at the final", () => {
+    const adventure = adventure2();
+    const evolutions = (deck: { cardId: string; qty: number }[]) =>
+      deck.filter((e) => isPokemonCard(cardOf(e.cardId)) && !isBasicPokemonCard(cardOf(e.cardId))).reduce((n, e) => n + e.qty, 0);
+    for (const battle of adventure.battles) {
+      const normal = rivalDeckOf(battle, "normal", "charmander")!;
+      for (const starter of adventure.starters) {
+        const hard = rivalDeckOf(battle, "hard", starter.id)!;
+        expect(evolutions(hard), `batalla ${battle.index}, ${starter.id}`).toBeGreaterThan(evolutions(normal));
+      }
+    }
+    const hard10 = adventure.battles[9].opponent.deckByDifficulty!.hard;
+    expect(Array.isArray(hard10) ? [] : Object.keys(hard10.byStarter)).toEqual(["charmander", "squirtle", "bulbasaur", "pikachu"]);
+    expect(adventure.difficulties.hard.hearts).toBe(2);
+  });
+
+  it("rewards: the Monte Moon card back on normal, 1000 coins on hard; adventure-2 achievements with noSteal", () => {
+    const adventure = adventure2();
+    expect(adventure.rewards).toEqual({
+      normal: { type: "cosmetic", cosmeticType: "cardBack", id: "cardback-monte-moon", name: "Dorso Monte Moon" },
+      hard: { type: "coins", amount: 1000, name: "1000 monedas" },
+    });
+    expect(ADVENTURE_CARD_BACKS).toContainEqual({ itemId: "cardback-monte-moon", name: "Monte Moon", imageUrl: "/card-backs/card-back-monte-moon.jpg" });
+    expect(adventure.achievements.map((a) => [a.id, a.tier, a.condition.type])).toEqual([
+      ["adventure-2-clear-normal", "bronze", "clear"],
+      ["adventure-2-clear-hard", "platinum", "clear"],
+      ["adventure-2-flawless", "silver", "flawless"],
+      ["adventure-2-all-starters", "silver", "allStarters"],
+      ["adventure-2-all-starters-hard", "platinum", "allStarters"],
+      ["adventure-2-purist", "gold", "purist"],
+      ["adventure-2-monotype", "silver", "monotype"],
+      ["adventure-2-no-steal", "silver", "noSteal"],
+    ]);
+    expect(adventure.achievements.find((a) => a.condition.type === "noSteal")!.name).toBe("Ni una carta para el Team Rocket");
   });
 });
 

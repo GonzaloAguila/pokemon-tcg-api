@@ -60,6 +60,7 @@ export const AVAILABLE_CARD_BACKS: CosmeticItem[] = [
  */
 export const ADVENTURE_CARD_BACKS: CosmeticItem[] = [
   { itemId: "cardback-bosque-verde", name: "Bosque Verde", imageUrl: "/card-backs/card-back-bosque-verde.jpg" },
+  { itemId: "cardback-monte-moon", name: "Monte Moon", imageUrl: "/card-backs/card-back-monte-moon.jpg" },
 ];
 
 /**

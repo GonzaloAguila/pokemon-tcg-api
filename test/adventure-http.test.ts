@@ -304,10 +304,10 @@ describe("GET /api/adventures", () => {
     const { token } = await player();
     const empty = await app.request("GET", "/api/adventures", { token });
     expect(empty.status).toBe(200);
-    expect(empty.body).toHaveLength(1);
+    expect(empty.body.map((a: { id: string }) => a.id)).toEqual([ADVENTURE, "ciudad-plateada-ciudad-celeste"]);
     expect(empty.body[0]).toMatchObject({
       id: ADVENTURE,
-      name: "De Pueblo Paleta al Bosque Verde",
+      name: "El Comienzo",
       battleCount: 10,
       progress: { clearsNormal: 0, clearsHard: 0, runsPlayed: 0 },
       rewards: { normal: { id: "cardback-bosque-verde", claimed: false }, hard: { id: "pikachu", claimed: false } },

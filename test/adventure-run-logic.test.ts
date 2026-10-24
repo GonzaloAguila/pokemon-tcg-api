@@ -384,6 +384,26 @@ describe("treasures", () => {
     ]);
   });
 
+  it("a starter without a Stage 2 (Pikachu) is never offered a Stage 2 treasure, nor can take one", () => {
+    const pikachu = {
+      id: "pikachu",
+      name: "Pikachu",
+      energyType: "lightning" as const,
+      line: { basic: "base-set-058-pikachu", stage1: "base-set-014-raichu" },
+      deck: [{ cardId: "base-set-058-pikachu", qty: 4 }, { cardId: "base-set-014-raichu", qty: 2 }, { cardId: LIGHTNING, qty: 18 }],
+    };
+    const withPikachu: Adventure = { ...adventure, starters: [...adventure.starters, pikachu] };
+    const run = newRun(withPikachu, { difficulty: "normal", starterId: "pikachu", seed: SEED });
+    expect(adventure.treasurePools.major).toContain("m-final");
+    expect(offerCandidates(run, withPikachu, 5)).not.toContain("m-final");
+    expect(offerCandidates(run, withPikachu, 5).length).toBeGreaterThan(0);
+    expect(offerCandidates(run, withPikachu, 1)).toContain("t1-evolucion");
+    const finalEvolution = withPikachu.treasures.find((t) => t.id === "m-final")!;
+    expect(resolveTreasureCards(finalEvolution, pikachu)).toEqual([{ cardId: "base-set-014-raichu", qty: 1 }]);
+    const choosing: RunState = { ...run, currentBattle: 5, phase: "choosing_treasure", pendingOffer: ["m-final"] };
+    expect(() => chooseTreasure(choosing, withPikachu, { treasureId: "m-final" })).toThrow(RunRuleError);
+  });
+
   it("a 5th and 6th Charmander are fine (no copy limit)", () => {
     const won = applyBattleResult(startBattle(fresh(), adventure), adventure, { victory: true }).run;
     const run = chooseTreasure({ ...won, pendingOffer: ["t1-evolucion"] }, adventure, { treasureId: "t1-evolucion" });

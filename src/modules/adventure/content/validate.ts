@@ -217,7 +217,8 @@ export function validateAdventure(raw: unknown): ValidationResult {
 
   for (const starter of adventure.starters) {
     const where = `Inicial ${starter.id}`;
-    checkEvolutionChain(problems, `${where}, línea`, [starter.line.basic, starter.line.stage1, starter.line.stage2]);
+    const { basic, stage1, stage2 } = starter.line;
+    checkEvolutionChain(problems, `${where}, línea`, stage2 ? [basic, stage1, stage2] : [basic, stage1]);
     checkDeck(problems, where, starter.deck, rules, { maxCopies: rules.maxCopies, needsBasic: true });
   }
 
