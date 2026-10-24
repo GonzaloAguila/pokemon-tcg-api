@@ -226,7 +226,7 @@ describe("leader decks (backoffice)", () => {
 describe("gym rewards and cosmetics", () => {
   it("Brock's card backs are catalog entries an admin can grant (owner, 2026-10-23)", () => {
     expect(GYM_LEADER_CARD_BACKS.map((c) => c.itemId)).toEqual(["cardback-brock", "cardback-brock-expert"]);
-    expect(GYM_LEADER_CARD_BACKS.find((c) => c.itemId === "cardback-brock-expert")).toMatchObject({ name: "Brock EXPERT", imageUrl: "/gym-leaders/brock/brock_bkc_expert.png" });
+    expect(GYM_LEADER_CARD_BACKS.find((c) => c.itemId === "cardback-brock-expert")).toMatchObject({ name: "Brock EXPERT", imageUrl: "/gym-leaders/brock/brock_bkc_expert.jpg" });
     expect(GRANTABLE_COSMETICS.cardBack.has("cardback-brock")).toBe(true);
     expect(GRANTABLE_COSMETICS.cardBack.has("cardback-brock-expert")).toBe(true);
   });
