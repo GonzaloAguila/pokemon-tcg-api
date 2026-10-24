@@ -14,7 +14,7 @@ import {
 } from "../modules/matches/matches.service.js";
 import { checkAndUpdateProgress } from "../modules/achievements/achievements.service.js";
 import { userRoom } from "./io-registry.js";
-import { finishTracker, type MatchChallengeData } from "./challenge-tracker.js";
+import { matchChallengeData, type MatchChallengeData } from "./challenge-tracker.js";
 
 type PlayerKey = "player1" | "player2";
 
@@ -98,8 +98,7 @@ export function settleRoomResult(
 
 /** The game's decks, end and feats from the room's challenge tracker. */
 function challengeData(room: GameRoom, winner: PlayerKey | "draw" | null): MatchChallengeData {
-  const tracker = room.challengeTracker!;
-  return { player1Deck: tracker.decks.player1, player2Deck: tracker.decks.player2, ...finishTracker(tracker, room.gameState, winner) };
+  return matchChallengeData(room.challengeTracker!, room.gameState, winner);
 }
 
 /** The Basics both seats drew and who took turn 1 (server state, player 1's view), for the Lucky Duel achievements. */

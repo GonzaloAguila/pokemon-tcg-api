@@ -11,6 +11,7 @@ import type { Server } from "socket.io";
 import { GamePhase, startPlayingPhase, type GameState } from "@gonzaloaguila/game-core";
 import { neutralizeEvents, withRoomRandom, type ActionResult, type GameRoom, type GameRoomManager } from "./rooms.js";
 import { maskRoomState } from "./room-state.js";
+import { observe as observeChallenge } from "./challenge-tracker.js";
 import type { AdventureEngine, AICoins, AIPlan, Coin, SeededRng } from "./adventure-engine.js";
 
 /** Safety net for one AI loop (a turn is a few dozen steps). */
@@ -158,6 +159,8 @@ export class AISeatDriver {
       }
       const [self, other] = engine.aiEventsSpeakFor === "ai" ? ["Jugador 2", "Jugador 1"] : ["Jugador 1", "Jugador 2"];
       seat.room.gameState = { ...after, events: neutralizeEvents(after.events, before.events.length, self, other) };
+      // A room with challenge achievements (gym games) sees the AI's steps like any action
+      if (seat.room.challengeTracker) observeChallenge(seat.room.challengeTracker, before, seat.room.gameState, { type: engine.stepActionType(next.step) });
       seat.plan = next.plan;
       hooks.afterStep(seat);
       this.emitAIStep(seat, engine.stepActionType(next.step), coins);
@@ -191,6 +194,7 @@ export class AISeatDriver {
     const coin = rngCoin(seat.rng);
     const started = withRoomRandom(() => seat.rng.next(), () => startPlayingPhase(state, coin));
     seat.room.gameState = { ...started, events: neutralizeEvents(started.events, state.events.length, "Jugador 1", "Jugador 2") };
+    if (seat.room.challengeTracker) observeChallenge(seat.room.challengeTracker, state, seat.room.gameState, { type: "playerReady" });
     return true;
   }
 

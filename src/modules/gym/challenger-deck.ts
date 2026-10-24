@@ -7,6 +7,7 @@
 import { findCardDefinition, getDeckById as getThemeDeckById } from "@gonzaloaguila/game-core";
 import { prisma } from "../../lib/prisma.js";
 import { checkDeckPlayable, type DeckCardEntry } from "../decks/decks.service.js";
+import type { DeckSource } from "../achievements/challenge-decks.js";
 import type { CardEntry, GymRules } from "./content/types.js";
 import { checkGymRules } from "./rules.js";
 
@@ -18,6 +19,9 @@ function merge(entries: CardEntry[]): CardEntry[] {
   for (const entry of entries) byId.set(entry.cardId, (byId.get(entry.cardId) ?? 0) + entry.qty);
   return [...byId].map(([cardId, qty]) => ({ cardId, qty }));
 }
+
+/** Where the challenger's deck comes from, for the challenge achievements (only "user" decks count). */
+export const challengerDeckSource = (deckId: string): DeckSource => (UUID_RE.test(deckId) ? "user" : "theme");
 
 /** The deck as a card list (user deck of `userId`, or a theme deck), null when not found. */
 export async function loadDeckEntries(userId: string, deckId: string): Promise<CardEntry[] | null> {

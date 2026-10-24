@@ -2,9 +2,10 @@
  * What a multiplayer game did, for the challenge achievements (modules/achievements/challenges.ts):
  * both decks as played, and per seat the largest prize deficit, Bench use, the biggest attack hit
  * (game-core's lastAttackHit) and the Pokémon that dealt the winning Knock Out. Created when a game
- * starts (rooms.ts startGame / startGameWithRawDecks), fed every committed action (runActionNow)
- * and read once at settlement (match-settlement.ts). The server state is player 1's view:
- * "player" = player 1, "opponent" = player 2.
+ * starts (rooms.ts startGame / startGameWithRawDecks; gym-room.ts buildGame for a Gym Leader game),
+ * fed every committed action (runActionNow, and the AI seat's steps: ai-seat.ts) and read once at
+ * the end (match-settlement.ts; gym games: gym-room.ts record). The server state is player 1's
+ * view: "player" = player 1, "opponent" = player 2.
  */
 import { GamePhase, findCardDefinition, type GameCard, type GameState, type PokemonInPlay } from "@gonzaloaguila/game-core";
 import type { DeckEntry, DeckSnapshot, DeckSource } from "../modules/achievements/challenge-decks.js";
@@ -146,4 +147,13 @@ export function finishTracker(
     finalKoBy: tracker.finalKo && tracker.finalKo.seat === seat && winner === seat && (endKind === "prizes" || endKind === "no_pokemon") ? tracker.finalKo.name : null,
   });
   return { endKind, feats: { player1: feats("player1", "player2"), player2: feats("player2", "player1") }, finalTurn: finalState?.turnNumber ?? 0 };
+}
+
+/** Everything a match row stores for the challenges: both decks plus finishTracker's end. */
+export function matchChallengeData(
+  tracker: ChallengeTracker,
+  finalState: GameState | null | undefined,
+  winner: Seat | "draw" | null,
+): MatchChallengeData {
+  return { player1Deck: tracker.decks.player1, player2Deck: tracker.decks.player2, ...finishTracker(tracker, finalState, winner) };
 }

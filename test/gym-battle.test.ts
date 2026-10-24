@@ -15,6 +15,7 @@ import { findCardById, type GameState } from "@gonzaloaguila/game-core";
 import { prisma } from "../src/lib/prisma.js";
 import { closeRoomByAdmin, gymRooms, roomManager } from "../src/socket/handlers.js";
 import { gymService } from "../src/modules/gym/gym.service.js";
+import { checkAndUpdateProgress, claimAchievement } from "../src/modules/achievements/achievements.service.js";
 import { createUser } from "./helpers.js";
 import { nextEvent, startSocketServer, tokenFor } from "./socket-helpers.js";
 
@@ -64,7 +65,14 @@ const LEGAL_DECK = [
   { cardDefId: "base-set-102-water-energy", quantity: 10 },
 ];
 
-const swapCards = (out: string[], add: { cardDefId: string; quantity: number }[]) => [...LEGAL_DECK.filter((c) => !out.includes(c.cardDefId)), ...add];
+/** No Trainers: the 20 Basics and 40 basic Energy (challenge "Sin ayuda"). */
+const NO_TRAINER_DECK = [
+  ...POKEMON.map((cardDefId) => ({ cardDefId, quantity: 1 })),
+  { cardDefId: "base-set-098-fire-energy", quantity: 20 },
+  { cardDefId: "base-set-102-water-energy", quantity: 20 },
+];
+
+const swapCards =(out: string[], add: { cardDefId: string; quantity: number }[]) => [...LEGAL_DECK.filter((c) => !out.includes(c.cardDefId)), ...add];
 
 async function challenger(cards: { cardDefId: string; quantity: number }[] = LEGAL_DECK, coins = 1000) {
   const user = await createUser({ coins }, { stats: true });
@@ -605,6 +613,67 @@ describe("gym leader battles", () => {
     // The closed game is in the admin's history, abandoned
     expect(await gymRowsOf(a.user.id, 1)).toMatchObject([{ mode: "gym", status: "abandoned", winnerId: null, winReason: "Cerrada por un admin", roomId, gym: { game: 1 } }]);
     expect(await challenge(b)).toMatchObject({ ok: true });
+  });
+
+  it("challenge achievements: a played gym win with a no-Trainer deck makes Sin ayuda claimable (the row keeps the deck, end and feats)", async () => {
+    gymService.open("brock", "normal");
+    const a = await challenger(NO_TRAINER_DECK);
+    const game1 = await challenged(a);
+    await winGame(a, game1);
+    const [row] = await gymRowsOf(a.user.id, 1);
+    expect(row).toMatchObject({ mode: "gym", status: "finished", counted: false, winnerId: a.user.id, endKind: "deck_out", player1Xp: 0 });
+    const deck = row.player1Deck as { source: string; cards: { cardId: string; qty: number }[] };
+    expect(deck.source).toBe("user");
+    expect(deck.cards.reduce((n, c) => n + c.qty, 0)).toBe(60);
+    expect(deck.cards.some((c) => findCardById(c.cardId)?.kind === "trainer")).toBe(false);
+    expect((row.feats as Record<string, unknown>).player1).toMatchObject({ benchUsed: true, prizesTakenByRival: expect.any(Number) });
+    expect(row.finalTurn).toBeGreaterThan(0);
+
+    // The game's end re-checks the challenges in the background (like a settlement)
+    const until = Date.now() + 3000;
+    let progress = 0;
+    while (Date.now() < until) {
+      progress = (await prisma.userAchievement.findUnique({ where: { userId_achievementId: { userId: a.user.id, achievementId: "challenge-no-trainers" } } }))?.progress ?? 0;
+      if (progress === 1) break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(progress).toBe(1);
+    expect(await claimAchievement(a.user.id, "challenge-no-trainers")).toMatchObject({ achievementId: "challenge-no-trainers" });
+    // Sin mazo too (Brock's deck ran out); gym games still pay nothing else: no stats, no XP
+    await checkAndUpdateProgress(a.user.id, { challenges: true });
+    expect((await prisma.userAchievement.findUnique({ where: { userId_achievementId: { userId: a.user.id, achievementId: "challenge-deck-out" } } }))?.progress).toBe(1);
+    expect(await prisma.userStats.findUnique({ where: { userId: a.user.id } })).toMatchObject({ normalWins: 0, normalLosses: 0, currentStreak: 0 });
+  });
+
+  it("challenge achievements: a gym surrender or the leader's win counts for none", async () => {
+    gymService.open("brock", "normal");
+    const a = await challenger(NO_TRAINER_DECK);
+    const game1 = await challenged(a);
+    const next = await loseGame(a, game1);
+    expect(next).toMatchObject({ status: "next", score: score(0, 1) });
+
+    // Game 2: Brock wins it (the challenger can't draw at the start of their next turn)
+    const game2 = next.roomId as string;
+    await enter(a, game2);
+    await setUp(a.socket, game2);
+    for (let i = 0; i < 10 && !state(game2).isPlayerTurn; i++) await gymRooms.aiIdle(game2);
+    if (state(game2).playerNeedsToPromote) await act(a.socket, game2, "promote", { benchIndex: 0 });
+    expect(state(game2).isPlayerTurn).toBe(true);
+    const room = roomManager.getRoom(game2)!;
+    room.gameState = { ...room.gameState!, playerDeck: [] } as GameState;
+    const after = await seriesAfter(a, () => act(a.socket, game2, "endTurn"));
+    expect(after).toMatchObject({ score: score(0, 2), status: "finished" });
+
+    const rows = await gymRowsOf(a.user.id, 2);
+    expect(rows.map((r) => ({ status: r.status, winnerId: r.winnerId, endKind: r.endKind }))).toEqual([
+      { status: "finished", winnerId: null, endKind: "forfeit" },
+      // Ended by the leader's own step (AI seat driver): a played game, lost
+      { status: "finished", winnerId: null, endKind: "deck_out" },
+    ]);
+    expect(rows.every((r) => (r.player1Deck as { source: string } | null)?.source === "user")).toBe(true);
+    await checkAndUpdateProgress(a.user.id, { challenges: true });
+    expect(await prisma.userAchievement.count({ where: { userId: a.user.id, achievementId: { in: ["challenge-no-trainers", "challenge-deck-out"] }, progress: { gt: 0 } } })).toBe(0);
+    await expect(claimAchievement(a.user.id, "challenge-no-trainers")).rejects.toThrow("Este logro todavía no está completo");
   });
 
   it("the games play the leader's saved deck (backoffice) when there is one", async () => {

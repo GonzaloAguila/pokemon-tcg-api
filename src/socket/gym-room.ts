@@ -31,6 +31,9 @@ import type { GymScore, GymSeriesState } from "../modules/gym/gym.service.js";
 import { addCoins } from "../modules/users/users.service.js";
 import { attemptsOf, giveBackAttempt } from "../modules/gym/attempts.js";
 import { recordGymGame, type GymGameOutcome } from "../modules/gym/history.js";
+import { challengerDeckSource } from "../modules/gym/challenger-deck.js";
+import { checkAndUpdateProgress } from "../modules/achievements/achievements.service.js";
+import { createChallengeTracker, matchChallengeData } from "./challenge-tracker.js";
 import { awaitedSide, defaultSelection, neutralizeEvents, withRoomRandom, type ActionResult, type GameRoom, type GameRoomManager } from "./rooms.js";
 import { maskRoomState } from "./room-state.js";
 import { DEFAULT_COSMETICS, loadSeatCosmetics, type SeatCosmetics } from "./room-cosmetics.js";
@@ -45,6 +48,19 @@ const FINISHED_ROOM_MS = 120_000;
 const WINS_NEEDED = Math.floor(GYM_BEST_OF / 2) + 1;
 /** Drawn games don't count: a series still undecided after this many games goes to the score (a tie to the leader). */
 const MAX_GAMES = GYM_BEST_OF + 2;
+/**
+ * Each outcome's winner seat for the challenge tracker (player 1 = the challenger): a lost game on
+ * time or away from it is the leader's, a broken or admin-closed game has none.
+ */
+const GYM_WINNER: Record<GymGameOutcome, "player1" | "player2" | "draw" | null> = {
+  victory: "player1",
+  defeat: "player2",
+  timeout: "player2",
+  disconnect: "player2",
+  draw: "draw",
+  error: null,
+  admin: null,
+};
 /** Transaction log types of the entry cost's refund. */
 export const GYM_ENTRY_REFUND_TRANSACTION = "gym_entry_refund";
 
@@ -284,6 +300,8 @@ export class GymRooms {
     });
     // The leader's side is fixed (never loaded from a user)
     room.cosmetics = { player1, player2: { ...leader.cosmetics, variantMap: {} } };
+    // Challenge achievements: the challenger's deck as played (the leader's is the server's)
+    room.challengeTracker = createChallengeTracker(state, { player1: challengerDeckSource(deckId), player2: "theme" });
 
     const runtime: Runtime = {
       roomId,
@@ -644,9 +662,15 @@ export class GymRooms {
     this.endSeries(runtime.roomId);
   }
 
-  /** The game's match row (admin match history), in the background: a failure is only logged. */
+  /**
+   * The game's match row (admin match history + the challenger's challenge data), in the
+   * background: a failure is only logged. Then the challenger's challenge achievements are
+   * re-checked, like after a settlement (match-settlement.ts notifySettlement).
+   */
   private record(runtime: Runtime, outcome: GymGameOutcome, finalTurn: number): void {
     const { series } = runtime;
+    const tracker = runtime.room.challengeTracker;
+    const challenge = tracker ? matchChallengeData(tracker, runtime.room.gameState, GYM_WINNER[outcome]) : undefined;
     void this.recordGame({
       roomId: runtime.roomId,
       userId: series.userId,
@@ -654,7 +678,15 @@ export class GymRooms {
       finalTurn,
       startedAt: runtime.startedAt,
       info: { leaderId: series.leader.id, leaderName: series.leader.name, mode: series.mode, game: runtime.game, bestOf: GYM_BEST_OF, score: { ...series.score } },
-    }).catch((error) => console.error(`[gym ${runtime.roomId}] Could not record game ${runtime.game} of ${series.userId}:`, error));
+      ...(challenge ? { challenge } : {}),
+    })
+      .then(() => {
+        if (!challenge) return;
+        checkAndUpdateProgress(series.userId, { challenges: true }).catch((error) =>
+          console.error(`[gym ${runtime.roomId}] Could not check the challenges of ${series.userId}:`, error),
+        );
+      })
+      .catch((error) => console.error(`[gym ${runtime.roomId}] Could not record game ${runtime.game} of ${series.userId}:`, error));
   }
 
   private seriesState(series: Series, roomId: string, status: GymSeriesState["status"]): GymSeriesState {
