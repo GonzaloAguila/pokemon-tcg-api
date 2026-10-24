@@ -70,6 +70,6 @@ export function describeModifier(modifier: BattleModifier): string {
     case "darkness":
       return "Oscuridad: antes de cada ataque se lanza una moneda; si sale cruz, el ataque falla";
     case "alwaysConfused":
-      return "Los dos Pokémon activos están confundidos todo el tiempo";
+      return "Los dos Pokémon activos quedan Confundidos al empezar cada turno, al entrar como activos y al evolucionar";
   }
 }

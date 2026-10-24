@@ -379,7 +379,8 @@ describe("GET /api/adventures", () => {
     });
     const detail = (await app.request("GET", `/api/adventures/${ADVENTURE}`, { token })).body;
     expect(detail.battles[4].rules).toEqual(run.currentBattleInfo.rules);
-    expect(detail.battles[0].rules).toEqual([]);
+    // A battle without its own rules still opens with an Active and a Benched Pokémon
+    expect(detail.battles[0].rules).toEqual([expect.stringMatching(/^El rival empieza con .+ activo y .+ en la banca$/)]);
     expect(detail.battles[4].objective).toBe(run.currentBattleInfo.objective);
     expect(detail.battles[0].rivalDeck).toContainEqual({ cardId: "base-set-040-raticate", qty: 2 });
     expect(detail.battles[1].rules).toEqual(["El rival empieza con Doduo activo y Pidgey y Jigglypuff en la banca"]);

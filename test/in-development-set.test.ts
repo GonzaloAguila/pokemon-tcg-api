@@ -14,6 +14,13 @@ vi.mock("@gonzaloaguila/game-core", async (importOriginal) => {
   };
 });
 
+// The adventure content uses Gym Challenge cards (Brock's help treasures): with the set flagged
+// in development it would fail validation at boot. Adventures aren't what this file checks.
+vi.mock("../src/modules/adventure/content/load.js", async (importOriginal) => {
+  const load = await importOriginal<typeof import("../src/modules/adventure/content/load.js")>();
+  return { ...load, getAdventures: () => new Map(), getAdventure: () => undefined };
+});
+
 import { CARD_SETS } from "@gonzaloaguila/game-core";
 import { prisma } from "../src/lib/prisma.js";
 import { catalogRouter } from "../src/modules/catalog/index.js";

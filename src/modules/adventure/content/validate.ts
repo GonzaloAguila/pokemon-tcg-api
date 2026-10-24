@@ -135,13 +135,16 @@ function checkBattle(problems: string[], adventure: Adventure, battle: Adventure
     }
   }
 
-  const hard = battle.opponent.deckByDifficulty?.hard;
-  if (hard && !Array.isArray(hard)) {
+  // A deck / rules per starter (on either difficulty) must cover every starter, and only them
+  const name = (difficulty: Difficulty) => (difficulty === "normal" ? "normal" : "difícil");
+  for (const difficulty of DIFFICULTIES) {
+    const own = battle.opponent.deckByDifficulty?.[difficulty];
+    if (!own || Array.isArray(own)) continue;
     for (const starter of adventure.starters) {
-      if (!hard.byStarter[starter.id]) problems.push(`${where}: falta el mazo difícil para el inicial ${starter.id}`);
+      if (!own.byStarter[starter.id]) problems.push(`${where}: falta el mazo ${name(difficulty)} para el inicial ${starter.id}`);
     }
-    for (const key of Object.keys(hard.byStarter)) {
-      if (!adventure.starters.some((s) => s.id === key)) problems.push(`${where}: mazo difícil para un inicial desconocido ${key}`);
+    for (const key of Object.keys(own.byStarter)) {
+      if (!adventure.starters.some((s) => s.id === key)) problems.push(`${where}: mazo ${name(difficulty)} para un inicial desconocido ${key}`);
     }
   }
 
@@ -153,13 +156,15 @@ function checkBattle(problems: string[], adventure: Adventure, battle: Adventure
 
   // Each list of rules on its own: the base one and every difficulty's (and starter's) replacement
   for (const list of battleModifierLists(battle)) checkModifierList(problems, `${where}${list.label}`, list.modifiers);
-  const hardRules = battle.modifiersByDifficulty?.hard;
-  if (hardRules && !Array.isArray(hardRules)) {
+  for (const difficulty of DIFFICULTIES) {
+    const own = battle.modifiersByDifficulty?.[difficulty];
+    if (!own || Array.isArray(own)) continue;
+    const label = difficulty === "normal" ? "normales" : "difíciles";
     for (const starter of adventure.starters) {
-      if (!hardRules.byStarter[starter.id]) problems.push(`${where}: faltan las reglas difíciles para el inicial ${starter.id}`);
+      if (!own.byStarter[starter.id]) problems.push(`${where}: faltan las reglas ${label} para el inicial ${starter.id}`);
     }
-    for (const key of Object.keys(hardRules.byStarter)) {
-      if (!adventure.starters.some((s) => s.id === key)) problems.push(`${where}: reglas difíciles para un inicial desconocido ${key}`);
+    for (const key of Object.keys(own.byStarter)) {
+      if (!adventure.starters.some((s) => s.id === key)) problems.push(`${where}: reglas ${label} para un inicial desconocido ${key}`);
     }
   }
 

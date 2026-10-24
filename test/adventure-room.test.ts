@@ -174,7 +174,7 @@ describe("adventure battle room", () => {
     const names = (state: GameState) =>
       [...state.opponentDeck, ...state.opponentHand, ...state.opponentPrizes, ...(state.opponentActivePokemon ? [state.opponentActivePokemon.pokemon] : [])].map((c) => c.name);
     expect(names(room(roomId).gameState!)).toContain("Venonat"); // only in the hard deck of battle 5
-    const rules = ["El rival juega con 2 premios", "El rival empieza con Potion en la mano"];
+    const rules = ["El rival juega con 2 premios", "El rival empieza con Potion en la mano", "El rival empieza con Venonat activo y Kakuna en la banca"];
     let client = await join(token, roomId);
     expect(client.start.adventure).toMatchObject({ runId, battle: 5, hearts: 2, maxHearts: 2, rules });
     client.socket.disconnect();

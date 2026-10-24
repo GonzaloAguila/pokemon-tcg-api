@@ -265,7 +265,7 @@ describe("Adventure 2 content", () => {
       expect(special, difficulty).toEqual([[], [], [], ["darkness"], [], [], [], ["alwaysConfused"], [], []]);
     }
     expect(describeModifier({ type: "darkness" })).toBe("Oscuridad: antes de cada ataque se lanza una moneda; si sale cruz, el ataque falla");
-    expect(describeModifier({ type: "alwaysConfused" })).toBe("Los dos Pokémon activos están confundidos todo el tiempo");
+    expect(describeModifier({ type: "alwaysConfused" })).toBe("Los dos Pokémon activos quedan Confundidos al empezar cada turno, al entrar como activos y al evolucionar");
   });
 
   it("treasures: a family that isn't Colorless comes with 3 Energy of its type (owner, 2026-10-24)", () => {
@@ -318,6 +318,13 @@ describe("Adventure 2 content", () => {
         expect(pools.tier2, t.id).toContain(t.id);
       }
     }
+  });
+
+  it("a deck per starter on normal must cover every starter too", () => {
+    const content = JSON.parse(readFileSync(FILE2, "utf8"));
+    delete content.battles[9].opponent.deckByDifficulty.normal.byStarter.squirtle;
+    const result = validateAdventure(content);
+    expect(result.ok ? [] : result.problems).toContain("Batalla 10: falta el mazo normal para el inicial squirtle");
   });
 
   it("the final rival on normal plays the starter that beats yours, up to its Stage 1, and opens with it", () => {
