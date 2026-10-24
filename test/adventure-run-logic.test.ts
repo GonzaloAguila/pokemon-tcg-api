@@ -144,7 +144,7 @@ describe("hard mode", () => {
 
     const boss = battleConfig(runAtBattle(5, fresh("charmander", "hard")), adventure);
     expect(boss.modifiers).toContainEqual({ type: "prizeCount", opponent: 2 });
-    expect(battleConfig(runAtBattle(5), adventure).modifiers).toEqual([]);
+    expect(battleConfig(runAtBattle(5), adventure).modifiers.map((m) => m.type)).toEqual(["opponentSetup"]);
     expect(battleRules(adventure, 5, "hard", "charmander")).toEqual(boss.modifiers);
 
     const final = battleConfig(runAtBattle(10, fresh("squirtle", "hard")), adventure);
@@ -523,7 +523,10 @@ describe("battleConfig", () => {
     expect(config).toMatchObject({ prizeCount: 3, openingHand: 7, playerPassives: ["lucky_coin"], playerDeck: run.deck });
     expect(config.opponentDeck.reduce((n, e) => n + e.qty, 0)).toBe(40);
     expect(config.modifiers.map((m) => m.type)).toEqual(["prizeCount", "noPrizeFor", "opponentSetup", "bonusCards"]);
-    expect(battleConfig(runAtBattle(1), adventure).modifiers).toEqual([]);
+    // A battle without rules still opens with an Active and a Benched Pokémon (withOpeningBench)
+    const opening = battleConfig(runAtBattle(1), adventure).modifiers;
+    expect(opening.map((m) => m.type)).toEqual(["opponentSetup"]);
+    expect(opening[0]).toMatchObject({ active: [expect.any(String)], bench: [[expect.any(String)]] });
   });
 });
 

@@ -141,7 +141,7 @@ describe("adventure battle room", () => {
     const client = await join(token, roomId);
     expect(client.start.isPlayer1).toBe(true);
     expect(client.start.opponentInfo).toMatchObject({ username: "Joven Lucas" });
-    expect(client.start.adventure).toMatchObject({ runId, battle: 1, battleCount: 10, hearts: 3, maxHearts: 3, rules: [], rival: { name: "Lucas", trainerClass: "Joven" } });
+    expect(client.start.adventure).toMatchObject({ runId, battle: 1, battleCount: 10, hearts: 3, maxHearts: 3, rules: [expect.stringMatching(/^El rival empieza con .+ activo y .+ en la banca$/)], rival: { name: "Lucas", trainerClass: "Joven" } });
     // Adventure 1's rivals have no sprite: the key is left out
     expect(client.start.adventure.rival).not.toHaveProperty("sprite");
     expect(client.state!.opponentHand.length).toBe(6); // 7 dealt, its Active placed

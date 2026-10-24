@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { getAdventure, getAdventures, validateAdventure } from "../src/modules/adventure/content/load.js";
 import { isPokemonCard } from "@gonzaloaguila/game-core";
 import { cardOf, isBasicPokemonCard } from "../src/modules/adventure/content/cards.js";
-import { battleModifiers, battleObjective, difficultyRules, rivalDeckOf } from "../src/modules/adventure/content/difficulty.js";
+import { battleModifiers, battleObjective, difficultyRules, rivalDeckOf, withOpeningBench } from "../src/modules/adventure/content/difficulty.js";
 import { describeModifier } from "../src/modules/adventure/content/modifiers.js";
 import { ADVENTURE_CARD_BACKS, ADVENTURE_PLAYMATS } from "../src/modules/prizes/catalog.js";
 import type { BattleModifier } from "../src/modules/adventure/engine-types.js";
@@ -141,6 +141,51 @@ describe("Adventure 1 content", () => {
   });
 });
 
+describe("every adventure rival starts with an Active and a Benched Pokémon (owner, 2026-10-24)", () => {
+  it("in every battle of every adventure, difficulty and starter", () => {
+    for (const adventure of getAdventures().values()) {
+      for (const battle of adventure.battles) {
+        for (const difficulty of ["normal", "hard"] as const) {
+          for (const starter of adventure.starters) {
+            const setup = battleModifiers(battle, difficulty, starter.id).find((m) => m.type === "opponentSetup");
+            const where = `${adventure.id} batalla ${battle.index} (${difficulty}, ${starter.id})`;
+            expect(setup?.active.length, where).toBeGreaterThanOrEqual(1);
+            expect(setup?.bench.length, where).toBeGreaterThanOrEqual(1);
+          }
+        }
+      }
+    }
+  });
+
+  const deck = (...entries: [string, number][]) => entries.map(([cardId, qty]) => ({ cardId, qty }));
+  const RATTATA = "base-set-061-rattata", PIDGEY = "base-set-057-pidgey", RATICATE = "base-set-040-raticate", POTION = "base-set-094-potion";
+
+  it("no setup: the lead is the Active when it is a Basic, the deck's next Basic goes to the Bench", () => {
+    expect(withOpeningBench([], PIDGEY, deck([RATTATA, 3], [PIDGEY, 2], [POTION, 1]))).toEqual([
+      { type: "opponentSetup", active: [PIDGEY], bench: [[RATTATA]] },
+    ]);
+  });
+
+  it("an evolved lead: the deck's first Basic is the Active; a single Basic species fills the Bench with a second copy", () => {
+    expect(withOpeningBench([], RATICATE, deck([RATTATA, 2], [RATICATE, 1]))).toEqual([
+      { type: "opponentSetup", active: [RATTATA], bench: [[RATTATA]] },
+    ]);
+  });
+
+  it("a setup without a Bench gets one Benched Basic the setup doesn't use; a setup with a Bench stays as it is", () => {
+    const noBench = { type: "opponentSetup" as const, active: [RATTATA, RATICATE], bench: [] };
+    expect(withOpeningBench([noBench], RATICATE, deck([RATTATA, 1], [RATICATE, 1], [PIDGEY, 2]))).toEqual([{ ...noBench, bench: [[PIDGEY]] }]);
+    const withBench = { type: "opponentSetup" as const, active: [RATTATA], bench: [[PIDGEY]] };
+    expect(withOpeningBench([withBench], RATTATA, deck([RATTATA, 1], [PIDGEY, 1]))).toEqual([withBench]);
+  });
+
+  it("a deck with a single Basic card keeps the battle as it is (nothing to put on the Bench)", () => {
+    expect(withOpeningBench([], RATTATA, deck([RATTATA, 1], [RATICATE, 2]))).toEqual([
+      { type: "opponentSetup", active: [RATTATA], bench: [] },
+    ]);
+  });
+});
+
 describe("Adventure 2 content", () => {
   const ADV2 = "ciudad-plateada-ciudad-celeste";
   const FILE2 = path.resolve(__dirname, `../content/adventures/${ADV2}.json`);
@@ -223,18 +268,19 @@ describe("Adventure 2 content", () => {
     expect(describeModifier({ type: "alwaysConfused" })).toBe("Los dos Pokémon activos están confundidos todo el tiempo");
   });
 
-  it("treasures: a Pokémon that isn't Colorless comes with Energy of its type (owner, 2026-10-24)", () => {
+  it("treasures: a family that isn't Colorless comes with 3 Energy of its type (owner, 2026-10-24)", () => {
     const { treasures } = adventure2();
     for (const treasure of treasures) {
       if (treasure.kind !== "cards") continue;
       const entries = treasure.cards.filter((c): c is { cardId: string; qty: number } => "cardId" in c);
-      const energyTypes = new Set(entries.map((c) => cardOf(c.cardId)).filter((c) => c.kind === "energy").map((c) => (c as { energyType: string }).energyType));
+      const energyOf = (type: string) =>
+        entries.filter((c) => cardOf(c.cardId).kind === "energy" && (cardOf(c.cardId) as { energyType: string }).energyType === type).reduce((n, c) => n + c.qty, 0);
       for (const entry of entries) {
         const card = cardOf(entry.cardId);
         if (!isPokemonCard(card)) continue;
         const type = card.types[0];
         if (type === "colorless") continue;
-        expect(energyTypes.has(type), `${treasure.id}: ${card.name} (${type})`).toBe(true);
+        expect(energyOf(type), `${treasure.id}: ${card.name} (${type})`).toBe(3);
       }
     }
   });

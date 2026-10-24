@@ -62,7 +62,7 @@ describe("POST /api/adventure/runs", () => {
       hearts: 3,
       maxHearts: 3,
       battle: null,
-      currentBattleInfo: { index: 1, location: "Ruta 1", opponent: { name: "Lucas", trainerClass: "Joven" }, rules: [] },
+      currentBattleInfo: { index: 1, location: "Ruta 1", opponent: { name: "Lucas", trainerClass: "Joven" }, rules: [expect.stringMatching(/^El rival empieza con .+ activo y .+ en la banca$/)] },
     });
     expect(res.body).not.toHaveProperty("seed");
     expect(JSON.stringify(res.body)).not.toContain((await prisma.adventureRun.findFirstOrThrow({ where: { userId: user.id } })).seed);

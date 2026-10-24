@@ -960,13 +960,13 @@
     {
       "id": "a2-magikarp",
       "name": "Oferta del vendedor",
-      "description": "+2 Magikarp, +1 Gyarados y +2 energías Agua: el «Magikarp de oferta» resultó ser un buen negocio",
+      "description": "+2 Magikarp, +1 Gyarados y +3 energías Agua: el «Magikarp de oferta» resultó ser un buen negocio",
       "rarity": "rare",
       "kind": "cards",
       "cards": [
         { "cardId": "base-set-035-magikarp", "qty": 2 },
         { "cardId": "base-set-006-gyarados", "qty": 1 },
-        { "cardId": "base-set-102-water-energy", "qty": 2 }
+        { "cardId": "base-set-102-water-energy", "qty": 3 }
       ]
     },
     {
@@ -991,27 +991,27 @@
     {
       "id": "a2-fosil-helix",
       "name": "Fósil Helix",
-      "description": "+2 Mysterious Fossil, +2 Omanyte, +1 Omastar y +2 energías Agua",
+      "description": "+2 Mysterious Fossil, +2 Omanyte, +1 Omastar y +3 energías Agua",
       "rarity": "epic",
       "kind": "cards",
       "cards": [
         { "cardId": "fossil-062-mysterious-fossil", "qty": 2 },
         { "cardId": "fossil-052-omanyte", "qty": 2 },
         { "cardId": "fossil-040-omastar", "qty": 1 },
-        { "cardId": "base-set-102-water-energy", "qty": 2 }
+        { "cardId": "base-set-102-water-energy", "qty": 3 }
       ]
     },
     {
       "id": "a2-fosil-domo",
       "name": "Fósil Domo",
-      "description": "+2 Mysterious Fossil, +2 Kabuto, +1 Kabutops y +2 energías Lucha",
+      "description": "+2 Mysterious Fossil, +2 Kabuto, +1 Kabutops y +3 energías Lucha",
       "rarity": "epic",
       "kind": "cards",
       "cards": [
         { "cardId": "fossil-062-mysterious-fossil", "qty": 2 },
         { "cardId": "fossil-050-kabuto", "qty": 2 },
         { "cardId": "fossil-009-kabutops", "qty": 1 },
-        { "cardId": "base-set-097-fighting-energy", "qty": 2 }
+        { "cardId": "base-set-097-fighting-energy", "qty": 3 }
       ]
     },
     {
@@ -1050,109 +1050,109 @@
     {
       "id": "a2-nidoran-m",
       "name": "Nido de Nidoran♂",
-      "description": "+2 Nidoran♂, +1 Nidorino y +2 energías Planta",
+      "description": "+2 Nidoran♂, +1 Nidorino y +3 energías Planta",
       "rarity": "rare",
       "kind": "cards",
       "cards": [
         { "cardId": "base-set-055-nidoran", "qty": 2 },
         { "cardId": "base-set-037-nidorino", "qty": 1 },
-        { "cardId": "base-set-099-grass-energy", "qty": 2 }
+        { "cardId": "base-set-099-grass-energy", "qty": 3 }
       ]
     },
     {
       "id": "a2-nidoran-f",
       "name": "Nido de Nidoran♀",
-      "description": "+2 Nidoran♀, +1 Nidorina y +2 energías Planta",
+      "description": "+2 Nidoran♀, +1 Nidorina y +3 energías Planta",
       "rarity": "rare",
       "kind": "cards",
       "cards": [
         { "cardId": "jungle-057-nidoranf", "qty": 2 },
         { "cardId": "jungle-040-nidorina", "qty": 1 },
-        { "cardId": "base-set-099-grass-energy", "qty": 2 }
+        { "cardId": "base-set-099-grass-energy", "qty": 3 }
       ]
     },
     {
       "id": "a2-ekans",
       "name": "Serpientes de la ruta",
-      "description": "+2 Ekans, +1 Arbok y +2 energías Planta",
+      "description": "+2 Ekans, +1 Arbok y +3 energías Planta",
       "rarity": "rare",
       "kind": "cards",
       "cards": [
         { "cardId": "fossil-046-ekans", "qty": 2 },
         { "cardId": "fossil-031-arbok", "qty": 1 },
-        { "cardId": "base-set-099-grass-energy", "qty": 2 }
+        { "cardId": "base-set-099-grass-energy", "qty": 3 }
       ]
     },
     {
       "id": "a2-sandshrew",
       "name": "Arena de la Ruta 3",
-      "description": "+2 Sandshrew, +1 Sandslash y +2 energías Lucha",
+      "description": "+2 Sandshrew, +1 Sandslash y +3 energías Lucha",
       "rarity": "rare",
       "kind": "cards",
       "cards": [
         { "cardId": "base-set-062-sandshrew", "qty": 2 },
         { "cardId": "fossil-041-sandslash", "qty": 1 },
-        { "cardId": "base-set-097-fighting-energy", "qty": 2 }
+        { "cardId": "base-set-097-fighting-energy", "qty": 3 }
       ]
     },
     {
       "id": "a2-zubat",
       "name": "Murciélagos del Monte Moon",
-      "description": "+2 Zubat, +1 Golbat y +2 energías Planta",
+      "description": "+2 Zubat, +1 Golbat y +3 energías Planta",
       "rarity": "rare",
       "kind": "cards",
       "cards": [
         { "cardId": "fossil-057-zubat", "qty": 2 },
         { "cardId": "fossil-034-golbat", "qty": 1 },
-        { "cardId": "base-set-099-grass-energy", "qty": 2 }
+        { "cardId": "base-set-099-grass-energy", "qty": 3 }
       ]
     },
     {
       "id": "a2-geodude",
       "name": "Rocas del Monte Moon",
-      "description": "+2 Geodude, +1 Graveler y +2 energías Lucha",
+      "description": "+2 Geodude, +1 Graveler y +3 energías Lucha",
       "rarity": "rare",
       "kind": "cards",
       "cards": [
         { "cardId": "fossil-047-geodude", "qty": 2 },
         { "cardId": "fossil-037-graveler", "qty": 1 },
-        { "cardId": "base-set-097-fighting-energy", "qty": 2 }
+        { "cardId": "base-set-097-fighting-energy", "qty": 3 }
       ]
     },
     {
       "id": "a2-golem",
       "name": "Avalancha",
-      "description": "+1 Geodude, +1 Graveler, +1 Golem y +2 energías Lucha",
+      "description": "+1 Geodude, +1 Graveler, +1 Golem y +3 energías Lucha",
       "rarity": "epic",
       "kind": "cards",
       "cards": [
         { "cardId": "fossil-047-geodude", "qty": 1 },
         { "cardId": "fossil-037-graveler", "qty": 1 },
         { "cardId": "fossil-036-golem", "qty": 1 },
-        { "cardId": "base-set-097-fighting-energy", "qty": 2 }
+        { "cardId": "base-set-097-fighting-energy", "qty": 3 }
       ]
     },
     {
       "id": "a2-paras",
       "name": "Hongos del Monte Moon",
-      "description": "+2 Paras, +1 Parasect y +2 energías Planta",
+      "description": "+2 Paras, +1 Parasect y +3 energías Planta",
       "rarity": "common",
       "kind": "cards",
       "cards": [
         { "cardId": "jungle-059-paras", "qty": 2 },
         { "cardId": "jungle-041-parasect", "qty": 1 },
-        { "cardId": "base-set-099-grass-energy", "qty": 2 }
+        { "cardId": "base-set-099-grass-energy", "qty": 3 }
       ]
     },
     {
       "id": "a2-onix",
       "name": "Gigante de roca",
-      "description": "+1 Onix y +2 energías Lucha",
+      "description": "+1 Onix y +3 energías Lucha",
       "rarity": "rare",
       "kind": "cards",
       "cards": [
         { "cardId": "base-set-056-onix", "qty": 1 },
-        { "cardId": "base-set-097-fighting-energy", "qty": 2 }
+        { "cardId": "base-set-097-fighting-energy", "qty": 3 }
       ]
     },
     {
@@ -1177,25 +1177,25 @@
     {
       "id": "a2-laguna",
       "name": "Laguna de la Ruta 4",
-      "description": "+2 Psyduck, +1 Golduck y +2 energías Agua",
+      "description": "+2 Psyduck, +1 Golduck y +3 energías Agua",
       "rarity": "rare",
       "kind": "cards",
       "cards": [
         { "cardId": "fossil-053-psyduck", "qty": 2 },
         { "cardId": "fossil-035-golduck", "qty": 1 },
-        { "cardId": "base-set-102-water-energy", "qty": 2 }
+        { "cardId": "base-set-102-water-energy", "qty": 3 }
       ]
     },
     {
       "id": "a2-slowpoke",
       "name": "Siesta en la laguna",
-      "description": "+2 Slowpoke, +1 Slowbro y +2 energías Psíquicas",
+      "description": "+2 Slowpoke, +1 Slowbro y +3 energías Psíquicas",
       "rarity": "rare",
       "kind": "cards",
       "cards": [
         { "cardId": "fossil-055-slowpoke", "qty": 2 },
         { "cardId": "fossil-043-slowbro", "qty": 1 },
-        { "cardId": "base-set-101-psychic-energy", "qty": 2 }
+        { "cardId": "base-set-101-psychic-energy", "qty": 3 }
       ]
     }
   ],

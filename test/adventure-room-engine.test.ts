@@ -113,16 +113,16 @@ function essence(s: GameState) {
 }
 
 describe("adventure rooms on game-core's engine", () => {
-  it("the AI's opening placements stay hidden until both are ready (its log lines are neutralized)", async () => {
+  it("the rival's opening Pokémon are announced by the table rules; anything the AI places from its hand stays hidden", async () => {
     const { roomId, token } = await battleFor();
     const raw = state(roomId).events.map((e) => e.message);
-    expect(raw.some((m) => /^Jugador 2 colocó .+ como Pokémon activo$/.test(m))).toBe(true);
+    // Every adventure rival opens with an Active and a Benched Pokémon (withOpeningBench), public by the rules
+    expect(raw.some((m) => /^Reglas de la mesa: .+ empiezan en juego$/.test(m))).toBe(true);
     expect(raw.some((m) => /^Rival /.test(m))).toBe(false);
     const client = await join(token, roomId);
     const seen = client.start.gameState.events.map((e) => e.message);
-    expect(seen).toContain("Jugador 2 colocó un Pokémon como Pokémon activo");
-    const active = state(roomId).opponentActivePokemon!.pokemon.name;
-    expect(seen.some((m) => m.includes(`colocó ${active}`))).toBe(false);
+    const placed = raw.flatMap((m) => /^Jugador 2 colocó (.+?) (?:como Pokémon activo|en la banca)/.exec(m)?.[1] ?? []).filter((n) => n !== "un Pokémon");
+    for (const name of placed) expect(seen.some((m) => m.includes(`colocó ${name}`)), name).toBe(false);
     client.socket.disconnect();
   });
 
