@@ -24,7 +24,7 @@ function id(name: string, setId: string): string {
 const e = (name: string, setId: string, qty = 1): DeckEntry => ({ cardId: id(name, setId), qty });
 const energy = (type: string, qty = 10): DeckEntry => ({ cardId: id(`${type} Energy`, "base-set"), qty });
 
-const NO_FEATS: SeatFeats = { maxPrizeDeficit: 0, benchUsed: true, maxAttackDamage: 0, prizesTakenByRival: 2, finalKoBy: null };
+const NO_FEATS: SeatFeats = { maxPrizeDeficit: 0, benchUsed: true, maxAttackDamage: 0, prizesTakenByRival: 2, finalKoBy: null, finalKoBasicHp: null };
 /** A Water deck with an evolution line, a Trainer and a rare: matches none of the deck challenges. */
 const PLAIN: DeckEntry[] = [e("Squirtle", "base-set", 4), e("Wartortle", "base-set", 3), e("Blastoise", "base-set", 1), e("Bill", "base-set", 2), e("Charmander", "base-set", 2), energy("Water", 8), energy("Fire", 4)];
 
@@ -38,7 +38,7 @@ describe("challenge definitions", () => {
   it("are the 20 of the design, with their targets", () => {
     expect(CHALLENGE_DEFS).toHaveLength(20);
     const targets = Object.fromEntries(CHALLENGE_DEFS.map((d) => [d.id, d.progressTarget]));
-    expect(targets).toMatchObject({ "challenge-purist": 6, "challenge-gym-tour": 8, "challenge-two-colors": 5, "challenge-forgotten": 5, "challenge-blitz": 1 });
+    expect(targets).toMatchObject({ "challenge-purist": 6, "challenge-gym-tour": 8, "challenge-two-colors": 5, "challenge-little-giant": 1, "challenge-blitz": 1 });
     expect(CHALLENGE_DEFS.find((d) => d.id === "challenge-no-trainers")).toMatchObject({ name: "Sin ayuda", description: "Gana con un deck sin Entrenadores", tier: "gold" });
   });
 });
@@ -99,8 +99,18 @@ describe("challenge progress", () => {
     expect(progress("challenge-parasect", game({ feats: { finalKoBy: "Parasect" } }))).toBe(1);
     expect(progress("challenge-magikarp", game({ feats: { finalKoBy: "Misty's Magikarp" } }))).toBe(1);
     expect(progress("challenge-magikarp", game({ feats: { finalKoBy: "Gyarados" } }))).toBe(0);
-    const ko = (name: string) => game({ feats: { finalKoBy: name } });
-    expect(progress("challenge-forgotten", ko("Parasect"), ko("Magikarp"), ko("Giovanni's Magikarp"), ko("Farfetch'd"), ko("Pikachu"))).toBe(3);
+  });
+
+  it("Pequeño gigante: the winning KO by a Basic Pokémon of 30 HP or less", () => {
+    const ko = (finalKoBy: string, finalKoBasicHp: number | null) => game({ feats: { finalKoBy, finalKoBasicHp } });
+    expect(progress("challenge-little-giant", ko("Magikarp", 30))).toBe(1);
+    expect(progress("challenge-little-giant", ko("Pikachu", 40))).toBe(0);
+    expect(progress("challenge-little-giant", ko("Raticate", null))).toBe(0); // an evolved Pokémon
+    expect(progress("challenge-little-giant", game({ won: false, feats: { finalKoBy: "Magikarp", finalKoBasicHp: 30 } }))).toBe(0);
+    // Games recorded before the HP was: read from the deck, when its copies of that name are all small Basics
+    const old = (finalKoBy: string, cards: DeckEntry[]) => game({ cards, feats: { finalKoBy, finalKoBasicHp: undefined } });
+    expect(progress("challenge-little-giant", old("Magikarp", [e("Magikarp", "base-set", 4), energy("Water", 10)]))).toBe(1);
+    expect(progress("challenge-little-giant", old("Gastly", [e("Gastly", "base-set", 2), e("Gastly", "fossil", 2), energy("Psychic", 10)]))).toBe(0);
   });
 
   it("feats: comeback, shutout, blitz, lone wolf, deck out", () => {
