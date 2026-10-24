@@ -3,11 +3,14 @@
  * advanced goals for multiplayer games, computed from the user's settled match rows — both decks
  * as played, how the game ended and what each seat did (socket/challenge-tracker.ts).
  *
- * A game qualifies when it is the user's counted normal or draft game, standard rules (no Lucky
- * Duel), played with their own deck (source "user" or "draft": not a theme deck nor the fallback),
- * and has its challenge data (games from before the challenges don't). Every challenge but Golpe
- * brutal needs a PLAYED WIN: the user won by Prizes, by leaving the rival without Pokémon or by
- * the rival's deck running out — never by a surrender, a disconnect, a clock or a no-show.
+ * A game qualifies when it is the user's counted normal or draft game, or a finished Gym Leader game
+ * (mode "gym", owner 2026-10-24: beating Brock counts; the challenger is player 1, the leader's AI
+ * has no seat user; gym rows stay `counted: false`, so they still give no stats, XP, coins or
+ * missions), standard rules (no Lucky Duel), played with their own deck (source "user" or "draft":
+ * not a theme deck nor the fallback), and has its challenge data (games from before the challenges
+ * don't, nor gym games recorded before 2026-10-24). Every challenge but Golpe brutal needs a PLAYED
+ * WIN: the user won by Prizes, by leaving the rival without Pokémon or by the rival's deck running
+ * out — never by a surrender, a disconnect, a clock or a no-show. Every challenge counts gym games.
  * They don't count for "Leyenda Viviente" (achievements.service.ts countsForMeta).
  */
 import { prisma } from "../../lib/prisma.js";
@@ -161,16 +164,20 @@ export function challengeProgress(id: ChallengeId, games: ChallengeGame[]): numb
   }
 }
 
-/** The user's qualifying games: counted normal / draft standard games with their challenge data. */
+/**
+ * The user's qualifying games with their challenge data: counted normal / draft standard games,
+ * and finished Gym Leader games (never counted: they pay nothing, the challenges still see them).
+ */
 export async function loadChallengeGames(userId: string): Promise<ChallengeGame[]> {
   const rows = await prisma.match.findMany({
     where: {
-      counted: true,
-      mode: { in: ["normal", "draft"] },
       gameMode: "standard",
       settledAt: { not: null },
       endKind: { not: null },
-      OR: [{ player1Id: userId }, { player2Id: userId }],
+      AND: [
+        { OR: [{ player1Id: userId }, { player2Id: userId }] },
+        { OR: [{ counted: true, mode: { in: ["normal", "draft"] } }, { mode: "gym", status: "finished" }] },
+      ],
     },
     select: { player1Id: true, winnerId: true, endKind: true, finalTurn: true, player1Deck: true, player2Deck: true, feats: true },
   });

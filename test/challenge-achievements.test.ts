@@ -6,7 +6,7 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { ALL_CARDS } from "@gonzaloaguila/game-core";
 import { prisma } from "../src/lib/prisma.js";
-import { CHALLENGE_DEFS, challengeProgress, type ChallengeGame, type ChallengeId } from "../src/modules/achievements/challenges.js";
+import { CHALLENGE_DEFS, challengeProgress, loadChallengeGames, type ChallengeGame, type ChallengeId } from "../src/modules/achievements/challenges.js";
 import { checkAndUpdateProgress, listAchievements } from "../src/modules/achievements/achievements.service.js";
 import type { DeckEntry, DeckSource } from "../src/modules/achievements/challenge-decks.js";
 import type { SeatFeats } from "../src/socket/challenge-tracker.js";
@@ -150,6 +150,39 @@ describe("challenge achievements in the catalog", () => {
     // The rival lost: nothing but Golpe brutal could move
     await checkAndUpdateProgress(rival.id, { challenges: true });
     expect(await prisma.userAchievement.count({ where: { userId: rival.id, achievementId: { startsWith: "challenge-" }, progress: { gt: 0 } } })).toBe(0);
+  });
+
+  it("finished Gym Leader games count too (counted: false, player 2 = the leader); abandoned ones and legacy gym rows don't", async () => {
+    const me = await createUser({}, { stats: true });
+    const now = new Date();
+    const noTrainers = { source: "user", cards: [e("Squirtle", "base-set", 4), energy("Water", 56)] };
+    const leaderDeck = { source: "theme", cards: PLAIN };
+    const gymRow = { mode: "gym", gameMode: "standard", counted: false, player1Id: me.id, player2Id: null, settledAt: now, finishedAt: now, gym: { leaderId: "brock" } };
+    await prisma.match.createMany({
+      data: [
+        // A played win with a no-Trainer deck, a shutout
+        { ...gymRow, status: "finished", winnerId: me.id, endKind: "deck_out", finalTurn: 9, player1Deck: noTrainers, player2Deck: leaderDeck, feats: { player1: { ...NO_FEATS, prizesTakenByRival: 0 }, player2: NO_FEATS } },
+        // The leader won (Golpe brutal still counts the hit)
+        { ...gymRow, status: "finished", winnerId: null, endKind: "prizes", finalTurn: 4, player1Deck: noTrainers, player2Deck: leaderDeck, feats: { player1: { ...NO_FEATS, maxAttackDamage: 120 }, player2: NO_FEATS } },
+        // Abandoned (disconnect / error / admin): never
+        { ...gymRow, status: "abandoned", winnerId: null, endKind: "forfeit", finalTurn: 2, player1Deck: noTrainers, player2Deck: leaderDeck, feats: { player1: { ...NO_FEATS, maxAttackDamage: 200 }, player2: NO_FEATS } },
+        // Before the gym games kept their challenge data
+        { ...gymRow, status: "finished", winnerId: me.id, finalTurn: 3 },
+      ],
+    });
+    const games = await loadChallengeGames(me.id);
+    expect(games.map((g) => ({ won: g.won, endKind: g.endKind, finalTurn: g.finalTurn }))).toEqual(
+      expect.arrayContaining([
+        { won: true, endKind: "deck_out", finalTurn: 9 },
+        { won: false, endKind: "prizes", finalTurn: 4 },
+      ]),
+    );
+    expect(games).toHaveLength(2);
+
+    await checkAndUpdateProgress(me.id, { challenges: true });
+    const rows = await prisma.userAchievement.findMany({ where: { userId: me.id, achievementId: { startsWith: "challenge-" } } });
+    const byId = Object.fromEntries(rows.map((r) => [r.achievementId, r.progress]));
+    expect(byId).toMatchObject({ "challenge-no-trainers": 1, "challenge-deck-out": 1, "challenge-shutout": 1, "challenge-big-hit": 1, "challenge-blitz": 0 });
   });
 
   it("the Próximamente achievements are gone and the challenges don't raise Leyenda Viviente's target", async () => {

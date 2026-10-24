@@ -62,7 +62,20 @@ battles use the game-core smart AI through `nextAIStep` / `applyAIStep`, exactly
   victory gives nothing. Coins through `creditBalance` (transaction `gym_reward`, "Victoria contra
   Brock: +1500 monedas"). "First" = the version's marker row was created now (normal: the medal;
   EXPERT: the EXPERT card back), all in one transaction.
-- **No other economy:** no match row, XP, stats, missions, achievements, bets (like adventure).
+- **No other economy:** no XP, stats, missions, bets or settlement (like adventure). Each game is a
+  match row of the admin's match history (`modules/gym/history.ts` `recordGymGame`: `mode: "gym"`,
+  player 1 the challenger, no player 2, `counted: false`, settled at once with nothing paid).
+- **Challenge achievements (owner 2026-10-24, "que cuente para Brock también"):** gym games count
+  for EVERY challenge achievement (`modules/achievements/challenges.ts`), like a counted normal
+  game. The room has a challenge tracker (`socket/challenge-tracker.ts`, created in `buildGame`,
+  deck source "user" for a DB deck, "theme" for a theme deck; the AI seat driver observes the
+  leader's steps too), and the match row keeps `player1Deck` / `player2Deck` / `endKind` / `feats` /
+  `finalTurn`. `loadChallengeGames` reads `mode: "gym"` rows with `status: "finished"` (not the
+  abandoned ones: disconnect, error, admin close) despite `counted: false`; the usual rules apply
+  (a played win: Prizes / no Pokémon / deck out; a surrender, a lost clock or the leader's win
+  never). Recording a game re-checks the challenger's challenges in the background. Gym rows
+  recorded before this have no deck snapshot and can't count. Still not "Leyenda Viviente",
+  stats, XP or anything else.
 - **Appearance:** a scheduler opens each table at random moments for a while. It ships **disabled**
   (`GYM_SCHEDULE.enabled = false`); admins open and close each version on demand.
   Defaults when enabled: next opening 2–6 h after that table last closed (random), open for 45 min.

@@ -1,4 +1,6 @@
+import type { Prisma } from "@prisma/client";
 import { prisma } from "../../lib/prisma.js";
+import type { MatchChallengeData } from "../../socket/challenge-tracker.js";
 import type { GymMode } from "./content/types.js";
 import type { GymScore } from "./gym.service.js";
 
@@ -36,10 +38,14 @@ export function gymWinReason(outcome: GymGameOutcome, leaderName: string): strin
   }
 }
 
+const asJson = (value: object): Prisma.InputJsonValue => value as Prisma.InputJsonValue;
+
 /**
  * One game of a gym series, as a match row of the admin's match history: mode "gym", player 1 the
  * challenger, player 2 empty (the leader's AI, named in `gym`), settled at once with nothing paid
- * (counted false, no XP; the series' entry cost and rewards live in their own tables).
+ * (counted false, no XP; the series' entry cost and rewards live in their own tables). With
+ * `challenge` (the room's challenge tracker) it also keeps both decks as played, how the game
+ * ended and each seat's feats, which the challenge achievements read (achievements/challenges.ts).
  */
 export async function recordGymGame(input: {
   roomId: string;
@@ -48,12 +54,22 @@ export async function recordGymGame(input: {
   finalTurn: number;
   startedAt: Date;
   info: GymMatchInfo;
+  challenge?: MatchChallengeData;
   now?: Date;
 }): Promise<void> {
   const now = input.now ?? new Date();
   const abandoned = input.outcome === "disconnect" || input.outcome === "error" || input.outcome === "admin";
+  const { challenge } = input;
   await prisma.match.create({
     data: {
+      ...(challenge
+        ? {
+            player1Deck: asJson(challenge.player1Deck),
+            player2Deck: asJson(challenge.player2Deck),
+            endKind: challenge.endKind,
+            feats: asJson(challenge.feats),
+          }
+        : {}),
       mode: "gym",
       gameMode: "standard",
       status: abandoned ? "abandoned" : "finished",

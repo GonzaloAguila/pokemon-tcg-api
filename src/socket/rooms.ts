@@ -182,7 +182,7 @@ export interface GameRoom {
    * match row at settlement for the Lucky Duel achievements (the in-game card ids are random).
    */
   luckyDuelStarters?: { player1: string; player2: string };
-  /** The current game's challenge tracker (normal and draft games; none for Lucky Duel and server AI battles) */
+  /** The current game's challenge tracker (normal, draft and Gym Leader games; none for Lucky Duel and adventure battles) */
   challengeTracker?: ChallengeTracker;
   /** Started for players who may be absent (draft round): if neither shows up, nobody wins. */
   checkIn?: boolean;
